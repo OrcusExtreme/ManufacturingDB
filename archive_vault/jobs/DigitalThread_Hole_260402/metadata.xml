@@ -1,0 +1,763 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WorkModel xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <Properties />
+  <WorkID>260402182413</WorkID>
+  <ProjectCode>P005_137</ProjectCode>
+  <MachineCode>DNM200</MachineCode>
+  <MaterialCode>AL6061</MaterialCode>
+  <PartCode>DNM 5AX A141 M06 WT TM 20140124</PartCode>
+  <ProgramCode>O26402.NC</ProgramCode>
+  <ToolNumbers>
+    <int>11</int>
+    <int>15</int>
+    <int>16</int>
+    <int>15</int>
+    <int>17</int>
+  </ToolNumbers>
+  <Tools>
+    <ToolModel>
+      <Properties>
+        <anyType xsi:type="Property">
+          <DataType>STRING</DataType>
+          <Name>toolCode</Name>
+          <Value xsi:type="xsd:string">T11_6</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>STRING</DataType>
+          <Name>toolName</Name>
+          <Value xsi:type="xsd:string">T11_6</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>STRING</DataType>
+          <Name>toolModelName</Name>
+          <Value xsi:type="xsd:string" />
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>INT</DataType>
+          <Name>toolTeeth</Name>
+          <Value xsi:type="xsd:string">2</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>cutterDiameter</Name>
+          <Value xsi:type="xsd:string">10</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>cutterRadius</Name>
+          <Value xsi:type="xsd:string">0</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>toolLength</Name>
+          <Value xsi:type="xsd:string">0</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>INT</DataType>
+          <Name>toolStandardWorkCount</Name>
+          <Value xsi:type="xsd:string">0</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>radialCornerOffset</Name>
+          <Value xsi:type="xsd:string">0</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>axialCornerOffset</Name>
+          <Value xsi:type="xsd:string">0</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>tipAngle</Name>
+          <Value xsi:type="xsd:string">0</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>flankAngle</Name>
+          <Value xsi:type="xsd:string">0</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>STRING</DataType>
+          <Name>toolMaterial</Name>
+          <Value xsi:type="xsd:string" />
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>STRING</DataType>
+          <Name>toolMaker</Name>
+          <Value xsi:type="xsd:string" />
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>STRING</DataType>
+          <Name>toolMakerModelNumber</Name>
+          <Value xsi:type="xsd:string" />
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>toolLifeExpectancy</Name>
+          <Value xsi:type="xsd:string">0</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>toolUsedTime</Name>
+          <Value xsi:type="xsd:string">0</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>toolTotalUsedTime</Name>
+          <Value xsi:type="xsd:string">0</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>toolTotalUsedTimeActual</Name>
+          <Value xsi:type="xsd:string">0</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>toolLifeRemaining</Name>
+          <Value xsi:type="xsd:string">0</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>INT</DataType>
+          <Name>toolUsedCount</Name>
+          <Value xsi:type="xsd:string">2</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>INT</DataType>
+          <Name>toolWorkCount</Name>
+          <Value xsi:type="xsd:string">0</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>STRING</DataType>
+          <Name>toolStartDate</Name>
+          <Value xsi:type="xsd:string" />
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>STRING</DataType>
+          <Name>toolFinishDate</Name>
+          <Value xsi:type="xsd:string" />
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>offset0</Name>
+          <Value xsi:type="xsd:string">0</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>offset1</Name>
+          <Value xsi:type="xsd:string">1</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>offset2</Name>
+          <Value xsi:type="xsd:string">2</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>offset3</Name>
+          <Value xsi:type="xsd:string">3</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>offset4</Name>
+          <Value xsi:type="xsd:string">4</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>offset5</Name>
+          <Value xsi:type="xsd:string">5</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>offset6</Name>
+          <Value xsi:type="xsd:string">6</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>offset7</Name>
+          <Value xsi:type="xsd:string">7</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>offset8</Name>
+          <Value xsi:type="xsd:string">8</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>STRING</DataType>
+          <Name>creatorName</Name>
+          <Value xsi:type="xsd:string" />
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>STRING</DataType>
+          <Name>createDate</Name>
+          <Value xsi:type="xsd:string">2026-04-02 18:20:29.0</Value>
+        </anyType>
+      </Properties>
+      <ID>8</ID>
+      <MachineID>0</MachineID>
+      <CreateDateTime>0001-01-01T00:00:00</CreateDateTime>
+    </ToolModel>
+    <ToolModel>
+      <Properties>
+        <anyType xsi:type="Property">
+          <DataType>STRING</DataType>
+          <Name>toolCode</Name>
+          <Value xsi:type="xsd:string">T15_1</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>STRING</DataType>
+          <Name>toolName</Name>
+          <Value xsi:type="xsd:string">T15_1</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>STRING</DataType>
+          <Name>toolModelName</Name>
+          <Value xsi:type="xsd:string" />
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>INT</DataType>
+          <Name>toolTeeth</Name>
+          <Value xsi:type="xsd:string">2</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>cutterDiameter</Name>
+          <Value xsi:type="xsd:string">10</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>cutterRadius</Name>
+          <Value xsi:type="xsd:string">0</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>toolLength</Name>
+          <Value xsi:type="xsd:string">0</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>INT</DataType>
+          <Name>toolStandardWorkCount</Name>
+          <Value xsi:type="xsd:string">0</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>radialCornerOffset</Name>
+          <Value xsi:type="xsd:string">0</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>axialCornerOffset</Name>
+          <Value xsi:type="xsd:string">0</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>tipAngle</Name>
+          <Value xsi:type="xsd:string">0</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>flankAngle</Name>
+          <Value xsi:type="xsd:string">0</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>STRING</DataType>
+          <Name>toolMaterial</Name>
+          <Value xsi:type="xsd:string" />
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>STRING</DataType>
+          <Name>toolMaker</Name>
+          <Value xsi:type="xsd:string" />
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>STRING</DataType>
+          <Name>toolMakerModelNumber</Name>
+          <Value xsi:type="xsd:string" />
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>toolLifeExpectancy</Name>
+          <Value xsi:type="xsd:string">0</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>toolUsedTime</Name>
+          <Value xsi:type="xsd:string">0</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>toolTotalUsedTime</Name>
+          <Value xsi:type="xsd:string">0</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>toolTotalUsedTimeActual</Name>
+          <Value xsi:type="xsd:string">0</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>toolLifeRemaining</Name>
+          <Value xsi:type="xsd:string">0</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>INT</DataType>
+          <Name>toolUsedCount</Name>
+          <Value xsi:type="xsd:string">1</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>INT</DataType>
+          <Name>toolWorkCount</Name>
+          <Value xsi:type="xsd:string">0</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>STRING</DataType>
+          <Name>toolStartDate</Name>
+          <Value xsi:type="xsd:string" />
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>STRING</DataType>
+          <Name>toolFinishDate</Name>
+          <Value xsi:type="xsd:string" />
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>offset0</Name>
+          <Value xsi:type="xsd:string">0</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>offset1</Name>
+          <Value xsi:type="xsd:string">1</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>offset2</Name>
+          <Value xsi:type="xsd:string">2</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>offset3</Name>
+          <Value xsi:type="xsd:string">3</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>offset4</Name>
+          <Value xsi:type="xsd:string">4</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>offset5</Name>
+          <Value xsi:type="xsd:string">5</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>offset6</Name>
+          <Value xsi:type="xsd:string">6</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>offset7</Name>
+          <Value xsi:type="xsd:string">7</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>offset8</Name>
+          <Value xsi:type="xsd:string">8</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>STRING</DataType>
+          <Name>creatorName</Name>
+          <Value xsi:type="xsd:string" />
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>STRING</DataType>
+          <Name>createDate</Name>
+          <Value xsi:type="xsd:string">2026-04-02 18:25:12.0</Value>
+        </anyType>
+      </Properties>
+      <ID>8</ID>
+      <MachineID>0</MachineID>
+      <CreateDateTime>0001-01-01T00:00:00</CreateDateTime>
+    </ToolModel>
+    <ToolModel>
+      <Properties>
+        <anyType xsi:type="Property">
+          <DataType>STRING</DataType>
+          <Name>toolCode</Name>
+          <Value xsi:type="xsd:string">T16_1</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>STRING</DataType>
+          <Name>toolName</Name>
+          <Value xsi:type="xsd:string">T16_1</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>STRING</DataType>
+          <Name>toolModelName</Name>
+          <Value xsi:type="xsd:string" />
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>INT</DataType>
+          <Name>toolTeeth</Name>
+          <Value xsi:type="xsd:string">2</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>cutterDiameter</Name>
+          <Value xsi:type="xsd:string">10</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>cutterRadius</Name>
+          <Value xsi:type="xsd:string">0</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>toolLength</Name>
+          <Value xsi:type="xsd:string">0</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>INT</DataType>
+          <Name>toolStandardWorkCount</Name>
+          <Value xsi:type="xsd:string">0</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>radialCornerOffset</Name>
+          <Value xsi:type="xsd:string">0</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>axialCornerOffset</Name>
+          <Value xsi:type="xsd:string">0</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>tipAngle</Name>
+          <Value xsi:type="xsd:string">0</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>flankAngle</Name>
+          <Value xsi:type="xsd:string">0</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>STRING</DataType>
+          <Name>toolMaterial</Name>
+          <Value xsi:type="xsd:string" />
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>STRING</DataType>
+          <Name>toolMaker</Name>
+          <Value xsi:type="xsd:string" />
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>STRING</DataType>
+          <Name>toolMakerModelNumber</Name>
+          <Value xsi:type="xsd:string" />
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>toolLifeExpectancy</Name>
+          <Value xsi:type="xsd:string">0</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>toolUsedTime</Name>
+          <Value xsi:type="xsd:string">0</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>toolTotalUsedTime</Name>
+          <Value xsi:type="xsd:string">0</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>toolTotalUsedTimeActual</Name>
+          <Value xsi:type="xsd:string">0</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>toolLifeRemaining</Name>
+          <Value xsi:type="xsd:string">0</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>INT</DataType>
+          <Name>toolUsedCount</Name>
+          <Value xsi:type="xsd:string">1</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>INT</DataType>
+          <Name>toolWorkCount</Name>
+          <Value xsi:type="xsd:string">0</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>STRING</DataType>
+          <Name>toolStartDate</Name>
+          <Value xsi:type="xsd:string" />
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>STRING</DataType>
+          <Name>toolFinishDate</Name>
+          <Value xsi:type="xsd:string" />
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>offset0</Name>
+          <Value xsi:type="xsd:string">0</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>offset1</Name>
+          <Value xsi:type="xsd:string">1</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>offset2</Name>
+          <Value xsi:type="xsd:string">2</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>offset3</Name>
+          <Value xsi:type="xsd:string">3</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>offset4</Name>
+          <Value xsi:type="xsd:string">4</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>offset5</Name>
+          <Value xsi:type="xsd:string">5</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>offset6</Name>
+          <Value xsi:type="xsd:string">6</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>offset7</Name>
+          <Value xsi:type="xsd:string">7</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>offset8</Name>
+          <Value xsi:type="xsd:string">8</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>STRING</DataType>
+          <Name>creatorName</Name>
+          <Value xsi:type="xsd:string" />
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>STRING</DataType>
+          <Name>createDate</Name>
+          <Value xsi:type="xsd:string">2026-04-02 18:32:31.0</Value>
+        </anyType>
+      </Properties>
+      <ID>8</ID>
+      <MachineID>0</MachineID>
+      <CreateDateTime>0001-01-01T00:00:00</CreateDateTime>
+    </ToolModel>
+    <ToolModel>
+      <Properties>
+        <anyType xsi:type="Property">
+          <DataType>STRING</DataType>
+          <Name>toolCode</Name>
+          <Value xsi:type="xsd:string">T17_3</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>STRING</DataType>
+          <Name>toolName</Name>
+          <Value xsi:type="xsd:string">T17_3</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>STRING</DataType>
+          <Name>toolModelName</Name>
+          <Value xsi:type="xsd:string" />
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>INT</DataType>
+          <Name>toolTeeth</Name>
+          <Value xsi:type="xsd:string">2</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>cutterDiameter</Name>
+          <Value xsi:type="xsd:string">10</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>cutterRadius</Name>
+          <Value xsi:type="xsd:string">0</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>toolLength</Name>
+          <Value xsi:type="xsd:string">0</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>INT</DataType>
+          <Name>toolStandardWorkCount</Name>
+          <Value xsi:type="xsd:string">0</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>radialCornerOffset</Name>
+          <Value xsi:type="xsd:string">0</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>axialCornerOffset</Name>
+          <Value xsi:type="xsd:string">0</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>tipAngle</Name>
+          <Value xsi:type="xsd:string">0</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>flankAngle</Name>
+          <Value xsi:type="xsd:string">0</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>STRING</DataType>
+          <Name>toolMaterial</Name>
+          <Value xsi:type="xsd:string" />
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>STRING</DataType>
+          <Name>toolMaker</Name>
+          <Value xsi:type="xsd:string" />
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>STRING</DataType>
+          <Name>toolMakerModelNumber</Name>
+          <Value xsi:type="xsd:string" />
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>toolLifeExpectancy</Name>
+          <Value xsi:type="xsd:string">0</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>toolUsedTime</Name>
+          <Value xsi:type="xsd:string">0</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>toolTotalUsedTime</Name>
+          <Value xsi:type="xsd:string">0</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>toolTotalUsedTimeActual</Name>
+          <Value xsi:type="xsd:string">0</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>toolLifeRemaining</Name>
+          <Value xsi:type="xsd:string">0</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>INT</DataType>
+          <Name>toolUsedCount</Name>
+          <Value xsi:type="xsd:string">2</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>INT</DataType>
+          <Name>toolWorkCount</Name>
+          <Value xsi:type="xsd:string">0</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>STRING</DataType>
+          <Name>toolStartDate</Name>
+          <Value xsi:type="xsd:string" />
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>STRING</DataType>
+          <Name>toolFinishDate</Name>
+          <Value xsi:type="xsd:string" />
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>offset0</Name>
+          <Value xsi:type="xsd:string">0</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>offset1</Name>
+          <Value xsi:type="xsd:string">1</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>offset2</Name>
+          <Value xsi:type="xsd:string">2</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>offset3</Name>
+          <Value xsi:type="xsd:string">3</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>offset4</Name>
+          <Value xsi:type="xsd:string">4</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>offset5</Name>
+          <Value xsi:type="xsd:string">5</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>offset6</Name>
+          <Value xsi:type="xsd:string">6</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>offset7</Name>
+          <Value xsi:type="xsd:string">7</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>DOUBLE</DataType>
+          <Name>offset8</Name>
+          <Value xsi:type="xsd:string">8</Value>
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>STRING</DataType>
+          <Name>creatorName</Name>
+          <Value xsi:type="xsd:string" />
+        </anyType>
+        <anyType xsi:type="Property">
+          <DataType>STRING</DataType>
+          <Name>createDate</Name>
+          <Value xsi:type="xsd:string">2026-04-02 18:20:28.8</Value>
+        </anyType>
+      </Properties>
+      <ID>1</ID>
+      <MachineID>0</MachineID>
+      <CreateDateTime>0001-01-01T00:00:00</CreateDateTime>
+    </ToolModel>
+  </Tools>
+  <CreateDateTime>2026-04-02T18:24:13.23</CreateDateTime>
+  <StartTime>2026-04-02T18:24:13.23</StartTime>
+  <FinishTime>2026-04-02T18:42:40.33</FinishTime>
+  <CuttingSeconds>814.10000000011655</CuttingSeconds>
+  <MovingDistance>14375.8370820659</MovingDistance>
+  <CuttingMovingDistance>5514.39400010822</CuttingMovingDistance>
+  <WorkCounterStart>0</WorkCounterStart>
+  <WorkCounterFinish>0</WorkCounterFinish>
+  <TargetCounter>0</TargetCounter>
+  <ProgramName>O26402.NC</ProgramName>
+  <MachineIpAddress>192.168.1.100</MachineIpAddress>
+  <CncCycleTime>0</CncCycleTime>
+  <CncEstCycleTime>0</CncEstCycleTime>
+  <IsFinish>true</IsFinish>
+  <IsError>false</IsError>
+  <StartBlockNumber>0</StartBlockNumber>
+</WorkModel>

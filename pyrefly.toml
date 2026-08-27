@@ -1,0 +1,10 @@
+project-includes = [
+    "**/*.py*",
+    "**/*.ipynb",
+]
+project-excludes = [
+    "**/*_copy*.py",
+]
+search-path = [
+    "backend",
+]

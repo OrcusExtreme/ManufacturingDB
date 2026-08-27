@@ -1,0 +1,1501 @@
+<?xml version="1.0" ?>
+<FEATURES>
+  <workpiece type="workpiece">
+    <its_id>WP001</its_id>
+    <its_boundary_geometry type="block">
+      <position type="cartesian_point">
+        <x>100.0</x>
+        <y>75.0</y>
+        <z>0.0</z>
+      </position>
+      <x>200.0</x>
+      <y>150.0</y>
+      <z>25.5</z>
+    </its_boundary_geometry>
+    <its_material type="material">
+      <standard_identifier>ASTM_B221</standard_identifier>
+      <material_identifier>ALUMINUM_ALLOY</material_identifier>
+      <density>2700.0</density>
+      <tensile_strength>310.0</tensile_strength>
+    </its_material>
+    <global_tolerance>0.0003</global_tolerance>
+  </workpiece>
+  <features>
+    <planar_face type="planar_face">
+      <its_id>FACING_1272343225936</its_id>
+      <feature_placement type="axis2_placement_3d">
+        <location type="cartesian_point">
+          <x>100.0</x>
+          <y>75.0</y>
+          <z>0.0</z>
+        </location>
+        <axis type="direction">
+          <x>0</x>
+          <y>0</y>
+          <z>-1</z>
+        </axis>
+        <ref_direction type="direction">
+          <x>1</x>
+          <y>0</y>
+          <z>0</z>
+        </ref_direction>
+      </feature_placement>
+      <depth>0.5</depth>
+      <course_of_travel type="linear_path">
+        <placement type="axis2_placement_3d">
+          <location type="cartesian_point">
+            <x>100.0</x>
+            <y>75.0</y>
+            <z>0.0</z>
+          </location>
+          <axis type="direction">
+            <x>0</x>
+            <y>0</y>
+            <z>-1</z>
+          </axis>
+          <ref_direction type="direction">
+            <x>1</x>
+            <y>0</y>
+            <z>0</z>
+          </ref_direction>
+        </placement>
+        <distance>0.5</distance>
+        <its_direction type="direction">
+          <x>0</x>
+          <y>0</y>
+          <z>-1</z>
+        </its_direction>
+      </course_of_travel>
+      <removal_boundary type="rectangular_closed_profile">
+        <placement type="axis2_placement_3d">
+          <location type="cartesian_point">
+            <x>100.0</x>
+            <y>75.0</y>
+            <z>0.0</z>
+          </location>
+          <axis type="direction">
+            <x>0</x>
+            <y>0</y>
+            <z>1</z>
+          </axis>
+          <ref_direction type="direction">
+            <x>1</x>
+            <y>0</y>
+            <z>0</z>
+          </ref_direction>
+        </placement>
+        <profile_width>200.0</profile_width>
+        <profile_length>150.0</profile_length>
+      </removal_boundary>
+      <face_boundary type="rectangular_closed_profile">
+        <placement type="axis2_placement_3d">
+          <location type="cartesian_point">
+            <x>100.0</x>
+            <y>75.0</y>
+            <z>0.0</z>
+          </location>
+          <axis type="direction">
+            <x>0</x>
+            <y>0</y>
+            <z>1</z>
+          </axis>
+          <ref_direction type="direction">
+            <x>1</x>
+            <y>0</y>
+            <z>0</z>
+          </ref_direction>
+        </placement>
+        <profile_width>200.0</profile_width>
+        <profile_length>150.0</profile_length>
+      </face_boundary>
+    </planar_face>
+    <general_outside_profile type="general_outside_profile">
+      <its_id>FEATURE_001</its_id>
+      <feature_placement type="axis2_placement_3d">
+        <location type="cartesian_point">
+          <x>86.52847481860732</x>
+          <y>77.50598021723839</y>
+          <z>-0.5</z>
+        </location>
+        <axis type="direction">
+          <x>0</x>
+          <y>0</y>
+          <z>1</z>
+        </axis>
+        <ref_direction type="direction">
+          <x>1</x>
+          <y>0</y>
+          <z>0</z>
+        </ref_direction>
+      </feature_placement>
+      <depth>20.0</depth>
+      <feature_boundary type="general_closed_profile">
+        <placement type="axis2_placement_3d">
+          <location type="cartesian_point">
+            <x>86.52847481860732</x>
+            <y>77.50598021723839</y>
+            <z>-0.5</z>
+          </location>
+          <axis type="direction">
+            <x>0</x>
+            <y>0</y>
+            <z>1</z>
+          </axis>
+          <ref_direction type="direction">
+            <x>1</x>
+            <y>0</y>
+            <z>0</z>
+          </ref_direction>
+        </placement>
+        <closed_profile_shape type="bounded_curve">
+          <curve_data>
+            <polyline type="polyline">
+              <points_list>
+                <cartesian_point type="cartesian_point">
+                  <x>-86.5284173424084</x>
+                  <y>-64.50682170199227</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-86.39474250926351</x>
+                  <y>-63.116430640679454</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-85.99416830335771</x>
+                  <y>-61.53071691062383</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-85.33217156812037</x>
+                  <y>-59.757617198616934</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-84.41510232313632</x>
+                  <y>-57.79957147443372</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-82.81159020943646</x>
+                  <y>-54.91263042496423</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-80.7982717233974</x>
+                  <y>-51.728323358309886</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-78.40685457223196</x>
+                  <y>-48.268825655680345</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-75.67406258403422</x>
+                  <y>-44.560442472638215</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-72.6401785672309</x>
+                  <y>-40.63202769235296</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-67.61795389135818</x>
+                  <y>-34.392871768622285</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-62.164422061967784</x>
+                  <y>-27.833668893837782</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-42.810075876007915</x>
+                  <y>-5.0394854165786995</y>
+                  <z>0.0</z>
+                </cartesian_point>
+              </points_list>
+            </polyline>
+            <trimmed_curve type="trimmed_curve">
+              <position type="axis2_placement_3d">
+                <location type="cartesian_point">
+                  <x>-44.33815288939259</x>
+                  <y>-3.7491333941133265</y>
+                  <z>0.0</z>
+                </location>
+                <axis type="direction">
+                  <x>0.0</x>
+                  <y>0.0</y>
+                  <z>1.0</z>
+                </axis>
+                <ref_direction type="direction">
+                  <x>1.0</x>
+                  <y>0.0</y>
+                  <z>0.0</z>
+                </ref_direction>
+              </position>
+              <radius>1.999623476159424</radius>
+              <trim_1>-0.701250707868208</trim_1>
+              <trim_2>0.86993628901842</trim_2>
+              <is_clockwise>False</is_clockwise>
+            </trimmed_curve>
+            <polyline type="polyline">
+              <points_list>
+                <cartesian_point type="cartesian_point">
+                  <x>-43.04895082334848</x>
+                  <y>-2.221207657826568</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-46.97005550757396</x>
+                  <y>0.35663744357258054</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-48.81905471088105</x>
+                  <y>1.6631844996398826</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-52.51919954134</x>
+                  <y>4.480688326554159</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-54.3680590201218</x>
+                  <y>5.9905689051283275</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-56.21323890179967</x>
+                  <y>7.565936585810746</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-59.8754617049566</x>
+                  <y>10.898425200133346</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-65.24865906944765</x>
+                  <y>16.30102373050481</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-70.36146903836526</x>
+                  <y>22.056757371959847</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-75.05816980119198</x>
+                  <y>27.975056979863325</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-77.8730644628274</x>
+                  <y>31.903671755764393</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-79.1658899376865</x>
+                  <y>33.837803213967945</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-81.49027971707866</x>
+                  <y>37.605307541870346</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-83.4237346757894</x>
+                  <y>41.18420234519415</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-84.92071173023363</x>
+                  <y>44.51678124554594</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-85.94350675706386</x>
+                  <y>47.55671042079683</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-86.38171814153482</x>
+                  <y>49.62417949898523</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-86.5284173424084</x>
+                  <y>51.494698660544046</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-86.52830239001055</x>
+                  <y>72.49390483036377</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-81.52853229480625</x>
+                  <y>72.49390483036377</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-81.5284173424084</x>
+                  <y>54.594019782761606</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-81.43821905644137</x>
+                  <y>54.49450131009441</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>113.47146770519373</x>
+                  <y>54.493904830363746</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>113.47146770519373</x>
+                  <y>51.49413473515948</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>97.4698057874862</x>
+                  <y>51.49395657749692</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>96.14804423940743</x>
+                  <y>51.3682689513751</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>94.39270417258365</x>
+                  <y>50.99272804060392</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>92.20840807309253</x>
+                  <y>50.36886701186576</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>89.60479318274037</x>
+                  <y>49.49965126493437</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>83.19306501124626</x>
+                  <y>47.042050139673876</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>75.29011804209682</x>
+                  <y>43.66241538998288</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>66.06406762975246</x>
+                  <y>39.41577735138358</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>55.710592272311715</x>
+                  <y>34.36810192381438</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>46.37572328379355</x>
+                  <y>29.603740737174036</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>36.539565821641006</x>
+                  <y>24.384348898835952</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>24.267057405612633</x>
+                  <y>17.59602617147364</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>11.710264602170923</x>
+                  <y>10.33138423374821</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>3.2986773495778863</x>
+                  <y>5.2778531998401235</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-9.201107363016774</x>
+                  <y>-2.52563478299615</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-17.35856154743192</x>
+                  <y>-7.820237716079404</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-25.2966077517071</x>
+                  <y>-13.137964806878358</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-32.95429237220401</x>
+                  <y>-18.436073155849876</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-42.03615573337034</x>
+                  <y>-24.959416236310062</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-50.469317102490244</x>
+                  <y>-31.289642028184453</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-56.675241786290414</x>
+                  <y>-36.15363478312094</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-63.671936337588036</x>
+                  <y>-41.909840188741434</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-69.73513344676675</x>
+                  <y>-47.22754909590068</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-74.7814839524062</x>
+                  <y>-52.03063965591733</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-78.03368231198193</x>
+                  <y>-55.45336965069729</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-79.99613803546214</x>
+                  <y>-57.75827042379731</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-81.9496929643111</x>
+                  <y>-60.454204875685036</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-82.90939269888037</x>
+                  <y>-62.18606646789372</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-83.30677938840597</x>
+                  <y>-63.2055584179879</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-83.52823191207038</x>
+                  <y>-64.50293953695754</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-83.52853229480625</x>
+                  <y>-77.50586526484054</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-86.52830239001055</x>
+                  <y>-77.50586526484054</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-86.5284173424084</x>
+                  <y>-64.50682170199227</y>
+                  <z>0.0</z>
+                </cartesian_point>
+              </points_list>
+            </polyline>
+          </curve_data>
+        </closed_profile_shape>
+      </feature_boundary>
+    </general_outside_profile>
+    <closed_pocket type="closed_pocket">
+      <its_id>FEATURE_002</its_id>
+      <feature_placement type="axis2_placement_3d">
+        <location type="cartesian_point">
+          <x>128.88942506380647</x>
+          <y>141.70627158152408</y>
+          <z>-0.5</z>
+        </location>
+        <axis type="direction">
+          <x>0</x>
+          <y>0</y>
+          <z>1</z>
+        </axis>
+        <ref_direction type="direction">
+          <x>1</x>
+          <y>0</y>
+          <z>0</z>
+        </ref_direction>
+      </feature_placement>
+      <depth>20.0</depth>
+      <bottom_condition type="through_pocket_bottom_condition"/>
+      <its_boss>None</its_boss>
+      <slope>None</slope>
+      <planar_radius>None</planar_radius>
+      <orthogonal_radius>None</orthogonal_radius>
+      <feature_boundary type="general_closed_profile">
+        <placement type="axis2_placement_3d">
+          <location type="cartesian_point">
+            <x>128.88942506380647</x>
+            <y>141.70627158152408</y>
+            <z>-0.5</z>
+          </location>
+          <axis type="direction">
+            <x>0</x>
+            <y>0</y>
+            <z>1</z>
+          </axis>
+          <ref_direction type="direction">
+            <x>1</x>
+            <y>0</y>
+            <z>0</z>
+          </ref_direction>
+        </placement>
+        <closed_profile_shape type="bounded_curve">
+          <curve_data>
+            <polyline type="polyline">
+              <points_list>
+                <cartesian_point type="cartesian_point">
+                  <x>-35.12977120092805</x>
+                  <y>-19.554396940664276</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-31.041502603387613</x>
+                  <y>-24.76884302563529</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-28.23915169768219</x>
+                  <y>-27.99888892523262</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-25.37549629172763</x>
+                  <y>-31.01191363249967</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-22.437304885053265</x>
+                  <y>-33.817277161665345</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-17.899990240319582</x>
+                  <y>-37.662904307026906</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-14.579853047148148</x>
+                  <y>-40.136730702116665</y>
+                  <z>0.0</z>
+                </cartesian_point>
+              </points_list>
+            </polyline>
+            <trimmed_curve type="trimmed_curve">
+              <position type="axis2_placement_3d">
+                <location type="cartesian_point">
+                  <x>-13.624208570091191</x>
+                  <y>-38.37732975621115</y>
+                  <z>0.0</z>
+                </location>
+                <axis type="direction">
+                  <x>0.0</x>
+                  <y>0.0</y>
+                  <z>1.0</z>
+                </axis>
+                <ref_direction type="direction">
+                  <x>1.0</x>
+                  <y>0.0</y>
+                  <z>0.0</z>
+                </ref_direction>
+              </position>
+              <radius>2.002550166685959</radius>
+              <trim_1>-2.0683765601774646</trim_1>
+              <trim_2>-1.0663010885421804</trim_2>
+              <is_clockwise>False</is_clockwise>
+            </trimmed_curve>
+            <polyline type="polyline">
+              <points_list>
+                <cartesian_point type="cartesian_point">
+                  <x>-12.6561479969602</x>
+                  <y>-40.130574423869874</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-5.020167773637866</x>
+                  <y>-35.977553703592875</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>2.3961955034187667</x>
+                  <y>-32.05743121410259</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>16.32685811779109</x>
+                  <y>-25.010991730209753</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>28.680018869391716</x>
+                  <y>-19.160576869102826</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>34.1480955298004</x>
+                  <y>-16.723560543992477</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>39.090146474347875</x>
+                  <y>-14.629268329620587</y>
+                  <z>0.0</z>
+                </cartesian_point>
+              </points_list>
+            </polyline>
+            <trimmed_curve type="trimmed_curve">
+              <position type="axis2_placement_3d">
+                <location type="cartesian_point">
+                  <x>38.70394946420613</x>
+                  <y>-13.707331520793419</y>
+                  <z>0.0</z>
+                </location>
+                <axis type="direction">
+                  <x>0.0</x>
+                  <y>0.0</y>
+                  <z>1.0</z>
+                </axis>
+                <ref_direction type="direction">
+                  <x>1.0</x>
+                  <y>0.0</y>
+                  <z>0.0</z>
+                </ref_direction>
+              </position>
+              <radius>0.999796092759147</radius>
+              <trim_1>-1.174105898398239</trim_1>
+              <trim_2>1.5728085229677766</trim_2>
+              <is_clockwise>False</is_clockwise>
+            </trimmed_curve>
+            <polyline type="polyline">
+              <points_list>
+                <cartesian_point type="cartesian_point">
+                  <x>38.70193513250888</x>
+                  <y>-12.706271581524078</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-36.14026514086814</x>
+                  <y>-12.706271581524078</y>
+                  <z>0.0</z>
+                </cartesian_point>
+              </points_list>
+            </polyline>
+            <trimmed_curve type="trimmed_curve">
+              <position type="axis2_placement_3d">
+                <location type="cartesian_point">
+                  <x>-36.1435714746977</x>
+                  <y>-14.706354089349883</y>
+                  <z>0.0</z>
+                </location>
+                <axis type="direction">
+                  <x>0.0</x>
+                  <y>0.0</y>
+                  <z>1.0</z>
+                </axis>
+                <ref_direction type="direction">
+                  <x>1.0</x>
+                  <y>0.0</y>
+                  <z>0.0</z>
+                </ref_direction>
+              </position>
+              <radius>1.999049462609714</radius>
+              <trim_1>1.5691432295827301</trim_1>
+              <trim_2>-2.661283057772311</trim_2>
+              <is_clockwise>False</is_clockwise>
+            </trimmed_curve>
+            <polyline type="polyline">
+              <points_list>
+                <cartesian_point type="cartesian_point">
+                  <x>-37.91606975236071</x>
+                  <y>-15.629833517522371</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-35.12977120092805</x>
+                  <y>-19.554396940664276</y>
+                  <z>0.0</z>
+                </cartesian_point>
+              </points_list>
+            </polyline>
+          </curve_data>
+        </closed_profile_shape>
+      </feature_boundary>
+    </closed_pocket>
+    <closed_pocket type="closed_pocket">
+      <its_id>FEATURE_003</its_id>
+      <feature_placement type="axis2_placement_3d">
+        <location type="cartesian_point">
+          <x>78.8334713847884</x>
+          <y>94.62878259981002</y>
+          <z>-0.5</z>
+        </location>
+        <axis type="direction">
+          <x>0</x>
+          <y>0</y>
+          <z>1</z>
+        </axis>
+        <ref_direction type="direction">
+          <x>1</x>
+          <y>0</y>
+          <z>0</z>
+        </ref_direction>
+      </feature_placement>
+      <depth>20.0</depth>
+      <bottom_condition type="through_pocket_bottom_condition"/>
+      <its_boss>None</its_boss>
+      <slope>None</slope>
+      <planar_radius>None</planar_radius>
+      <orthogonal_radius>None</orthogonal_radius>
+      <feature_boundary type="general_closed_profile">
+        <placement type="axis2_placement_3d">
+          <location type="cartesian_point">
+            <x>78.8334713847884</x>
+            <y>94.62878259981002</y>
+            <z>-0.5</z>
+          </location>
+          <axis type="direction">
+            <x>0</x>
+            <y>0</y>
+            <z>1</z>
+          </axis>
+          <ref_direction type="direction">
+            <x>1</x>
+            <y>0</y>
+            <z>0</z>
+          </ref_direction>
+        </placement>
+        <closed_profile_shape type="bounded_curve">
+          <curve_data>
+            <polyline type="polyline">
+              <points_list>
+                <cartesian_point type="cartesian_point">
+                  <x>-26.838917445387096</x>
+                  <y>-20.49178052192363</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-25.203170405319483</x>
+                  <y>-21.246834245296753</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-22.380918244943146</x>
+                  <y>-22.38916604972667</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-19.594309053834465</x>
+                  <y>-23.35106757246797</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-15.488534393282833</x>
+                  <y>-24.461246313760796</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-14.855454728704352</x>
+                  <y>-24.500968560613643</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-14.173961601145763</x>
+                  <y>-24.3088974294254</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-3.012496122684283</x>
+                  <y>-17.05233100991147</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>8.180351006684617</x>
+                  <y>-10.049760849526123</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>19.48060503786644</x>
+                  <y>-3.2637745306886075</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>30.72409991905576</x>
+                  <y>3.2198536416075996</y>
+                  <z>0.0</z>
+                </cartesian_point>
+              </points_list>
+            </polyline>
+            <trimmed_curve type="trimmed_curve">
+              <position type="axis2_placement_3d">
+                <location type="cartesian_point">
+                  <x>29.7374555708457</x>
+                  <y>4.9585526394374435</y>
+                  <z>0.0</z>
+                </location>
+                <axis type="direction">
+                  <x>0.0</x>
+                  <y>0.0</y>
+                  <z>1.0</z>
+                </axis>
+                <ref_direction type="direction">
+                  <x>1.0</x>
+                  <y>0.0</y>
+                  <z>0.0</z>
+                </ref_direction>
+              </position>
+              <radius>1.9991190243561947</radius>
+              <trim_1>-1.054646055460568</trim_1>
+              <trim_2>0.8026020189045203</trim_2>
+              <is_clockwise>False</is_clockwise>
+            </trimmed_curve>
+            <polyline type="polyline">
+              <points_list>
+                <cartesian_point type="cartesian_point">
+                  <x>31.126353386724276</x>
+                  <y>6.396080675100308</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>27.95463568395941</x>
+                  <y>8.974964943469388</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>25.01108151133181</x>
+                  <y>11.581441395562564</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>22.13513101467848</x>
+                  <y>14.371972015583111</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>19.33016667546343</x>
+                  <y>17.352998538486816</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>16.593747864771856</x>
+                  <y>20.523786689466732</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>13.92265496857388</x>
+                  <y>23.87249141435109</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>11.311828397051002</x>
+                  <y>27.385286398815452</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>8.572751886742111</x>
+                  <y>31.280391603688514</y>
+                  <z>0.0</z>
+                </cartesian_point>
+              </points_list>
+            </polyline>
+            <trimmed_curve type="trimmed_curve">
+              <position type="axis2_placement_3d">
+                <location type="cartesian_point">
+                  <x>7.100201930718648</x>
+                  <y>29.93051129439328</y>
+                  <z>0.0</z>
+                </location>
+                <axis type="direction">
+                  <x>0.0</x>
+                  <y>0.0</y>
+                  <z>1.0</z>
+                </axis>
+                <ref_direction type="direction">
+                  <x>1.0</x>
+                  <y>0.0</y>
+                  <z>0.0</z>
+                </ref_direction>
+              </position>
+              <radius>1.9975741407609444</radius>
+              <trim_1>0.7419630800177214</trim_1>
+              <trim_2>2.637416030471768</trim_2>
+              <is_clockwise>False</is_clockwise>
+            </trimmed_curve>
+            <polyline type="polyline">
+              <points_list>
+                <cartesian_point type="cartesian_point">
+                  <x>5.350900206976306</x>
+                  <y>30.895667607652626</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>3.1296447500049</x>
+                  <y>25.914005840553656</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>1.1695918432467636</x>
+                  <y>22.113161693412422</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-1.9436654871145436</x>
+                  <y>16.72875908605259</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-5.629774652751834</x>
+                  <y>10.971753830334777</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-9.889450782178486</x>
+                  <y>4.832901874249231</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-14.709729899461323</x>
+                  <y>-1.6813252282648392</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-20.039129043063724</x>
+                  <y>-8.534887191211425</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-27.448437479597004</x>
+                  <y>-17.68164648350924</y>
+                  <z>0.0</z>
+                </cartesian_point>
+              </points_list>
+            </polyline>
+            <trimmed_curve type="trimmed_curve">
+              <position type="axis2_placement_3d">
+                <location type="cartesian_point">
+                  <x>-25.788772259189155</x>
+                  <y>-18.792477724330052</y>
+                  <z>0.0</z>
+                </location>
+                <axis type="direction">
+                  <x>0.0</x>
+                  <y>0.0</y>
+                  <z>1.0</z>
+                </axis>
+                <ref_direction type="direction">
+                  <x>1.0</x>
+                  <y>0.0</y>
+                  <z>0.0</z>
+                </ref_direction>
+              </position>
+              <radius>1.99735688170638</radius>
+              <trim_1>2.5517619856177713</trim_1>
+              <trim_2>-2.124335895030189</trim_2>
+              <is_clockwise>False</is_clockwise>
+            </trimmed_curve>
+          </curve_data>
+        </closed_profile_shape>
+      </feature_boundary>
+    </closed_pocket>
+    <closed_pocket type="closed_pocket">
+      <its_id>FEATURE_004</its_id>
+      <feature_placement type="axis2_placement_3d">
+        <location type="cartesian_point">
+          <x>42.364368947653674</x>
+          <y>119.78022812107517</y>
+          <z>-0.5</z>
+        </location>
+        <axis type="direction">
+          <x>0</x>
+          <y>0</y>
+          <z>1</z>
+        </axis>
+        <ref_direction type="direction">
+          <x>1</x>
+          <y>0</y>
+          <z>0</z>
+        </ref_direction>
+      </feature_placement>
+      <depth>20.0</depth>
+      <bottom_condition type="through_pocket_bottom_condition"/>
+      <its_boss>None</its_boss>
+      <slope>None</slope>
+      <planar_radius>None</planar_radius>
+      <orthogonal_radius>None</orthogonal_radius>
+      <feature_boundary type="general_closed_profile">
+        <placement type="axis2_placement_3d">
+          <location type="cartesian_point">
+            <x>42.364368947653674</x>
+            <y>119.78022812107517</y>
+            <z>-0.5</z>
+          </location>
+          <axis type="direction">
+            <x>0</x>
+            <y>0</y>
+            <z>1</z>
+          </axis>
+          <ref_direction type="direction">
+            <x>1</x>
+            <y>0</y>
+            <z>0</z>
+          </ref_direction>
+        </placement>
+        <closed_profile_shape type="bounded_curve">
+          <curve_data>
+            <polyline type="polyline">
+              <points_list>
+                <cartesian_point type="cartesian_point">
+                  <x>-38.476510951482865</x>
+                  <y>4.73042687825577</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-37.12602367922953</x>
+                  <y>1.3983837669608619</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-36.028084284883334</x>
+                  <y>-0.8111112297747098</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-34.729902910866684</x>
+                  <y>-3.1525781367104457</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-31.60460791748885</x>
+                  <y>-8.121175914014543</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-27.87883524364488</x>
+                  <y>-13.314609561274594</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-23.68724837276966</x>
+                  <y>-18.539670891687607</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-19.166041146538213</x>
+                  <y>-23.63065430849717</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-14.43040493167063</x>
+                  <y>-28.449680598025424</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-11.211286493787753</x>
+                  <y>-31.44378930542854</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-7.968220924412947</x>
+                  <y>-34.238537128240054</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-3.0955373962276767</x>
+                  <y>-38.03310036078702</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>1.745941886420269</x>
+                  <y>-41.32629547132525</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>3.5092146640343316</x>
+                  <y>-42.39533388507442</y>
+                  <z>0.0</z>
+                </cartesian_point>
+              </points_list>
+            </polyline>
+            <trimmed_curve type="trimmed_curve">
+              <position type="axis2_placement_3d">
+                <location type="cartesian_point">
+                  <x>4.368921815116161</x>
+                  <y>-40.589247533081554</y>
+                  <z>0.0</z>
+                </location>
+                <axis type="direction">
+                  <x>0.0</x>
+                  <y>0.0</y>
+                  <z>1.0</z>
+                </axis>
+                <ref_direction type="direction">
+                  <x>1.0</x>
+                  <y>0.0</y>
+                  <z>0.0</z>
+                </ref_direction>
+              </position>
+              <radius>2.0001487125985182</radius>
+              <trim_1>-2.0150647926979866</trim_1>
+              <trim_2>-0.820395713316886</trim_2>
+              <is_clockwise>False</is_clockwise>
+            </trimmed_curve>
+            <polyline type="polyline">
+              <points_list>
+                <cartesian_point type="cartesian_point">
+                  <x>5.732823400914917</x>
+                  <y>-42.052119684481895</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>8.95865650527071</x>
+                  <y>-38.16952208052817</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>14.748182454169978</x>
+                  <y>-30.98102174365046</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>18.774815032193345</x>
+                  <y>-25.80397155258983</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>22.500154950048753</x>
+                  <y>-20.832645464864896</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>25.905257939045796</x>
+                  <y>-16.081285778046123</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>28.978726919346485</x>
+                  <y>-11.55847936596686</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>30.840935143335926</x>
+                  <y>-8.671718668363269</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>34.113968815525126</x>
+                  <y>-3.20888016583487</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>35.52449333554037</x>
+                  <y>-0.6337173192362684</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>37.359381662059334</x>
+                  <y>3.033955791866262</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>38.86075109112808</x>
+                  <y>6.470294810445424</y>
+                  <z>0.0</z>
+                </cartesian_point>
+              </points_list>
+            </polyline>
+            <trimmed_curve type="trimmed_curve">
+              <position type="axis2_placement_3d">
+                <location type="cartesian_point">
+                  <x>37.000947896676806</x>
+                  <y>7.216203173625374</y>
+                  <z>0.0</z>
+                </location>
+                <axis type="direction">
+                  <x>0.0</x>
+                  <y>0.0</y>
+                  <z>1.0</z>
+                </axis>
+                <ref_direction type="direction">
+                  <x>1.0</x>
+                  <y>0.0</y>
+                  <z>0.0</z>
+                </ref_direction>
+              </position>
+              <radius>2.0039298769035567</radius>
+              <trim_1>-0.38142710533298885</trim_1>
+              <trim_2>1.5697370538439186</trim_2>
+              <is_clockwise>False</is_clockwise>
+            </trimmed_curve>
+            <polyline type="polyline">
+              <points_list>
+                <cartesian_point type="cartesian_point">
+                  <x>37.00307022360555</x>
+                  <y>9.219771878924831</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-35.80230381190847</x>
+                  <y>9.219771878924831</y>
+                  <z>0.0</z>
+                </cartesian_point>
+              </points_list>
+            </polyline>
+            <trimmed_curve type="trimmed_curve">
+              <position type="axis2_placement_3d">
+                <location type="cartesian_point">
+                  <x>-35.76010944650298</x>
+                  <y>6.171124808576053</y>
+                  <z>0.0</z>
+                </location>
+                <axis type="direction">
+                  <x>0.0</x>
+                  <y>0.0</y>
+                  <z>1.0</z>
+                </axis>
+                <ref_direction type="direction">
+                  <x>1.0</x>
+                  <y>0.0</y>
+                  <z>0.0</z>
+                </ref_direction>
+              </position>
+              <radius>3.0558514988283743</radius>
+              <trim_1>1.584635800684126</trim_1>
+              <trim_2>-2.6539452404893993</trim_2>
+              <is_clockwise>False</is_clockwise>
+            </trimmed_curve>
+          </curve_data>
+        </closed_profile_shape>
+      </feature_boundary>
+    </closed_pocket>
+    <closed_pocket type="closed_pocket">
+      <its_id>FEATURE_005</its_id>
+      <feature_placement type="axis2_placement_3d">
+        <location type="cartesian_point">
+          <x>39.561580960745026</x>
+          <y>52.24428263468501</y>
+          <z>-0.5</z>
+        </location>
+        <axis type="direction">
+          <x>0</x>
+          <y>0</y>
+          <z>1</z>
+        </axis>
+        <ref_direction type="direction">
+          <x>1</x>
+          <y>0</y>
+          <z>0</z>
+        </ref_direction>
+      </feature_placement>
+      <depth>20.0</depth>
+      <bottom_condition type="through_pocket_bottom_condition"/>
+      <its_boss>None</its_boss>
+      <slope>None</slope>
+      <planar_radius>None</planar_radius>
+      <orthogonal_radius>None</orthogonal_radius>
+      <feature_boundary type="general_closed_profile">
+        <placement type="axis2_placement_3d">
+          <location type="cartesian_point">
+            <x>39.561580960745026</x>
+            <y>52.24428263468501</y>
+            <z>-0.5</z>
+          </location>
+          <axis type="direction">
+            <x>0</x>
+            <y>0</y>
+            <z>1</z>
+          </axis>
+          <ref_direction type="direction">
+            <x>1</x>
+            <y>0</y>
+            <z>0</z>
+          </ref_direction>
+        </placement>
+        <closed_profile_shape type="bounded_curve">
+          <curve_data>
+            <polyline type="polyline">
+              <points_list>
+                <cartesian_point type="cartesian_point">
+                  <x>-10.43453164357851</x>
+                  <y>-7.63486124773668</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-1.794185836276604</x>
+                  <y>-0.9595575314625648</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>7.661369903569202</x>
+                  <y>5.992073021578193</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>18.02556785117295</x>
+                  <y>13.293310165094312</y>
+                  <z>0.0</z>
+                </cartesian_point>
+              </points_list>
+            </polyline>
+            <trimmed_curve type="trimmed_curve">
+              <position type="axis2_placement_3d">
+                <location type="cartesian_point">
+                  <x>16.66744868350336</x>
+                  <y>14.761563264632768</y>
+                  <z>0.0</z>
+                </location>
+                <axis type="direction">
+                  <x>0.0</x>
+                  <y>0.0</y>
+                  <z>1.0</z>
+                </axis>
+                <ref_direction type="direction">
+                  <x>1.0</x>
+                  <y>0.0</y>
+                  <z>0.0</z>
+                </ref_direction>
+              </position>
+              <radius>1.999932727768618</radius>
+              <trim_1>-0.8243449934940618</trim_1>
+              <trim_2>1.1149480125680786</trim_2>
+              <is_clockwise>False</is_clockwise>
+            </trimmed_curve>
+            <polyline type="polyline">
+              <points_list>
+                <cartesian_point type="cartesian_point">
+                  <x>17.547575900031752</x>
+                  <y>16.556684129821207</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>13.559026742853113</x>
+                  <y>18.093048951677744</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>9.44147719586121</x>
+                  <y>19.961584828903142</y>
+                  <z>0.0</z>
+                </cartesian_point>
+              </points_list>
+            </polyline>
+            <trimmed_curve type="trimmed_curve">
+              <position type="axis2_placement_3d">
+                <location type="cartesian_point">
+                  <x>8.86397782215855</x>
+                  <y>18.05141706245798</y>
+                  <z>0.0</z>
+                </location>
+                <axis type="direction">
+                  <x>0.0</x>
+                  <y>0.0</y>
+                  <z>1.0</z>
+                </axis>
+                <ref_direction type="direction">
+                  <x>1.0</x>
+                  <y>0.0</y>
+                  <z>0.0</z>
+                </ref_direction>
+              </position>
+              <radius>1.9956518841554345</radius>
+              <trim_1>1.2772040809067458</trim_1>
+              <trim_2>2.290167129068995</trim_2>
+              <is_clockwise>False</is_clockwise>
+            </trimmed_curve>
+            <polyline type="polyline">
+              <points_list>
+                <cartesian_point type="cartesian_point">
+                  <x>7.548567469205274</x>
+                  <y>19.55310366986481</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-11.554784563699528</x>
+                  <y>-2.904072846519142</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-19.559513773528728</x>
+                  <y>-12.537100068651348</y>
+                  <z>0.0</z>
+                </cartesian_point>
+              </points_list>
+            </polyline>
+            <trimmed_curve type="trimmed_curve">
+              <position type="axis2_placement_3d">
+                <location type="cartesian_point">
+                  <x>-18.78158016398284</x>
+                  <y>-13.165087424241987</y>
+                  <z>0.0</z>
+                </location>
+                <axis type="direction">
+                  <x>0.0</x>
+                  <y>0.0</y>
+                  <z>1.0</z>
+                </axis>
+                <ref_direction type="direction">
+                  <x>1.0</x>
+                  <y>0.0</y>
+                  <z>0.0</z>
+                </ref_direction>
+              </position>
+              <radius>0.9988764736505541</radius>
+              <trim_1>2.4624462376794782</trim_1>
+              <trim_2>-1.0331464724062769</trim_2>
+              <is_clockwise>False</is_clockwise>
+            </trimmed_curve>
+            <polyline type="polyline">
+              <points_list>
+                <cartesian_point type="cartesian_point">
+                  <x>-18.26992322606408</x>
+                  <y>-14.023227349239072</y>
+                  <z>0.0</z>
+                </cartesian_point>
+                <cartesian_point type="cartesian_point">
+                  <x>-10.43453164357851</x>
+                  <y>-7.63486124773668</y>
+                  <z>0.0</z>
+                </cartesian_point>
+              </points_list>
+            </polyline>
+          </curve_data>
+        </closed_profile_shape>
+      </feature_boundary>
+    </closed_pocket>
+  </features>
+</FEATURES>

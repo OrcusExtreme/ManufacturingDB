@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WorkModel>
+  <WorkID>W999</WorkID>
+  <ProjectCode>TestProject</ProjectCode>
+  <MaterialCode>AL6061</MaterialCode>
+  <PartCode>TestPart</PartCode>
+  <ProgramCode>NC_999</ProgramCode>
+  <MachineCode>M_TEST</MachineCode>
+  <MachineIpAddress>192.168.0.99</MachineIpAddress>
+  <StartTime>2026-08-24T12:00:00</StartTime>
+  <FinishTime>2026-08-24T12:05:00</FinishTime>
+  <CuttingSeconds>300.5</CuttingSeconds>
+  <MovingDistance>150.0</MovingDistance>
+  <CuttingMovingDistance>100.0</CuttingMovingDistance>
+  <IsFinish>true</IsFinish>
+  <IsError>false</IsError>
+  <Tools>
+    <ToolModel>
+      <Properties>
+        <anyType>
+          <Name>toolCode</Name>
+          <Value>T1</Value>
+        </anyType>
+        <anyType>
+          <Name>toolUsedCount</Name>
+          <Value>5</Value>
+        </anyType>
+      </Properties>
+    </ToolModel>
+  </Tools>
+  <ToolNumbers>
+    <int>1</int>
+  </ToolNumbers>
+</WorkModel>

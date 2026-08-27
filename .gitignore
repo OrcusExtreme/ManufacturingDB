@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Environment
+.env
+venv/
+env/
+ENV/
+.venv/
+
+# DB and files
+*.sqlite3
+*.db
+machining_data.db
+machining_raw_data/
+__data__/
+
+# IDEs
+.vscode/
+.idea/
+
+# macOS
+.DS_Store
