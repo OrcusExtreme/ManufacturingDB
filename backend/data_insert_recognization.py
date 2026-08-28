@@ -158,6 +158,25 @@ class MachiningDataHandler(FileSystemEventHandler):
                     self.process_log(file_path_norm, current_job_id)
         except Exception as e:
             print(f"[오류] 파일 처리 중 에러 발생 ({file_path}): {e}")
+            import shutil
+            from datetime import datetime
+            
+            try:
+                # DLQ: Move failed files to a 'failed_data' directory
+                base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                failed_dir = os.path.join(base_dir, 'failed_data')
+                if not os.path.exists(failed_dir):
+                    os.makedirs(failed_dir)
+                
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                original_filename = os.path.basename(file_path_norm)
+                failed_file_name = f"{timestamp}_{original_filename}"
+                failed_path = os.path.join(failed_dir, failed_file_name)
+                
+                shutil.move(file_path_norm, failed_path)
+                print(f"[DLQ] 실패한 파일을 격리 폴더로 이동했습니다: {failed_path}")
+            except Exception as move_error:
+                print(f"[오류] 실패한 파일 이동 중 에러 발생: {move_error}")
 
     def process_xml(self, file_path, job_id=None):
         parse_xml(file_path, job_id)

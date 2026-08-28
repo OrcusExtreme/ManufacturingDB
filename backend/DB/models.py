@@ -25,30 +25,6 @@ class Workplan(Base):
     part = relationship("Part", back_populates="workplans")
     workingsteps = relationship("Workingstep", back_populates="workplan", cascade="all, delete-orphan")
     jobs = relationship("Job", back_populates="workplan", cascade="all, delete-orphan")
-    features = relationship("MachiningFeature", back_populates="workplan", cascade="all, delete-orphan")
-
-
-class WorkingstepFeatureLink(Base):
-    __tablename__ = "workingstep_feature_link"
-    __table_args__ = {'comment': 'ISO14649 Workingstep-Feature N:M 매핑 테이블'}
-
-    step_id = Column(Integer, ForeignKey("workingstep.step_id", ondelete="CASCADE"), primary_key=True)
-    feature_id = Column(Integer, ForeignKey("machining_feature.feature_id", ondelete="CASCADE"), primary_key=True)
-
-
-class MachiningFeature(Base):
-    __tablename__ = "machining_feature"
-    __table_args__ = {'comment': 'ISO14649 Machining Feature (가공 형상)'}
-
-    feature_id = Column(Integer, primary_key=True, autoincrement=True)
-    workplan_id = Column(String(100), ForeignKey("workplan.workplan_id", ondelete="CASCADE"), nullable=False)
-    feature_its_id = Column(String(100), comment='XML its_id (예: FACING_1272343225936)')
-    feature_type = Column(String(50), comment='형상 종류 (예: Hole, PlanarFace)')
-    feature_name = Column(String(100), comment='형상 이름')
-
-    workplan = relationship("Workplan", back_populates="features")
-    workingsteps = relationship("Workingstep", secondary="workingstep_feature_link", back_populates="features")
-
 
 class Tool(Base):
     __tablename__ = "tool"
@@ -59,10 +35,6 @@ class Tool(Base):
     company_name = Column(String(50), comment='제조사명')
     tool_type = Column(String(50), comment='공구 종류')
     cutter_diameter = Column(Double, comment='직경 (숫자값)')
-    overall_length = Column(Double, comment='전장 (숫자값)')
-    cutting_edge_length = Column(Double, comment='인선길이 (숫자값)')
-    corner_radius = Column(Double, comment='코너 반경 (숫자값)')
-    hand_of_cut = Column(String(20), comment='절삭 방향 (예: right)')
     specification = Column(String(100), comment='규격')
     tool_teeth = Column(Integer, comment='날수')
     stock_count = Column(Integer, comment='재고 개수')
@@ -79,26 +51,13 @@ class Workingstep(Base):
     workplan_id = Column(String(100), ForeignKey("workplan.workplan_id", ondelete="CASCADE"), nullable=False)
     tool_id = Column(Integer, ForeignKey("tool.tool_id", ondelete="SET NULL"), comment='연결된 공구 ID')
     operation_type = Column(String(50), comment='가공방식 (MachiningOperation 병합)')
-    feed_rate = Column(Double, comment='이송속도 (Feed Rate)')
-    spindle_speed = Column(Double, comment='주축 회전수 (Spindle Speed)')
     
     step_order = Column(Integer, nullable=False, comment='공구 호출 순서 (Index)')
     tool_number = Column(Integer, nullable=False, comment='호출된 공구 번호 (예: 11, 15, 16, 17)')
     xml_tool_code = Column(String(50), comment='XML: toolCode / toolName')
-    
-    tool_company = Column(String(50), comment='스냅샷: 제조사명')
-    tool_type = Column(String(50), comment='스냅샷: 공구 종류')
-    tool_diameter = Column(Double, comment='스냅샷: 직경')
-    tool_overall_length = Column(Double, comment='스냅샷: 전장')
-    tool_cutting_edge_length = Column(Double, comment='스냅샷: 인선길이')
-    tool_corner_radius = Column(Double, comment='스냅샷: 코너 반경')
-    tool_hand_of_cut = Column(String(20), comment='스냅샷: 절삭 방향')
-    tool_spec = Column(String(100), comment='스냅샷: 규격')
-    tool_teeth = Column(Integer, comment='스냅샷: 날수')
 
     workplan = relationship("Workplan", back_populates="workingsteps")
     tool = relationship("Tool", back_populates="workingsteps")
-    features = relationship("MachiningFeature", secondary="workingstep_feature_link", back_populates="workingsteps")
 
 
 class Job(Base):

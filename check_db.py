@@ -1,9 +1,8 @@
 import os
 import glob
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 import pandas as pd
-
-engine = create_engine('mysql+pymysql://root:0000@127.0.0.1:3306/lab_db')
+from backend.DB.database import engine
 
 raw_dir = 'machining_raw_data'
 folders = [f for f in os.listdir(raw_dir) if os.path.isdir(os.path.join(raw_dir, f))]

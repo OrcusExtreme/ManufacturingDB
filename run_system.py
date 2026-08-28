@@ -54,15 +54,32 @@ def start_services():
     processes.append(p4)
 
 def stop_services():
-    print("\n🛑 모든 시스템(파서 및 대시보드) 프로세스 트리를 강제 종료합니다...")
+    print("\n[알림] 모든 시스템 구성 요소 및 백그라운드 프로세스 트리를 종료합니다...")
+    try:
+        import psutil
+    except ImportError:
+        print("[경고] psutil 모듈이 설치되어 있지 않아 서브프로세스 기본 종료 방식을 사용합니다.")
+        for p in processes:
+            p.terminate()
+        return
+
     for p in processes:
         try:
-            # Windows OS의 taskkill 명령을 이용해 자식 프로세스까지 완전 종료 (/F: 강제, /T: 트리)
-            subprocess.call(['taskkill', '/F', '/T', '/PID', str(p.pid)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except Exception as e:
-            print(f"프로세스 트리 종료 중 오류 (PID {p.pid}): {e}")
+            parent = psutil.Process(p.pid)
+            children = parent.children(recursive=True)
+            for child in children:
+                child.terminate()
+            parent.terminate()
             
-    print("✅ 모든 서비스가 안전하게 종료되었습니다.")
+            gone, still_alive = psutil.wait_procs(children + [parent], timeout=3)
+            for p_alive in still_alive:
+                p_alive.kill()
+        except psutil.NoSuchProcess:
+            pass
+        except Exception as e:
+            print(f"[경고] 프로세스 트리 종료 중 오류 (PID {p.pid}): {e}")
+            
+    print("[완료] 모든 서비스가 안전하게 종료되었습니다.")
 
 if __name__ == "__main__":
     print("="*60)

@@ -95,6 +95,32 @@ def load_data(query, params=None):
         return pd.read_sql(text(query), con=engine, params=params)
     return pd.read_sql(text(query), con=engine)
 
+@st.dialog("NC 데이터 원본 조회", width="large")
+def show_nc_dialog(wp_id):
+    query = f"SELECT nc_file_content FROM workplan_file_archive WHERE workplan_id = '{wp_id}'"
+    df = load_data(query)
+    if not df.empty and pd.notnull(df.iloc[0]['nc_file_content']):
+        try:
+            content = df.iloc[0]['nc_file_content'].decode('utf-8', errors='replace')
+        except AttributeError:
+            content = str(df.iloc[0]['nc_file_content'])
+        st.code(content, language='text')
+    else:
+        st.info("해당 Workplan의 NC 원본 데이터가 아카이브에 없습니다.")
+
+@st.dialog("XML 메타데이터 조회", width="large")
+def show_xml_dialog(job_id):
+    query = f"SELECT xml_file_content FROM job_file_archive WHERE job_id = {job_id}"
+    df = load_data(query)
+    if not df.empty and pd.notnull(df.iloc[0]['xml_file_content']):
+        try:
+            content = df.iloc[0]['xml_file_content'].decode('utf-8', errors='replace')
+        except AttributeError:
+            content = str(df.iloc[0]['xml_file_content'])
+        st.code(content, language='xml')
+    else:
+        st.info("해당 Job의 XML 원본 데이터가 아카이브에 없습니다.")
+
 # Init session states for filters so they persist across menu switches
 if 'selected_projs' not in st.session_state: st.session_state.selected_projs = []
 if 'selected_parts' not in st.session_state: st.session_state.selected_parts = []
@@ -212,14 +238,10 @@ if nav_menu == "계층형 마스터 데이터":
                         SELECT ws.step_order AS '순서', ws.operation_type AS '작업(Op)', 
                                GROUP_CONCAT(f.feature_type SEPARATOR ', ') AS '형상(Feature)', 
                                GROUP_CONCAT(f.feature_name SEPARATOR ', ') AS '형상명',
-                               ws.feed_rate AS '이송속도(Feed)',
-                               ws.spindle_speed AS '주축회전수(RPM)',
                                ws.xml_tool_code AS '사용 공구', 
-                               ws.tool_type AS '공구종류', 
-                               ws.tool_diameter AS '직경',
-                               ws.tool_overall_length AS '전장',
-                               ws.tool_cutting_edge_length AS '인선길이',
-                               ws.tool_teeth AS '날수'
+                               t.tool_type AS '공구종류', 
+                               t.cutter_diameter AS '직경',
+                               t.tool_teeth AS '날수'
                         FROM workingstep ws
                         LEFT JOIN workingstep_feature_link wfl ON ws.step_id = wfl.step_id
                         LEFT JOIN machining_feature f ON wfl.feature_id = f.feature_id
@@ -529,6 +551,15 @@ elif nav_menu == "가공 이력 & 센서 분석":
                     st.write(f"**가공 시간:** {f'{cs:.1f} 초' if pd.notnull(cs) else '데이터 없음'}")
                     md = job_info['moving_distance']
                     st.write(f"**이동 거리:** {f'{md:.1f} mm' if pd.notnull(md) else '데이터 없음'}")
+                    
+                    st.divider()
+                    b1, b2 = st.columns(2)
+                    with b1:
+                        if st.button("XML 원본 (팝업)", use_container_width=True):
+                            show_xml_dialog(target_job_id)
+                    with b2:
+                        if st.button("NC 코드 (팝업)", use_container_width=True):
+                            show_nc_dialog(job_info['workplan_id'])
 
                 # 2. EXT Log Metrics Card
                 with st.container(border=True):
@@ -583,6 +614,9 @@ elif nav_menu == "가공 이력 & 센서 분석":
                         env_row = env_df.iloc[0]
                         st.write(f"**작업자:** {env_row['worker_name'] if pd.notnull(env_row['worker_name']) else '-'}")
                         st.write(f"**온도/습도:** {env_row['temperature']} °C / {env_row['humidity']} %")
+                        st.write(f"**요일:** {env_row['day_of_week'] if 'day_of_week' in env_row and pd.notnull(env_row['day_of_week']) else '-'}")
+                        st.write(f"**칩 형태:** {env_row['chip_shape'] if 'chip_shape' in env_row and pd.notnull(env_row['chip_shape']) else '-'}")
+                        st.write(f"**이상 소음:** {env_row['abnormal_noise'] if 'abnormal_noise' in env_row and pd.notnull(env_row['abnormal_noise']) else '-'}")
                         st.write(f"**수기 메모:** {env_row['free_memo'] if pd.notnull(env_row['free_memo']) else '-'}")
                     else:
                         st.info("환경 및 메모 데이터 없음")
