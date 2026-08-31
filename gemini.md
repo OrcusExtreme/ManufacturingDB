@@ -103,247 +103,701 @@ PYTHONPATH=backend
 
 ---
 
-## 3. 데이터베이스 명세 (Database Architecture)
+## 3. 데이터베이스 명세 (Database Architecture & Detailed Schema)
 
-### 3.1 DB 스키마 트리 구조 (ER Diagram)
-아래는 `models.py` 기반 데이터베이스의 관계형 구조를 나타낸 ER 다이어그램(트리 구조)입니다.
+공작기계지능화실험실의 제조 DB 시스템은 **ISO 14649(STEP-NC) 국제 표준**의 철학을 계승하여 정적 공정 계획(Static Process Plan)과 동적 가공 이력(Dynamic Execution History)을 분리하고, 초고주파 센서 데이터와 3D CAD/NC 원본 파일까지 안전하게 영구 보존할 수 있도록 **하이브리드 스토리지(RDBMS + File Vault + Apache Parquet + LONGBLOB 미러링)** 구조로 설계되었습니다.
+
+---
+
+### 3.1 DB 설계 철학 및 표준 데이터 모델링 원칙 (Design Philosophy)
+
+```text
+[ISO 14649 표준 계층 모델]
+Part (부품 마스터) 
+  └─► Workplan (가공 계획: NC 코드 단위)
+        ├─► Workingstep (공구 호출 순서 및 단위 공정) ◄── Tool (공구 마스터)
+        └─► Job (실제 가공 1회 실행 이력)
+              ├─► MachineLog (1Hz CNC 부하/RPM 요약 통계)
+              ├─► SurfaceRoughness (다지점 표면조도 및 평가곡선 Parquet)
+              ├─► Inspection (치수/형상 공차 및 PASS/FAIL 합부 판정)
+              ├─► EnvMemo (온습도, 작업자, 이상소음, 칩 형태)
+              └─► Archive Tables (XML, NC, CAD, Parquet 원본 바이너리 & Vault)
+```
+
+1. **정적 계획(Static Planning)과 동적 실행(Dynamic Execution)의 엄격한 분리**:
+   - **정적 계획 그룹 (`Part`, `Workplan`, `Workingstep`, `Tool`)**: CAM 및 공정 설계 단계에서 생성되는 불변의 기준 정보입니다. 부품 도면, NC 프로그램 파일, 공구 세팅 번호, 공구 호출 순서 등이 이에 해당합니다.
+   - **동적 실행 그룹 (`Job`, `MachineLog`, `SurfaceRoughness`, `Inspection`, `EnvMemo`)**: 동일한 Workplan(동일 NC 코드)을 사용하더라도 공작기계에서 실제로 가공할 때마다 달라지는 1회성 가공 일시, 센서 시계열, 가공 부하, 표면 조도, 작업자 환경, 합부 판정 등의 결과 정보입니다.
+   - 이를 통해 *“하나의 부품(Part)에 여러 가공 계획(Workplan)이 존재할 수 있고, 하나의 계획을 바탕으로 수십 번의 반복 가공 실험(Job)을 수행”*하는 다대일(1:N) 관계를 정규화하여 중복 데이터를 원천 차단합니다.
+
+2. **하이브리드 4계층 스토리지 아키텍처 (Hybrid Storage Architecture)**:
+   - **메타데이터 & 인덱스 계층 (MySQL RDBMS)**: B-Tree 인덱스 기반의 초고속 조건 필터링, 정렬, 다차원 조인(Join) 및 통계 쿼리를 지원합니다.
+   - **초고주파 시계열 & 형상 계층 (Apache Parquet on Disk)**: 100kHz+ 고주파 NI TDMS 진동 센서 데이터와 마이크로미터(μm) 단위의 표면조도 단면 평가곡선을 컬럼형 Snappy 압축 형식으로 변환하여 저장합니다. 이를 통해 수백 MB의 센서 데이터를 수 MB로 경량화하고 Streamlit 웹 UI에서 수십 밀리초(ms) 만에 Plotly 차트로 렌더링합니다.
+   - **안전 아카이빙 계층 (File Vault on Disk)**: 장비에서 생성된 XML, NC, CAD(STEP/STL), 로그 원본 파일을 SHA-256 해시 기반의 불변(Immutable) 디렉터리에 안전 보관합니다.
+   - **재난 복구 미러링 계층 (LONGBLOB in MySQL)**: 파일 시스템이 완전히 손상되거나 외장 디스크가 유실되더라도, MySQL 데이터베이스 덤프(`mysqldump`) 파일 하나만 있으면 `recovery_engine.py`를 통해 모든 원본 파일과 디렉터리 트리를 100% 원상 복구할 수 있도록 원본 바이너리를 이중 저장합니다.
+
+3. **데이터 무결성 및 전대수적 삭제 전파 (Cascading Integrity Policy)**:
+   - 부모 엔티티가 삭제되면 연관된 모든 하위 이력과 아카이브 데이터가 고아(Orphan)로 남지 않도록 외래키(Foreign Key)에 `ON DELETE CASCADE`를 엄격히 적용합니다.
+   - 단, 공구 마스터(`Tool`) 테이블은 실물 공구의 재고 관리를 위해 `ON DELETE SET NULL`을 적용하여, 공구 마스터가 삭제되더라도 과거 가공 이력(`Workingstep`)의 공구 호출 번호 자체는 보존되도록 설계되었습니다.
+
+---
+
+### 3.2 통합 엔티티 관계도 (Comprehensive ERD)
 
 ```mermaid
 erDiagram
-    Part ||--o{ Workplan : "1:N (has)"
-    Part ||--o{ CadFileArchive : "1:N (has CAD)"
+    Part ||--o{ Workplan : "1:N (has plans)"
+    Part ||--o{ CadFileArchive : "1:N (has 3D CADs)"
     Workplan ||--o{ Workingstep : "1:N (has steps)"
-    Workplan ||--o{ Job : "1:N (executed as)"
-    Workplan ||--o| WorkplanFileArchive : "1:1 (archives)"
-    Tool ||--o{ Workingstep : "1:N (used in)"
-    Job ||--o{ MachineLog : "1:N (generates)"
+    Workplan ||--o{ Job : "1:N (executed as jobs)"
+    Workplan ||--o| WorkplanFileArchive : "1:1 (archives NC)"
+    Tool ||--o{ Workingstep : "1:N (referenced by)"
+    Job ||--o{ MachineLog : "1:N (has logs)"
     Job ||--o| Inspection : "1:1 (inspected)"
-    Job ||--o| EnvMemo : "1:1 (recorded in)"
-    Job ||--o{ SurfaceRoughness : "1:N (measured)"
-    Job ||--o| JobFileArchive : "1:1 (archives)"
-    SurfaceRoughness ||--o| SurfaceRoughnessArchive : "1:1 (archives)"
-    MachineLog ||--o| LogFileArchive : "1:1 (archives)"
+    Job ||--o| EnvMemo : "1:1 (environment record)"
+    Job ||--o{ SurfaceRoughness : "1:N (measures roughness)"
+    Job ||--o| JobFileArchive : "1:1 (archives XML/TDMS)"
+    SurfaceRoughness ||--o| SurfaceRoughnessArchive : "1:1 (archives profiles)"
+    MachineLog ||--o| LogFileArchive : "1:1 (archives raw logs)"
 
     Part {
-        String part_code PK "부품 코드"
-        String project_code "XML: ProjectCode"
-        String material_code "XML: MaterialCode"
+        varchar(100) part_code PK "부품 식별 코드 (XML: PartCode)"
+        varchar(50) project_code "연구 프로젝트 코드"
+        varchar(50) material_code "가공 소재 재질 코드"
     }
     Workplan {
-        String workplan_id PK "고유 식별자"
-        String part_code FK "부품 코드"
-        String program_code "XML: ProgramCode"
-        String nc_file_path "NC 파일 경로"
+        varchar(100) workplan_id PK "계획 고유 식별자 (Part+Program+Hash)"
+        varchar(100) part_code FK "소속 부품 코드"
+        varchar(50) program_code "NC 프로그램 명칭/코드"
+        varchar(255) nc_file_path "연결된 NC 파일 경로"
     }
     Tool {
-        Integer tool_id PK "고유 식별자"
-        String tool_code "공구 세트 번호"
-        String company_name "제조사명"
-        String tool_type "공구 종류"
-        Double cutter_diameter "직경"
-        String specification "규격"
-        Integer tool_teeth "날수"
-        Integer stock_count "재고 개수"
-        String memo "비고"
+        int tool_id PK "공구 고유 번호 (Auto-Inc)"
+        varchar(50) tool_code "공구 세트 관리 번호 (T4, T29 등)"
+        varchar(50) company_name "공구 제조사명"
+        varchar(50) tool_type "공구 분류 (Endmill, Drill 등)"
+        double cutter_diameter "공구 직경 (mm)"
+        varchar(100) specification "상세 규격 명칭"
+        int tool_teeth "공구 날수 (Flutes)"
+        int stock_count "현재 보유 재고 수량"
+        varchar(255) memo "공구 특이사항 비고"
     }
     Workingstep {
-        Integer step_id PK
-        String workplan_id FK
-        Integer tool_id FK
-        String operation_type "가공방식"
-        Integer step_order "공구 호출 순서"
-        Integer tool_number "호출된 공구 번호"
-        String xml_tool_code "XML: toolCode"
+        int step_id PK "단위 공정 ID (Auto-Inc)"
+        varchar(100) workplan_id FK "소속 Workplan ID"
+        int tool_id FK "매핑된 공구 마스터 ID"
+        varchar(50) operation_type "가공 방식 (황삭/정삭/페이스밀 등)"
+        int step_order "공구 호출 실행 순번 (1, 2, 3...)"
+        int tool_number "NC 매거진 호출 번호 (11, 15...)"
+        varchar(50) xml_tool_code "XML 기록 공구 명칭"
     }
     Job {
-        Integer job_id PK
-        String source_folder "기존 폴더명"
-        String workplan_id FK
-        String work_id "XML: WorkID"
-        String machine_code "XML: MachineCode"
-        String machine_ip "XML: MachineIpAddress"
-        DateTime start_time "XML: StartTime"
-        DateTime end_time "XML: FinishTime"
-        Double cutting_seconds "XML: CuttingSeconds"
-        Double moving_distance "XML: MovingDistance"
-        Double cutting_moving_distance "XML: CuttingMovingDistance"
-        Boolean is_finish "XML: IsFinish"
-        Boolean is_error "XML: IsError"
-        String research_project "연구 프로젝트 명"
-        String machining_type "가공 종류"
-        String custom_part_name "사용자 지정 Part 명"
-        String tdms_file_path "매핑된 TDMS 파일"
-        String log_file_path "매핑된 Log 파일"
-        String tdms_parquet_path "TDMS Time-domain Parquet"
-        String tdms_fft_parquet_path "TDMS FFT Parquet"
-        JSON tool_conditions "런타임 공구 상태"
+        int job_id PK "가공 이력 고유 ID (Auto-Inc)"
+        varchar(255) source_folder UK "물리 폴더 식별자 (Project/Part/JobID)"
+        varchar(100) workplan_id FK "실행 기반 Workplan ID"
+        varchar(50) work_id "XML 기록 WorkID"
+        varchar(50) machine_code "가공 공작기계 식별 코드"
+        varchar(20) machine_ip "공작기계 네트워크 IP"
+        datetime start_time "가공 시작 일시"
+        datetime end_time "가공 완료 일시"
+        double cutting_seconds "실제 절삭 가공 시간 (초)"
+        double moving_distance "공구 총 이동 거리 (mm)"
+        double cutting_moving_distance "실제 절삭 이동 거리 (mm)"
+        boolean is_finish "가공 정상 완료 여부"
+        boolean is_error "가공 중 비상정지/에러 여부"
+        varchar(100) research_project "연구 프로젝트명 (사용자 입력)"
+        varchar(100) machining_type "가공 종류 (황삭, 정삭 등)"
+        varchar(100) custom_part_name "사용자 정의 부품명"
+        varchar(500) tdms_file_path "매핑된 원본 TDMS 경로"
+        varchar(500) log_file_path "매핑된 CNC 로그 경로"
+        varchar(500) tdms_parquet_path "시간 도메인 Parquet 경로"
+        varchar(500) tdms_fft_parquet_path "주파수 FFT Parquet 경로"
+        json tool_conditions "런타임 공구 마모도/오프셋 JSON"
     }
     MachineLog {
-        Integer log_id PK
-        Integer job_id FK
-        Float max_spindle_load "최대 스핀들 부하"
-        Float max_spindle_rpm "최대 스핀들 RPM"
-        Float max_feed_rate "최대 이송 속도"
-        Float avg_spindle_rpm "평균 스핀들 RPM"
-        Integer alarm_count "알람 발생 횟수"
-        Text critical_alarm_msg "주요 알람 메시지"
+        int log_id PK "로그 요약 ID (Auto-Inc)"
+        int job_id FK "소속 Job ID"
+        float max_spindle_load "최대 스핀들 부하율 (%)"
+        float max_spindle_rpm "최대 스핀들 회전수 (RPM)"
+        float max_feed_rate "최대 이송 속도 (mm/min)"
+        float avg_spindle_rpm "가공 중 평균 스핀들 RPM"
+        int alarm_count "발생한 CNC 알람 총 횟수"
+        text critical_alarm_msg "주요 위험 알람 메시지 목록"
     }
     SurfaceRoughness {
-        Integer roughness_id PK
-        Integer job_id FK
-        String measure_name "측정 항목 이름"
-        Float ra "Ra"
-        Float rq "Rq"
-        Float rz "Rz"
-        String profile_parquet_path "평가곡선 Parquet"
+        int roughness_id PK "조도 측정 데이터 ID (Auto-Inc)"
+        int job_id FK "소속 Job ID"
+        varchar(100) measure_name "측정 부위/채널 명칭"
+        float ra "산술평균거칠기 Ra (μm)"
+        float rq "제곱평균제곱근거칠기 Rq (μm)"
+        float rz "십점평균거칠기 Rz (μm)"
+        varchar(500) profile_parquet_path "2D 단면 형상 Parquet 경로"
     }
     Inspection {
-        Integer inspection_id PK
-        Integer job_id FK
-        String dimension_tolerance "치수 및 공차"
-        Float surface_roughness_ra "표면조도 Ra"
-        Float surface_roughness_rz "표면조도 Rz"
-        String shape_accuracy "형상정밀도"
-        String pass_fail "합불 판정"
+        int inspection_id PK "검사 ID (Auto-Inc)"
+        int job_id FK,UK "소속 Job ID (1:1)"
+        varchar(100) dimension_tolerance "치수 및 기하공차 측정치"
+        float surface_roughness_ra "종합 대표 표면조도 Ra (μm)"
+        float surface_roughness_rz "종합 대표 표면조도 Rz (μm)"
+        varchar(100) shape_accuracy "형상 정밀도 측정치"
+        varchar(10)(10) pass_fail "품질 합부 판정 (PASS / FAIL)"
     }
     EnvMemo {
-        Integer env_id PK
-        Integer job_id FK
-        String worker_name "작업자"
-        Float temperature "온도"
-        Float humidity "습도"
-        String day_of_week "요일"
-        String chip_shape "칩 형태"
-        String abnormal_noise "이상 소음"
-        Text free_memo "자유 메모"
+        int env_id PK "환경 기록 ID (Auto-Inc)"
+        int job_id FK,UK "소속 Job ID (1:1)"
+        varchar(50) worker_name "가공 담당 작업자 성명"
+        float temperature "가공실 온도 (℃)"
+        float humidity "가공실 습도 (%)"
+        varchar(10) day_of_week "실험 수행 요일"
+        varchar(100) chip_shape "절삭 칩 배출 형태"
+        varchar(100) abnormal_noise "이상 진동 및 채터 소음 유무"
+        text free_memo "작업자 수기 자유 메모"
     }
     WorkplanFileArchive {
-        String workplan_id PK,FK
-        String nc_file_path "NC Vault 경로"
-        LargeBinary nc_file_content "NC 원본 바이너리"
+        varchar(100) workplan_id PK,FK "소속 Workplan ID"
+        varchar(1000) nc_file_path "NC 원본 Vault 저장 경로"
+        longblob nc_file_content "NC 파일 바이너리 (최대 4GB)"
     }
     JobFileArchive {
-        Integer job_id PK,FK
-        String xml_file_path "XML Vault 경로"
-        LargeBinary xml_file_content "XML 원본 바이너리"
-        String tdms_parquet_file_path "TDMS Time-domain Vault"
-        String tdms_fft_parquet_file_path "TDMS FFT Vault"
+        int job_id PK,FK "소속 Job ID"
+        varchar(1000) xml_file_path "XML 원본 Vault 저장 경로"
+        longblob xml_file_content "XML 파일 바이너리 (최대 4GB)"
+        varchar(1000) tdms_parquet_file_path "TDMS 시간도메인 Parquet Vault 경로"
+        varchar(1000) tdms_fft_parquet_file_path "TDMS FFT Parquet Vault 경로"
     }
     CadFileArchive {
-        Integer cad_id PK
-        String part_code FK
-        String file_name "파일 원본명"
-        String file_type "파일 확장자"
-        String file_path "Vault 경로"
-        LargeBinary file_content "CAD 원본 바이너리"
+        int cad_id PK "CAD 아카이브 ID (Auto-Inc)"
+        varchar(100) part_code FK "소속 부품 코드"
+        varchar(255) file_name "원본 CAD 파일명"
+        varchar(20) file_type "확장자 (step, stp, stl)"
+        varchar(1000) file_path "CAD Vault 저장 경로"
+        longblob file_content "CAD 원본 바이너리 (15MB 제한)"
     }
     SurfaceRoughnessArchive {
-        Integer roughness_id PK,FK
-        String profile_parquet_file_path "평가곡선 Vault"
-        String stat_csv_file_path "통계 CSV Vault"
-        String curve_csv_file_path "평가곡선 CSV Vault"
+        int roughness_id PK,FK "소속 조도 측정 ID"
+        varchar(1000) profile_parquet_file_path "평가곡선 Parquet Vault 경로"
+        varchar(1000) stat_csv_file_path "조도 통계 CSV Vault 경로"
+        varchar(1000) curve_csv_file_path "원시 평가곡선 CSV Vault 경로"
     }
     LogFileArchive {
-        Integer log_id PK,FK
-        String log_file_path "원시 로그 Vault"
+        int log_id PK,FK "소속 로그 ID"
+        varchar(1000) log_file_path "원시 텍스트 로그/CSV Vault 경로"
     }
 ```
 
-### 3.2 DBMS 및 커넥션 풀링
-- DBMS: MySQL (`PyMySQL` 드라이버 사용)
-- ORM: `SQLAlchemy` declarative_base 활용
-- 커넥션 풀링: `pool_recycle=3600` 적용 (MySQL wait_timeout 이슈 방지)
+---
 
-### 3.2 핵심 ORM 모델 명세 (`backend/DB/models.py`)
+### 3.3 도메인별 테이블 상세 명세 (Detailed Table Specifications)
 
-#### 1. Part 테이블 (가공 대상 부품 마스터)
+#### 3.3.1 [도메인 1] 마스터 및 정적 공정 계획 그룹 (Master & Static Process Plan)
+
+##### 1. `part` 테이블 (가공 대상 부품 마스터)
+가공 대상 제품/소재의 상위 마스터 엔티티입니다. 모든 공정 계획(`Workplan`)과 도면(`CadFileArchive`)의 최상위 부모입니다.
+
+| 컬럼명 | 데이터 타입 | 제약 조건 | 기본값 | 설명 및 데이터 소스 |
+| :--- | :--- | :--- | :--- | :--- |
+| **`part_code`** | `VARCHAR(100)` | **PK, Not Null** | - | 부품 고유 식별 코드 (XML: `<PartCode>` 또는 폴더명 파싱) |
+| **`project_code`** | `VARCHAR(50)` | Nullable | NULL | 상위 프로젝트 식별 코드 (XML: `<ProjectCode>`) |
+| **`material_code`** | `VARCHAR(50)` | Nullable | NULL | 가공 소재 재질명 (XML: `<MaterialCode>`, 예: AL6061, SM45C) |
+
+* **관계 정의**:
+  - `workplans`: `1:N` (`Workplan`과 연동, `cascade="all, delete-orphan"`)
+  - `cad_files`: `1:N` (`CadFileArchive`와 연동, `cascade="all, delete-orphan"`)
+
+---
+
+##### 2. `workplan` 테이블 (ISO 14649 정적 가공 계획)
+특정 부품을 가공하기 위해 작성된 단일 NC 프로그램(G코드) 단위의 계획 정보입니다.
+
+| 컬럼명 | 데이터 타입 | 제약 조건 | 기본값 | 설명 및 데이터 소스 |
+| :--- | :--- | :--- | :--- | :--- |
+| **`workplan_id`** | `VARCHAR(100)` | **PK, Not Null** | - | 계획 고유 식별자 (`{part_code}_{program_code}_{NC_MD5_Hash}`) |
+| **`part_code`** | `VARCHAR(100)` | **FK, Not Null** | - | 소속 부품 코드 (`part.part_code` 참조, `ON DELETE CASCADE`) |
+| **`program_code`** | `VARCHAR(50)` | Nullable | NULL | NC 프로그램 이름/번호 (XML: `<ProgramCode>` 또는 TDMS 메타데이터) |
+| **`nc_file_path`** | `VARCHAR(255)` | Nullable | NULL | 물리 저장소의 NC 코드 파일 상대/절대 경로 |
+
+* **관계 정의**:
+  - `part`: `N:1` (`Part` 역참조)
+  - `workingsteps`: `1:N` (`Workingstep`과 연동, `cascade="all, delete-orphan"`)
+  - `jobs`: `1:N` (`Job`과 연동, `cascade="all, delete-orphan"`)
+  - `archive`: `1:1` (`WorkplanFileArchive`와 연동, `cascade="all, delete-orphan"`)
+
+---
+
+##### 3. `tool` 테이블 (공구 마스터 라이브러리)
+실험실에서 보유 및 관리하는 절삭 공구의 물리적/기하학적 제원 마스터 테이블입니다. (Excel 업로드 연동)
+
+| 컬럼명 | 데이터 타입 | 제약 조건 | 기본값 | 설명 및 데이터 소스 |
+| :--- | :--- | :--- | :--- | :--- |
+| **`tool_id`** | `INT` | **PK, Auto-Inc** | - | 공구 내부 일련번호 |
+| **`tool_code`** | `VARCHAR(50)` | Nullable | NULL | 공구 세트/포켓 관리 번호 (예: `T04`, `T29`, `EM_D10`) |
+| **`company_name`** | `VARCHAR(50)` | Nullable | NULL | 공구 제조사명 (예: 와이지원, 샌드빅, 코오로이) |
+| **`tool_type`** | `VARCHAR(50)` | Nullable | NULL | 공구 종류 (예: Flat Endmill, Ball Endmill, Drill, Face Mill) |
+| **`cutter_diameter`**| `DOUBLE` | Nullable | NULL | 공구 유효 절삭 직경 (단위: mm) |
+| **`specification`** | `VARCHAR(100)` | Nullable | NULL | 공구 정규 규격 명칭 (예: `4F-10.0D-25L-75L`) |
+| **`tool_teeth`** | `INT` | Nullable | NULL | 공구 날수 (Flute 수, 예: 2날, 4날) |
+| **`stock_count`** | `INT` | Nullable | 0 | 현재 보유 재고 수량 |
+| **`memo`** | `VARCHAR(255)` | Nullable | NULL | 공구 비고 및 코팅/특이사항 메모 |
+
+* **관계 정의**:
+  - `workingsteps`: `1:N` (`Workingstep` 역참조, `ON DELETE SET NULL`)
+
+---
+
+##### 4. `workingstep` 테이블 (단위 공정 및 공구 호출 순서)
+하나의 Workplan 내에서 NC 코드가 실행될 때 호출되는 단위 공정(Operation)과 공구 교환 순서(Tool Change Sequence)를 정의합니다.
+
+| 컬럼명 | 데이터 타입 | 제약 조건 | 기본값 | 설명 및 데이터 소스 |
+| :--- | :--- | :--- | :--- | :--- |
+| **`step_id`** | `INT` | **PK, Auto-Inc** | - | 단위 공정 고유 번호 |
+| **`workplan_id`** | `VARCHAR(100)` | **FK, Not Null** | - | 소속 계획 ID (`workplan.workplan_id` 참조, `ON DELETE CASCADE`) |
+| **`tool_id`** | `INT` | **FK, Nullable** | NULL | 연결된 공구 마스터 ID (`tool.tool_id` 참조, `ON DELETE SET NULL`) |
+| **`operation_type`**| `VARCHAR(50)` | Nullable | NULL | 가공 방식 (황삭-Roughing, 정삭-Finishing, 면가공-Facing 등) |
+| **`step_order`** | `INT` | **Not Null** | - | 공구 호출 실행 순번 (1, 2, 3... 실행 인덱스) |
+| **`tool_number`** | `INT` | **Not Null** | - | NC 매거진 호출 공구 번호 (예: `T11` -> 11) |
+| **`xml_tool_code`** | `VARCHAR(50)` | Nullable | NULL | XML 내 기록된 공구 명칭/코드 (`<toolCode>` / `<toolName>`) |
+
+* **관계 정의**:
+  - `workplan`: `N:1` (`Workplan` 역참조)
+  - `tool`: `N:1` (`Tool` 역참조)
+
+---
+
+##### 5. `cad_file_archive` 테이블 (부품 도면 3D 모델 아카이브)
+부품(`Part`)에 종속된 3D CAD 파일(STEP, STP, STL)의 메타데이터 및 바이너리 아카이브입니다.
+
+| 컬럼명 | 데이터 타입 | 제약 조건 | 기본값 | 설명 및 데이터 소스 |
+| :--- | :--- | :--- | :--- | :--- |
+| **`cad_id`** | `INT` | **PK, Auto-Inc** | - | CAD 아카이브 식별 번호 |
+| **`part_code`** | `VARCHAR(100)` | **FK, Not Null** | - | 소속 부품 코드 (`part.part_code` 참조, `ON DELETE CASCADE`) |
+| **`file_name`** | `VARCHAR(255)` | Nullable | NULL | 원본 도면 파일명 (예: `bracket_v2.step`) |
+| **`file_type`** | `VARCHAR(20)` | Nullable | NULL | 파일 확장자 (`step`, `stp`, `stl`) |
+| **`file_path`** | `VARCHAR(1000)` | Nullable | NULL | Vault 안전 저장소 절대/상대 경로 |
+| **`file_content`** | `LONGBLOB` | Nullable | NULL | CAD 원본 바이너리 (최대 15MB 제한) |
+
+---
+
+#### 3.3.2 [도메인 2] 동적 가공 실행 및 이력 그룹 (Dynamic Machining Execution & History)
+
+##### 6. `job` 테이블 (실제 1회성 가공 이력 - 시스템 핵심 엔티티)
+공작기계에서 실제로 실행된 1회의 가공 세션(실험)에 대한 마스터 이력 테이블입니다.
+
+| 컬럼명 | 데이터 타입 | 제약 조건 | 기본값 | 설명 및 데이터 소스 |
+| :--- | :--- | :--- | :--- | :--- |
+| **`job_id`** | `INT` | **PK, Auto-Inc** | - | 가공 이력 고유 일련번호 |
+| **`source_folder`** | `VARCHAR(255)` | **Unique, Not Null**| - | 물리 감시 폴더 경로 (`Project/Part/JobID`, 중복 방어 식별자) |
+| **`workplan_id`** | `VARCHAR(100)` | **FK, Not Null** | - | 기반이 된 공정 계획 ID (`workplan.workplan_id` 참조, `CASCADE`) |
+| **`work_id`** | `VARCHAR(50)` | **Not Null** | - | XML 내부 작업 식별자 (XML: `<WorkID>`) |
+| **`machine_code`** | `VARCHAR(50)` | Nullable | NULL | 가공을 수행한 공작기계 명칭 (XML: `<MachineCode>`, 예: `Hi-V50`) |
+| **`machine_ip`** | `VARCHAR(20)` | Nullable | NULL | 공작기계 CNC 컨트롤러 IP 주소 (XML: `<MachineIpAddress>`) |
+| **`start_time`** | `DATETIME` | Nullable | NULL | 가공 시작 일시 (XML: `<StartTime>` 또는 TDMS `wf_start_time`) |
+| **`end_time`** | `DATETIME` | Nullable | NULL | 가공 종료 일시 (XML: `<FinishTime>`) |
+| **`cutting_seconds`**| `DOUBLE` | Nullable | NULL | 실제 절삭 이송 시간 (XML: `<CuttingSeconds>`, 단위: 초) |
+| **`moving_distance`**| `DOUBLE` | Nullable | NULL | 공구 총 이동 거리 (XML: `<MovingDistance>`, 단위: mm) |
+| **`cutting_moving_distance`** | `DOUBLE` | Nullable | NULL | 실제 절삭 중 이동 거리 (XML: `<CuttingMovingDistance>`, mm) |
+| **`is_finish`** | `BOOLEAN` | Nullable | FALSE | 프로그램 정상 완료 여부 (XML: `<IsFinish>`) |
+| **`is_error`** | `BOOLEAN` | Nullable | FALSE | 가공 중 에러/비상정지 발생 여부 (XML: `<IsError>`) |
+| **`research_project`** | `VARCHAR(100)` | Nullable | NULL | 연구 과제/프로젝트명 (UI 수기 입력 및 분류 필터) |
+| **`machining_type`**| `VARCHAR(100)` | Nullable | NULL | 가공 세부 목적 (황삭, 정삭, 절삭력실험, 조도평가 등 UI 수기) |
+| **`custom_part_name`** | `VARCHAR(100)` | Nullable | NULL | 연구원 지정 별칭 Part 명 (UI 수기 입력) |
+| **`tdms_file_path`** | `VARCHAR(500)` | Nullable | NULL | 매핑된 원본 고주파 TDMS 센서 파일 경로 |
+| **`log_file_path`** | `VARCHAR(500)` | Nullable | NULL | 매핑된 1Hz CNC 상태 로그 파일 경로 |
+| **`tdms_parquet_path`** | `VARCHAR(500)` | Nullable | NULL | 변환된 시간 도메인 고주파 센서 Parquet 파일 경로 |
+| **`tdms_fft_parquet_path`**| `VARCHAR(500)` | Nullable | NULL | 변환된 주파수 스펙트럼(FFT) Parquet 파일 경로 |
+| **`tool_conditions`** | `JSON` | Nullable | NULL | 런타임 공구 상태 (XML `<Tools>`: 사용횟수, 마모량, 오프셋 JSON) |
+
+* **관계 정의**:
+  - `workplan`: `N:1` (`Workplan` 역참조)
+  - `machine_logs`: `1:N` (`MachineLog`와 연동, `cascade="all, delete-orphan"`)
+  - `inspection`: `1:1` (`Inspection`과 연동, `cascade="all, delete-orphan"`, `uselist=False`)
+  - `env_memo`: `1:1` (`EnvMemo`와 연동, `cascade="all, delete-orphan"`, `uselist=False`)
+  - `surface_roughnesses`: `1:N` (`SurfaceRoughness`와 연동, `cascade="all, delete-orphan"`)
+  - `archive`: `1:1` (`JobFileArchive`와 연동, `cascade="all, delete-orphan"`)
+
+---
+
+##### 7. `machine_log` 테이블 (CNC 장비 로그 및 통계 요약)
+가공 중 1Hz 단위로 수집된 CNC 내부 컨트롤러 로그(CSV/TXT)를 파싱하여 주요 통계치와 알람 내역을 요약 저장합니다.
+
+| 컬럼명 | 데이터 타입 | 제약 조건 | 기본값 | 설명 및 데이터 소스 |
+| :--- | :--- | :--- | :--- | :--- |
+| **`log_id`** | `INT` | **PK, Auto-Inc** | - | 로그 요약 식별 번호 |
+| **`job_id`** | `INT` | **FK, Not Null** | - | 소속 가공 이력 ID (`job.job_id` 참조, `ON DELETE CASCADE`) |
+| **`max_spindle_load`** | `FLOAT` | Nullable | NULL | 가공 중 기록된 최대 스핀들 부하율 (`cls` 최대값, %) |
+| **`max_spindle_rpm`** | `FLOAT` | Nullable | NULL | 가공 중 기록된 최대 스핀들 회전수 (`crpm` 최대값, RPM) |
+| **`max_feed_rate`** | `FLOAT` | Nullable | NULL | 가공 중 기록된 최대 이송 속도 (`cfr` 최대값, mm/min) |
+| **`avg_spindle_rpm`** | `FLOAT` | Nullable | NULL | 가공 중 전체 평균 스핀들 회전수 (`crpm` 평균값, RPM) |
+| **`alarm_count`** | `INT` | Nullable | 0 | 가공 중 발생한 CNC 경고/알람 총 횟수 |
+| **`critical_alarm_msg`**| `TEXT` | Nullable | NULL | 발생한 주요 알람 메시지 고유 목록 (중복 제거 문자열) |
+
+---
+
+##### 8. `surface_roughness` 테이블 (다지점 표면 조도 측정)
+가공 완료 후 표면조도 측정기(Roughness Tester)에서 추출된 부위별 2D 조도 파라미터 및 단면 형상 Parquet 파일 경로를 관리합니다. (1개 Job당 다수 부위 측정 가능: 1:N)
+
+| 컬럼명 | 데이터 타입 | 제약 조건 | 기본값 | 설명 및 데이터 소스 |
+| :--- | :--- | :--- | :--- | :--- |
+| **`roughness_id`** | `INT` | **PK, Auto-Inc** | - | 조도 측정 데이터 고유 번호 |
+| **`job_id`** | `INT` | **FK, Not Null** | - | 소속 가공 이력 ID (`job.job_id` 참조, `ON DELETE CASCADE`) |
+| **`measure_name`** | `VARCHAR(100)` | Nullable | NULL | 측정 부위 또는 채널 이름 (예: `Top_Surface`, `Side_Wall_1`) |
+| **`ra`** | `FLOAT` | Nullable | NULL | 산술평균 거칠기 ($R_a$, 단위: $\mu m$) |
+| **`rq`** | `FLOAT` | Nullable | NULL | 제곱평균제곱근 거칠기 ($R_q$, 단위: $\mu m$) |
+| **`rz`** | `FLOAT` | Nullable | NULL | 십점평균 거칠기 ($R_z$, 5구간 Peak-to-Valley 평균, 단위: $\mu m$) |
+| **`profile_parquet_path`** | `VARCHAR(500)` | Nullable | NULL | X-Z 마이크로미터 단면 평가곡선 Parquet 파일 경로 |
+
+---
+
+##### 9. `inspection` 테이블 (치수/형상 정밀도 및 최종 품질 합부 판정)
+가공품의 3차원 측정기(CMM), 버니어캘리퍼스 측정값 및 종합 품질 합부(PASS/FAIL) 판정 결과입니다.
+
+| 컬럼명 | 데이터 타입 | 제약 조건 | 기본값 | 설명 및 데이터 소스 |
+| :--- | :--- | :--- | :--- | :--- |
+| **`inspection_id`** | `INT` | **PK, Auto-Inc** | - | 품질 검사 일련번호 |
+| **`job_id`** | `INT` | **FK, Unique, Not Null**| - | 소속 가공 이력 ID (`job.job_id` 참조, `CASCADE`, 1:1 관계) |
+| **`dimension_tolerance`** | `VARCHAR(100)`| Nullable | NULL | 주요 치수 및 가공 공차 측정 결과 (수기 입력) |
+| **`surface_roughness_ra`**| `FLOAT` | Nullable | NULL | 부품 전체 대표 산술평균조도 ($R_a$, 자동 계산 또는 수기 입력) |
+| **`surface_roughness_rz`**| `FLOAT` | Nullable | NULL | 부품 전체 대표 십점평균조도 ($R_z$, 자동 계산 또는 수기 입력) |
+| **`shape_accuracy`** | `VARCHAR(100)`| Nullable | NULL | 진원도, 평면도, 직각도 등 형상 정밀도 측정치 |
+| **`pass_fail`** | `VARCHAR(10)` | Nullable | 'PASS' | 최종 품질 합부 판정 (`PASS` 또는 `FAIL`) |
+
+---
+
+##### 10. `env_memo` 테이블 (작업 환경 및 작업자 메모)
+가공 당일의 실험실 온/습도, 작업자 정보 및 정량화하기 어려운 현장 관측값(소음, 칩 형상 등)을 기록합니다.
+
+| 컬럼명 | 데이터 타입 | 제약 조건 | 기본값 | 설명 및 데이터 소스 |
+| :--- | :--- | :--- | :--- | :--- |
+| **`env_id`** | `INT` | **PK, Auto-Inc** | - | 환경 기록 일련번호 |
+| **`job_id`** | `INT` | **FK, Unique, Not Null**| - | 소속 가공 이력 ID (`job.job_id` 참조, `CASCADE`, 1:1 관계) |
+| **`worker_name`** | `VARCHAR(50)` | Nullable | NULL | 실험/가공을 수행한 작업자(연구원) 성명 |
+| **`temperature`** | `FLOAT` | Nullable | NULL | 가공 시점 실험실 실내 온도 (단위: ℃) |
+| **`humidity`** | `FLOAT` | Nullable | NULL | 가공 시점 실험실 실내 습도 (단위: %) |
+| **`day_of_week`** | `VARCHAR(10)` | Nullable | NULL | 실험 수행 요일 (월, 화, 수, 목, 금, 토, 일) |
+| **`chip_shape`** | `VARCHAR(100)`| Nullable | NULL | 절삭 칩 배출 형태 (연속형, 전단형, 균열형, 분절형 등) |
+| **`abnormal_noise`** | `VARCHAR(100)`| Nullable | NULL | 가공 중 이상 채터 소음 및 특이 진동 관측 여부 |
+| **`free_memo`** | `TEXT` | Nullable | NULL | 작업자의 자유로운 실험 관찰 일지 및 세부 특이사항 |
+
+---
+
+#### 3.3.3 [도메인 3] 파일 아카이빙 및 Vault 연동 그룹 (Storage & Vault Archive)
+
+##### 11. `workplan_file_archive` 테이블
+`Workplan`에 연결된 원본 NC 프로그램 코드의 Vault 경로 및 바이너리(LONGBLOB) 백업입니다.
+
+| 컬럼명 | 데이터 타입 | 제약 조건 | 기본값 | 설명 |
+| :--- | :--- | :--- | :--- | :--- |
+| **`workplan_id`** | `VARCHAR(100)` | **PK, FK, Not Null** | - | 소속 Workplan ID (`workplan.workplan_id` 참조, `CASCADE`) |
+| **`nc_file_path`** | `VARCHAR(1000)`| Nullable | NULL | NC 파일 Vault 저장소 절대/상대 경로 |
+| **`nc_file_content`**| `LONGBLOB` | Nullable | NULL | NC 원본 텍스트 바이너리 스트림 (최대 4GB 지원) |
+
+---
+
+##### 12. `job_file_archive` 테이블
+`Job` 단위의 원본 XML 파일 및 전처리 완료된 Parquet 파일들의 Vault 경로와 바이너리 백업입니다.
+
+| 컬럼명 | 데이터 타입 | 제약 조건 | 기본값 | 설명 |
+| :--- | :--- | :--- | :--- | :--- |
+| **`job_id`** | `INT` | **PK, FK, Not Null** | - | 소속 Job ID (`job.job_id` 참조, `CASCADE`) |
+| **`xml_file_path`** | `VARCHAR(1000)`| Nullable | NULL | XML 메타데이터 원본 파일 Vault 경로 |
+| **`xml_file_content`**| `LONGBLOB` | Nullable | NULL | XML 원본 바이너리 스트림 (최대 4GB 지원) |
+| **`tdms_parquet_file_path`** | `VARCHAR(1000)`| Nullable | NULL | 변환된 시간 도메인 TDMS Parquet Vault 경로 |
+| **`tdms_fft_parquet_file_path`**| `VARCHAR(1000)`| Nullable | NULL | 변환된 FFT 주파수 스펙트럼 Parquet Vault 경로 |
+
+---
+
+##### 13. `surface_roughness_archive` 테이블
+`SurfaceRoughness` 측정 레코드에 대응되는 원시 CSV 파일들과 파생 Parquet 파일의 Vault 경로입니다.
+
+| 컬럼명 | 데이터 타입 | 제약 조건 | 기본값 | 설명 |
+| :--- | :--- | :--- | :--- | :--- |
+| **`roughness_id`** | `INT` | **PK, FK, Not Null** | - | 소속 조도 ID (`surface_roughness.roughness_id` 참조, `CASCADE`) |
+| **`profile_parquet_file_path`** | `VARCHAR(1000)`| Nullable | NULL | 평가곡선 Parquet Vault 경로 |
+| **`stat_csv_file_path`** | `VARCHAR(1000)`| Nullable | NULL | 조도 통계 CSV 원본 Vault 경로 |
+| **`curve_csv_file_path`** | `VARCHAR(1000)`| Nullable | NULL | 평가곡선 원시 CSV 파일 Vault 경로 |
+
+---
+
+##### 14. `log_file_archive` 테이블
+`MachineLog` 레코드에 대응되는 CNC 컨트롤러의 원시 텍스트 로그/CSV 파일의 Vault 경로입니다.
+
+| 컬럼명 | 데이터 타입 | 제약 조건 | 기본값 | 설명 |
+| :--- | :--- | :--- | :--- | :--- |
+| **`log_id`** | `INT` | **PK, FK, Not Null** | - | 소속 MachineLog ID (`machine_log.log_id` 참조, `CASCADE`) |
+| **`log_file_path`** | `VARCHAR(1000)`| Nullable | NULL | 원시 로그 파일 Vault 절대/상대 경로 |
+
+---
+
+### 3.4 데이터 무결성 및 연쇄 삭제(CASCADE) 전파 정책
+
+본 시스템은 제조 데이터의 정합성을 엄격하게 유지하기 위해 RDBMS 레벨의 Foreign Key 제약조건과 SQLAlchemy ORM 레벨의 `cascade="all, delete-orphan"` 옵션을 이중으로 적용하였습니다.
+
+```text
+[CASCADE 연쇄 삭제 전파 트리]
+
+(1) Part 삭제 시
+    Part ──► (CASCADE) ──► Workplan ──► (CASCADE) ──► Job ──► (CASCADE) ──► MachineLog, Inspection, EnvMemo, SurfaceRoughness
+         └──► (CASCADE) ──► CadFileArchive
+
+(2) Job 단독 삭제 시 (관리자 UI 삭제 기능)
+    Job ──► (CASCADE) ──► MachineLog ──► (CASCADE) ──► LogFileArchive
+        ──► (CASCADE) ──► Inspection
+        ──► (CASCADE) ──► EnvMemo
+        ──► (CASCADE) ──► SurfaceRoughness ──► (CASCADE) ──► SurfaceRoughnessArchive
+        ──► (CASCADE) ──► JobFileArchive
+
+(3) Tool 마스터 삭제 시
+    Tool ──► (SET NULL) ──► Workingstep (공구 마스터만 제거되고 가공 단계 이력은 보존됨)
+```
+
+* **`ON DELETE CASCADE`의 이점**:
+  - 관리자가 Admin Dashboard에서 불필요한 시험 가공 데이터(`Job`)를 삭제하면, 외래키 제약에 의해 연결된 로그, 조도, 품질 점검, 환경 메모, 아카이브 테이블의 모든 하위 행이 원자적(Atomic)으로 일괄 정리됩니다.
+* **고유 식별자(`source_folder`) 기반 중복 방어**:
+  - `Job.source_folder` 컬럼에 `UNIQUE` 인덱스를 부여하여, 파일 파서가 동일한 폴더를 중복 감지하더라도 중복 Row 생성을 방지하고 기존 Row에 `UPDATE`를 수행하도록 보장합니다.
+
+---
+
+### 3.5 DBMS 연결 및 풀링 설정 (`backend/DB/database.py`)
+
+* **드라이버 및 연결 프로토콜**: `mysql+pymysql` (순수 Python 기반 MySQL 클라이언트 드라이버 사용)
+* **커넥션 풀링 최적화**:
+  - `pool_recycle=3600`: MySQL 서버의 기본 `wait_timeout`(8시간)에 도달하기 전 1시간 주기로 커넥션을 재생성하여 장시간 대기 후 발생하는 `MySQL server has gone away (Error 2006)` 오류를 완벽 차단.
+  - `SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)`: 명시적 트랜잭션 커밋(`db.commit()`)과 롤백(`db.rollback()`)을 강제하여 데이터 무결성 유지.
+* **세션 라이프사이클 관리 (`get_db`)**:
+  ```python
+  def get_db():
+      db = SessionLocal()
+      try:
+          yield db
+      finally:
+          db.close()
+  ```
+  - 파이프라인 및 UI에서 제너레이터를 활용하여 DB 작업 완료 후 세션이 반드시 `close()`되도록 하여 커넥션 누수(Leak)를 방지.
+
+---
+
+### 3.6 전체 SQLAlchemy ORM 모델 소스 코드 (`backend/DB/models.py`)
+
+시스템 복원 시 즉시 사용할 수 있는 데이터베이스 ORM 모델의 100% 완전한 소스 코드입니다.
+
 ```python
+# backend/DB/models.py
+from sqlalchemy import Column, Integer, String, Float, Double, Boolean, DateTime, JSON, ForeignKey, LargeBinary, Text
+from sqlalchemy.orm import relationship
+from .database import Base
+
 class Part(Base):
     __tablename__ = "part"
-    part_code = Column(String(100), primary_key=True) # 부품 식별 코드
-    project_code = Column(String(50))
-    material_code = Column(String(50))
-    workplans = relationship("Workplan", back_populates="part", cascade="all, delete-orphan")
-```
+    __table_args__ = {'comment': '가공 대상 부품 마스터 정보'}
 
-#### 2. Workplan 테이블 (ISO14649 정적 계획)
-```python
+    part_code = Column(String(100), primary_key=True, comment='부품 코드 (XML: PartCode)')
+    project_code = Column(String(50), comment='XML: ProjectCode')
+    material_code = Column(String(50), comment='XML: MaterialCode')
+
+    workplans = relationship("Workplan", back_populates="part", cascade="all, delete-orphan")
+
+
 class Workplan(Base):
     __tablename__ = "workplan"
-    workplan_id = Column(String(100), primary_key=True) # part_code + program_code + NC Hash 조합
+    __table_args__ = {'comment': 'ISO14649 Workplan: 단일 NC 프로그램(코드) 단위의 정적 계획'}
+
+    workplan_id = Column(String(100), primary_key=True, comment='고유 식별자 (ProgramCode 등 조합)')
     part_code = Column(String(100), ForeignKey("part.part_code", ondelete="CASCADE"), nullable=False)
-    program_code = Column(String(50))
-    nc_file_path = Column(String(255))
-    jobs = relationship("Job", back_populates="workplan", cascade="all, delete-orphan")
+    program_code = Column(String(50), comment='XML: ProgramCode / ProgramName')
+    nc_file_path = Column(String(255), comment='NC 코드 파일 경로')
+
+    part = relationship("Part", back_populates="workplans")
     workingsteps = relationship("Workingstep", back_populates="workplan", cascade="all, delete-orphan")
-```
+    jobs = relationship("Job", back_populates="workplan", cascade="all, delete-orphan")
 
-#### 3. Workingstep 테이블 (개별 가공 단위 / 공구 호출 순서)
-```python
-class Workingstep(Base):
-    __tablename__ = "workingstep"
-    step_id = Column(Integer, primary_key=True, autoincrement=True)
-    workplan_id = Column(String(100), ForeignKey("workplan.workplan_id", ondelete="CASCADE"), nullable=False)
-    tool_id = Column(Integer, ForeignKey("tool.tool_id", ondelete="SET NULL"))
-    operation_type = Column(String(50))
-    step_order = Column(Integer, nullable=False) # 공구 호출 순서
-    tool_number = Column(Integer, nullable=False)
-    xml_tool_code = Column(String(50))
-```
 
-#### 4. Tool 테이블 (공구 마스터 정보)
-```python
 class Tool(Base):
     __tablename__ = "tool"
-    tool_id = Column(Integer, primary_key=True, autoincrement=True)
-    tool_code = Column(String(50))
-    company_name = Column(String(50))
-    tool_type = Column(String(50))
-    cutter_diameter = Column(Double)
-    specification = Column(String(100))
-    tool_teeth = Column(Integer)
-    stock_count = Column(Integer)
-    memo = Column(String(255))
-```
+    __table_args__ = {'comment': '공구 마스터 정보 테이블 (Excel에서 불러오기)'}
 
-#### 5. Job 테이블 (실제 1회성 가공 이력)
-```python
+    tool_id = Column(Integer, primary_key=True, autoincrement=True)
+    tool_code = Column(String(50), comment='공구 세트 번호 (예: T4, T29)')
+    company_name = Column(String(50), comment='제조사명')
+    tool_type = Column(String(50), comment='공구 종류')
+    cutter_diameter = Column(Double, comment='직경 (숫자값)')
+    specification = Column(String(100), comment='규격')
+    tool_teeth = Column(Integer, comment='날수')
+    stock_count = Column(Integer, comment='재고 개수')
+    memo = Column(String(255), comment='비고')
+
+    workingsteps = relationship("Workingstep", back_populates="tool")
+
+
+class Workingstep(Base):
+    __tablename__ = "workingstep"
+    __table_args__ = {'comment': 'ISO14649 Workingstep: Workplan 내의 개별 가공 단위(공구 호출 순서)'}
+
+    step_id = Column(Integer, primary_key=True, autoincrement=True)
+    workplan_id = Column(String(100), ForeignKey("workplan.workplan_id", ondelete="CASCADE"), nullable=False)
+    tool_id = Column(Integer, ForeignKey("tool.tool_id", ondelete="SET NULL"), comment='연결된 공구 ID')
+    operation_type = Column(String(50), comment='가공방식 (MachiningOperation 병합)')
+    
+    step_order = Column(Integer, nullable=False, comment='공구 호출 순서 (Index)')
+    tool_number = Column(Integer, nullable=False, comment='호출된 공구 번호 (예: 11, 15, 16, 17)')
+    xml_tool_code = Column(String(50), comment='XML: toolCode / toolName')
+
+    workplan = relationship("Workplan", back_populates="workingsteps")
+    tool = relationship("Tool", back_populates="workingsteps")
+
+
 class Job(Base):
     __tablename__ = "job"
-    job_id = Column(Integer, primary_key=True, autoincrement=True)
-    source_folder = Column(String(255), unique=True) # 모니터링 폴더 기준 원본 경로 (Project/Part/JobID)
+    __table_args__ = {'comment': 'Workplan을 바탕으로 수행된 실제 1회성 가공 이력'}
+
+    job_id = Column(Integer, primary_key=True, autoincrement=True, comment='가공 이력 고유 ID')
+    source_folder = Column(String(255), unique=True, comment='기존 폴더명 기반의 원본 식별자')
     workplan_id = Column(String(100), ForeignKey("workplan.workplan_id", ondelete="CASCADE"), nullable=False)
-    work_id = Column(String(50), nullable=False)
-    machine_code = Column(String(50))
-    machine_ip = Column(String(20))
-    start_time = Column(DateTime)
-    end_time = Column(DateTime)
-    cutting_seconds = Column(Double)
-    moving_distance = Column(Double)
-    cutting_moving_distance = Column(Double)
-    is_finish = Column(Boolean)
-    is_error = Column(Boolean)
-    research_project = Column(String(100), nullable=True)
-    machining_type = Column(String(100), nullable=True)
-    custom_part_name = Column(String(100), nullable=True)
-    tdms_file_path = Column(String(500), nullable=True)
-    log_file_path = Column(String(500), nullable=True)
-    tdms_parquet_path = Column(String(500), nullable=True)
-    tdms_fft_parquet_path = Column(String(500), nullable=True)
-    tool_conditions = Column(JSON) # 런타임 공구 상태 (오프셋, 마모도 등 JSON)
+    work_id = Column(String(50), nullable=False, comment='XML: WorkID')
+    
+    machine_code = Column(String(50), comment='XML: MachineCode')
+    machine_ip = Column(String(20), comment='XML: MachineIpAddress')
+    
+    start_time = Column(DateTime, comment='XML: StartTime')
+    end_time = Column(DateTime, comment='XML: FinishTime')
+    
+    cutting_seconds = Column(Double, comment='XML: CuttingSeconds')
+    moving_distance = Column(Double, comment='XML: MovingDistance')
+    cutting_moving_distance = Column(Double, comment='XML: CuttingMovingDistance')
+    
+    is_finish = Column(Boolean, comment='XML: IsFinish')
+    is_error = Column(Boolean, comment='XML: IsError')
+    
+    research_project = Column(String(100), nullable=True) # 연구 프로젝트 명 (수기 입력)
+    machining_type = Column(String(100), nullable=True)   # 가공 종류 (수기 입력)
+    custom_part_name = Column(String(100), nullable=True) # 사용자 지정 Part 명 (수기 입력)
+    
+    tdms_file_path = Column(String(500), nullable=True) # 매핑된 TDMS 파일 절대 경로
+    log_file_path = Column(String(500), nullable=True)  # 매핑된 Log 파일 절대 경로
+    tdms_parquet_path = Column(String(500), nullable=True) # TDMS Time-domain Parquet 절대 경로
+    tdms_fft_parquet_path = Column(String(500), nullable=True) # TDMS Frequency-domain(FFT) Parquet 절대 경로
+    
+    tool_conditions = Column(JSON, comment='런타임 공구 상태 (사용횟수, 오프셋, 마모도 등)')
+
+    workplan = relationship("Workplan", back_populates="jobs")
+    machine_logs = relationship("MachineLog", back_populates="job", cascade="all, delete-orphan")
+    inspection = relationship("Inspection", back_populates="job", cascade="all, delete-orphan", uselist=False)
+    env_memo = relationship("EnvMemo", back_populates="job", cascade="all, delete-orphan", uselist=False)
+    surface_roughnesses = relationship("SurfaceRoughness", back_populates="job", cascade="all, delete-orphan")
+
+
+class MachineLog(Base):
+    __tablename__ = "machine_log"
+    __table_args__ = {'comment': '가공 단위 장비 알람 및 로그 요약 테이블'}
+
+    log_id = Column(Integer, primary_key=True, autoincrement=True)
+    job_id = Column(Integer, ForeignKey("job.job_id", ondelete="CASCADE"), nullable=False)
+    max_spindle_load = Column(Float, comment='최대 스핀들 부하')
+    max_spindle_rpm = Column(Float, comment='최대 스핀들 RPM')
+    max_feed_rate = Column(Float, comment='최대 이송 속도(Feed Rate)')
+    avg_spindle_rpm = Column(Float, comment='평균 스핀들 RPM')
+    alarm_count = Column(Integer, comment='알람 발생 횟수')
+    critical_alarm_msg = Column(Text, comment='주요 알람 메시지 (존재 시)')
+
+    job = relationship("Job", back_populates="machine_logs")
+
+
+class SurfaceRoughness(Base):
+    __tablename__ = "surface_roughness"
+    __table_args__ = {'comment': '표면조도 측정 결과 (1:N 측정 가능)'}
+    
+    roughness_id = Column(Integer, primary_key=True, autoincrement=True)
+    job_id = Column(Integer, ForeignKey("job.job_id", ondelete="CASCADE"), nullable=False)
+    measure_name = Column(String(100), comment='측정 항목 또는 부위 이름 (예: Roughness_1)')
+    
+    ra = Column(Float, comment='산술평균거칠기 (Ra, μm)')
+    rq = Column(Float, comment='제곱평균제곱근거칠기 (Rq, μm)')
+    rz = Column(Float, comment='십점평균거칠기 (Rz, μm)')
+    
+    profile_parquet_path = Column(String(500), nullable=True, comment='평가곡선 Parquet 파일 경로')
+    
+    job = relationship("Job", back_populates="surface_roughnesses")
+
+
+class Inspection(Base):
+    __tablename__ = "inspection"
+    __table_args__ = {'comment': '가공 완료 후 품질 측정 테이블'}
+
+    inspection_id = Column(Integer, primary_key=True, autoincrement=True)
+    job_id = Column(Integer, ForeignKey("job.job_id", ondelete="CASCADE"), nullable=False, unique=True)
+    dimension_tolerance = Column(String(100), comment='치수 및 공차')
+    surface_roughness_ra = Column(Float, comment='표면조도 Ra')
+    surface_roughness_rz = Column(Float, comment='표면조도 Rz')
+    shape_accuracy = Column(String(100), comment='형상정밀도')
+    pass_fail = Column(String(10), comment='합불 판정 (PASS/FAIL)')
+
+    job = relationship("Job", back_populates="inspection")
+
+
+class EnvMemo(Base):
+    __tablename__ = "env_memo"
+    __table_args__ = {'comment': '작업자, 환경, 수기 메모 테이블'}
+
+    env_id = Column(Integer, primary_key=True, autoincrement=True)
+    job_id = Column(Integer, ForeignKey("job.job_id", ondelete="CASCADE"), nullable=False, unique=True)
+    worker_name = Column(String(50), comment='작업자')
+    temperature = Column(Float, comment='온도')
+    humidity = Column(Float, comment='습도')
+    day_of_week = Column(String(10), comment='요일')
+    chip_shape = Column(String(100), comment='칩 형태')
+    abnormal_noise = Column(String(100), comment='이상 소음')
+    free_memo = Column(Text, comment='자유 메모')
+
+    job = relationship("Job", back_populates="env_memo")
+
+
+class WorkplanFileArchive(Base):
+    __tablename__ = "workplan_file_archive"
+    __table_args__ = {'comment': 'Workplan 관련 대용량 파일 경로 및 원본 아카이브'}
+    
+    workplan_id = Column(String(100), ForeignKey("workplan.workplan_id", ondelete="CASCADE"), primary_key=True)
+    nc_file_path = Column(String(1000), comment='NC 원본 파일 Vault 경로')
+    nc_file_content = Column(LargeBinary(length=(2**32)-1), nullable=True, comment='NC 원본 바이너리 (최대 4GB LONGBLOB)')
+    
+
+class JobFileArchive(Base):
+    __tablename__ = "job_file_archive"
+    __table_args__ = {'comment': 'Job 관련 대용량 파일 경로 및 원본 아카이브 (XML, TDMS Parquet 등)'}
+    
+    job_id = Column(Integer, ForeignKey("job.job_id", ondelete="CASCADE"), primary_key=True)
+    xml_file_path = Column(String(1000), comment='XML 원본 파일 Vault 경로')
+    xml_file_content = Column(LargeBinary(length=(2**32)-1), nullable=True, comment='XML 원본 바이너리 (최대 4GB LONGBLOB)')
+    tdms_parquet_file_path = Column(String(1000), comment='TDMS Time-domain Parquet 원본 파일 Vault 경로')
+    tdms_fft_parquet_file_path = Column(String(1000), comment='TDMS Frequency-domain(FFT) Parquet 원본 파일 Vault 경로')
+    
+class CadFileArchive(Base):
+    __tablename__ = "cad_file_archive"
+    __table_args__ = {'comment': '가공 대상 도면 원본 파일 아카이브 (STEP, STP, STL)'}
+    
+    cad_id = Column(Integer, primary_key=True, autoincrement=True)
+    part_code = Column(String(100), ForeignKey("part.part_code", ondelete="CASCADE"), nullable=False)
+    file_name = Column(String(255), comment='파일 원본명')
+    file_type = Column(String(20), comment='파일 확장자 (step, stp, stl)')
+    file_path = Column(String(1000), comment='Vault 경로')
+    file_content = Column(LargeBinary(length=(2**32)-1), nullable=True, comment='CAD 원본 바이너리 (15MB 제한)')
+    
+    part = relationship("Part")
+
+
+class SurfaceRoughnessArchive(Base):
+    __tablename__ = "surface_roughness_archive"
+    __table_args__ = {'comment': '표면조도 측정 결과 파일 경로 아카이브'}
+    
+    roughness_id = Column(Integer, ForeignKey("surface_roughness.roughness_id", ondelete="CASCADE"), primary_key=True)
+    profile_parquet_file_path = Column(String(1000), nullable=True, comment='평가곡선 원본 파일 Vault 경로')
+    stat_csv_file_path = Column(String(1000), nullable=True, comment='통계 CSV 파일 Vault 경로')
+    curve_csv_file_path = Column(String(1000), nullable=True, comment='평가곡선 CSV 파일 Vault 경로')
+
+
+class LogFileArchive(Base):
+    __tablename__ = "log_file_archive"
+    __table_args__ = {'comment': 'MachineLog 관련 파일 경로 아카이브 (로그/CSV)'}
+    
+    log_id = Column(Integer, ForeignKey("machine_log.log_id", ondelete="CASCADE"), primary_key=True)
+    log_file_path = Column(String(1000), comment='원시 로그/CSV 파일 Vault 경로')
 ```
-
-#### 6. 그 외 품질/환경 테이블 (1:1 연관)
-- **MachineLog**: `max_spindle_load`, `max_spindle_rpm`, `avg_spindle_rpm`, `alarm_count`, `critical_alarm_msg` 기록.
-- **Inspection**: 치수/공차(`dimension_tolerance`), 형상정밀도(`shape_accuracy`), 합불판정(`pass_fail`), 종합조도(`surface_roughness_ra`, `surface_roughness_rz`).
-- **EnvMemo**: 온도(`temperature`), 습도(`humidity`), 작업자(`worker_name`), 이상소음, 칩 형태, 자유 메모.
-- **SurfaceRoughness**: 부위별(1:N) 측정 조도 (`ra`, `rq`, `rz`), Parquet 변환된 곡선 경로.
-
-#### 7. 아카이브 전용 테이블
-- **WorkplanFileArchive**: NC 파일 Vault 경로 및 `nc_file_content` (LargeBinary).
-- **JobFileArchive**: XML, TDMS 데이터 Vault 경로 및 `xml_file_content` (LargeBinary).
-- **CadFileArchive**: STEP/STL CAD 파일 경로 및 `file_content` (LargeBinary, 15MB 제한).
-- **LogFileArchive** / **SurfaceRoughnessArchive**: 텍스트 로그 및 조도 원시 데이터 경로 보관.
 
 ---
 

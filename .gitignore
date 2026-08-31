@@ -12,6 +12,7 @@ ENV/
 .venv/
 
 # DB and files
+*.sqlite
 *.sqlite3
 *.db
 machining_data.db
