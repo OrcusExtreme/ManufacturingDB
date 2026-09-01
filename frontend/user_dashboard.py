@@ -9,9 +9,35 @@ import io
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.append(os.path.join(PROJECT_ROOT, 'backend'))
+sys.path.append(os.path.dirname(__file__))
 
 from DB.database import engine
 from sqlalchemy import text
+from recovery_engine import restore_single_job_to_raw_data, get_job_archive_files, create_single_job_zip
+from cad_viewer_component import render_cad_viewer
+
+def resolve_parquet_file(file_path, default_filename=None):
+    """
+    Parquet 파일의 실제 경로를 찾습니다.
+    DB 경로 -> processed_data -> archive_vault 순으로 탐색
+    """
+    if file_path and os.path.exists(file_path):
+        return file_path
+    if default_filename:
+        # 1. processed_data 탐색
+        p1 = os.path.join(PROJECT_ROOT, "processed_data", default_filename)
+        if os.path.exists(p1):
+            return p1
+        # 2. archive_vault 탐색
+        p2 = os.path.join(PROJECT_ROOT, "archive_vault", "processed_parquet", default_filename)
+        if os.path.exists(p2):
+            return p2
+        # 3. surface_roughness vault 탐색
+        p3 = os.path.join(PROJECT_ROOT, "archive_vault", "surface_roughness", default_filename)
+        if os.path.exists(p3):
+            return p3
+    return None
+
 
 def get_download_data_from_folder(folder_path, categories):
     import tempfile
@@ -184,6 +210,11 @@ with st.sidebar:
         st.rerun()
     
 
+@st.dialog("🖼️ CAD 모델 형상 이미지", width="large")
+def open_cad_dialog(part_code, cad_file_name):
+    st.markdown(f"**부품명(Part Code):** `{part_code}` &nbsp;|&nbsp; **CAD 파일명:** `{cad_file_name}`")
+    render_cad_viewer(part_code, height=520)
+
 if nav_menu == "계층형 마스터 데이터":
     st.subheader("계층형 구조 조회 (ISO 14649)")
     
@@ -211,8 +242,18 @@ if nav_menu == "계층형 마스터 데이터":
             """
             cad_df = load_data(cad_query)
             if not cad_df.empty:
-                st.markdown("##### 📐 연관 CAD 모델")
-                st.dataframe(cad_df, width="stretch", hide_index=True)
+                c_fname = cad_df.iloc[0]['file_name']
+                c_ftype = str(cad_df.iloc[0]['file_type']).upper()
+                
+                col_c1, col_c2 = st.columns([3, 1])
+                with col_c1:
+                    st.markdown(f"**📐 연관 CAD 모델:** `{c_fname}` ({c_ftype})")
+                with col_c2:
+                    if st.button("🖼️ 형상 이미지 보기", key=f"btn_cad_modal_{p_code}", type="primary", use_container_width=True):
+                        open_cad_dialog(p_code, c_fname)
+                
+                with st.expander("📄 CAD 파일 메타데이터 정보 보기", expanded=False):
+                    st.dataframe(cad_df, width="stretch", hide_index=True)
                 st.divider()
 
             wp_query = f"""
@@ -643,11 +684,11 @@ elif nav_menu == "가공 이력 & 센서 분석":
                 # 4. TDMS Charts Card
                 with st.container(border=True):
                     st.markdown("##### 📈 TDMS 고주파 센서 시계열 및 주파수 분석")
-                    parquet_path = job_info['tdms_parquet_path']
-                    if pd.notnull(parquet_path) and parquet_path != "FAILED":
+                    parquet_path = resolve_parquet_file(job_info['tdms_parquet_path'], f"job_{target_job_id}_viz.parquet")
+                    if parquet_path:
                         try:
                             tdms_data = pd.read_parquet(parquet_path)
-                            st.caption(f"데이터 로드 완료: {len(tdms_data)} 행")
+                            st.caption(f"데이터 로드 완료: {len(tdms_data)} 행 (경로: {os.path.basename(parquet_path)})")
                             
                             tab1, tab2, tab3 = st.tabs(["CNC 센서", "DAQ 진동/소음 (Envelope)", "FFT 스펙트럼"])
                             
@@ -677,8 +718,8 @@ elif nav_menu == "가공 이력 & 센서 분석":
                                     st.info("DAQ 데이터 없음")
                                     
                             with tab3:
-                                fft_path = job_info['tdms_fft_parquet_path']
-                                if pd.notnull(fft_path):
+                                fft_path = resolve_parquet_file(job_info['tdms_fft_parquet_path'], f"job_{target_job_id}_fft.parquet")
+                                if fft_path:
                                     try:
                                         fft_data = pd.read_parquet(fft_path)
                                         if 'Frequency' in fft_data.columns:
@@ -748,177 +789,205 @@ elif nav_menu == "데이터 다운로드":
             st.error("해당 Job 정보를 찾을 수 없습니다.")
         else:
             sf = job_df.iloc[0]['source_folder']
-            if not sf:
-                st.info("소스 폴더 정보가 없습니다.")
-            else:
-                folder_path = os.path.join(PROJECT_ROOT, "machining_raw_data", sf)
-                if not os.path.exists(folder_path):
-                    st.error("해당 원본 폴더를 디스크에서 찾을 수 없습니다.")
-                else:
-                    st.divider()
-                    st.markdown("#### 📦 전체 데이터 다운로드")
-                    st.write("해당 Job의 모든 원본 파일과 하위 폴더를 한 번에 다운로드합니다.")
-                    
-                    if st.button("전체 파일 압축 준비하기", type="primary", key="btn_all"):
-                        with st.spinner("전체 파일을 압축하는 중입니다..."):
-                            data_path, fname, mime, is_temp = get_download_data_from_folder(folder_path, ['전체'])
-                            if data_path:
-                                sf_parts = sf.replace('\\', '/').split('/')
-                                project_name = sf_parts[0] if len(sf_parts) > 0 else "Project"
-                                part_name = sf_parts[1].replace(' ', '') if len(sf_parts) > 1 else "Part"
-                                j_id = sf_parts[2] if len(sf_parts) > 2 else str(target_job_id)
-                                base_name = f"{project_name}_{part_name}_{j_id}"
-                                
-                                st.session_state['dl_all_path'] = data_path
-                                st.session_state['dl_all_fname'] = f"{base_name}_AllData.zip"
-                                st.session_state['dl_all_mime'] = mime
-                                
-                    if 'dl_all_path' in st.session_state and st.session_state.get('dl_all_fname'):
-                        st.success("전체 파일 압축이 완료되었습니다!")
-                        with open(st.session_state['dl_all_path'], "rb") as f:
-                            st.download_button(
-                                label="📥 전체 다운로드 (ZIP)",
-                                data=f,
-                                file_name=st.session_state['dl_all_fname'],
-                                mime=st.session_state['dl_all_mime']
-                            )
-                        
-                    st.divider()
-                    st.markdown("#### 🎯 선택적 데이터 다운로드")
-                    st.write("원하는 카테고리의 데이터만 선별하여 다운로드합니다.")
-                    
-                    # 폴더 내 실제 존재하는 파일 확장자/키워드 검사
-                    available_cats = set()
-                    for root_dir, dirs, files in os.walk(folder_path):
-                        for file in files:
-                            l_path = file.lower()
-                            if 'surface' in l_path or '조도' in l_path or l_path.endswith('.fpk'):
-                                available_cats.add('표면 조도 (Surface Roughness)')
-                            if l_path.endswith('.tdms'):
-                                available_cats.add('고주파 센서 (tdms)')
-                            if l_path.endswith('.nc'):
-                                available_cats.add('NC 프로그램 (nc)')
-                            if l_path.endswith('.xml') and 'coeff' not in l_path:
-                                available_cats.add('메타데이터 (xml)')
-                            if 'parquet' in l_path:
-                                available_cats.add('Parquet 데이터 (parquet)')
-                            if l_path.endswith('.log'):
-                                available_cats.add('장비 로그 (log)')
-                                
-                    categories = [
-                        '표면 조도 (Surface Roughness)',
-                        '고주파 센서 (tdms)',
-                        'NC 프로그램 (nc)',
-                        '메타데이터 (xml)',
-                        'Parquet 데이터 (parquet)',
-                        '장비 로그 (log)'
-                    ]
-                    
-                    # 실제로 존재하는 카테고리만 필터링
-                    valid_categories = [c for c in categories if c in available_cats]
-                    selected_cats = []
-                    
-                    if not valid_categories:
-                        st.warning("다운로드할 수 있는 상세 데이터 파일이 원본 폴더에 존재하지 않습니다.")
+            sf_parts = sf.replace('\\', '/').split('/') if sf else []
+            project_name = sf_parts[0] if len(sf_parts) > 0 else "Project"
+            part_name = sf_parts[1].replace(' ', '') if len(sf_parts) > 1 else "Part"
+            j_id = sf_parts[2] if len(sf_parts) > 2 else str(target_job_id)
+            base_name = f"{project_name}_{part_name}_Job{j_id}"
+            
+            folder_path = os.path.join(PROJECT_ROOT, "machining_raw_data", *sf_parts) if sf_parts else None
+            folder_exists = folder_path is not None and os.path.exists(folder_path)
+            
+            # Vault/DB 아카이브 파일 매핑 조회
+            archive_map = get_job_archive_files(target_job_id)
+            
+            if not folder_exists:
+                st.warning("⚠️ 해당 원본 폴더(machining_raw_data)가 로컬 디스크에서 유실/삭제된 상태입니다.\n\n"
+                           "현재 **안전 보관소(Vault & DB Archive)**에서 실시간 스트리밍 다운로드가 가능하며, 아래 버튼을 눌러 로컬 디스크로 즉시 복원할 수도 있습니다.")
+                c_res1, c_res2 = st.columns([1, 3])
+                with c_res1:
+                    if st.button("🔄 로컬 디스크로 원본 파일 자동 복원", key="btn_restore_disk", type="secondary"):
+                        with st.spinner("Vault 및 DB로부터 파일을 복원하는 중입니다..."):
+                            dest, count = restore_single_job_to_raw_data(target_job_id)
+                            if count > 0:
+                                st.success(f"총 {count}개의 원본 파일이 {dest}에 정상 복구되었습니다!")
+                                st.rerun()
+                            else:
+                                st.error("복구할 수 있는 백업 파일이 Vault/DB에 존재하지 않습니다.")
+            
+            st.divider()
+            st.markdown("#### 📦 전체 데이터 다운로드")
+            st.write("해당 Job의 모든 원본 파일과 가공/분석 데이터를 한 번에 압축하여 다운로드합니다.")
+            
+            if st.button("전체 파일 압축 준비하기", type="primary", key="btn_all"):
+                with st.spinner("전체 파일을 압축하는 중입니다..."):
+                    if folder_exists:
+                        data_path, fname, mime, is_temp = get_download_data_from_folder(folder_path, ['전체'])
                     else:
-                        selected_cats = st.multiselect("다운로드할 데이터 유형 선택 (여러 개 선택 가능):", valid_categories)
-                    
-                    if st.button("선택한 데이터 다운로드 준비하기", key="btn_selective"):
-                        if not selected_cats:
-                            st.warning("선택된 데이터가 없습니다.")
-                        else:
-                            with st.spinner("파일을 준비하는 중입니다..."):
-                                import tempfile
-                                import zipfile
-                                
-                                sf_parts = sf.replace('\\', '/').split('/')
-                                project_name = sf_parts[0] if len(sf_parts) > 0 else "Project"
-                                part_name = sf_parts[1].replace(' ', '') if len(sf_parts) > 1 else "Part"
-                                j_id = sf_parts[2] if len(sf_parts) > 2 else str(target_job_id)
-                                base_name = f"{project_name}_{part_name}_{j_id}"
-                                
-                                dl_items = []
-                                for cat in selected_cats:
-                                    cat_files = []
-                                    cat_eng = ""
-                                    if '표면 조도' in cat: cat_eng = "SurfaceRoughness"
-                                    elif '고주파' in cat: cat_eng = "TDMS"
-                                    elif 'NC' in cat: cat_eng = "NCProgram"
-                                    elif '메타데이터' in cat: cat_eng = "XMLMetadata"
-                                    elif 'Parquet' in cat: cat_eng = "ParquetData"
-                                    elif '로그' in cat: cat_eng = "EquipmentLog"
-                                    
-                                    for root, dirs, files in os.walk(folder_path):
-                                        for file in files:
-                                            abs_path = os.path.join(root, file)
-                                            rel_path = os.path.relpath(abs_path, folder_path)
-                                            l_path = abs_path.lower()
+                        data_path = create_single_job_zip(target_job_id, ['전체'])
+                        mime = "application/zip"
+                        
+                    if data_path:
+                        st.session_state['dl_all_path'] = data_path
+                        st.session_state['dl_all_fname'] = f"{base_name}_AllData.zip"
+                        st.session_state['dl_all_mime'] = mime
+                    else:
+                        st.error("다운로드할 수 있는 원본/아카이브 파일이 없습니다.")
+                        
+            if 'dl_all_path' in st.session_state and st.session_state.get('dl_all_fname'):
+                if os.path.exists(st.session_state['dl_all_path']):
+                    st.success("전체 파일 압축이 완료되었습니다!")
+                    with open(st.session_state['dl_all_path'], "rb") as f:
+                        st.download_button(
+                            label="📥 전체 다운로드 (ZIP)",
+                            data=f,
+                            file_name=st.session_state['dl_all_fname'],
+                            mime=st.session_state['dl_all_mime']
+                        )
+                
+            st.divider()
+            st.markdown("#### 🎯 선택적 데이터 다운로드")
+            st.write("원하는 카테고리의 데이터만 선별하여 다운로드합니다.")
+            
+            # 가용 카테고리 검사 (디스크 또는 아카이브)
+            available_cats = set()
+            if folder_exists:
+                for root_dir, dirs, files in os.walk(folder_path):
+                    for file in files:
+                        l_path = file.lower()
+                        if 'surface' in l_path or '조도' in l_path or l_path.endswith('.fpk'):
+                            available_cats.add('표면 조도 (Surface Roughness)')
+                        if l_path.endswith('.tdms'):
+                            available_cats.add('고주파 센서 (tdms)')
+                        if l_path.endswith('.nc'):
+                            available_cats.add('NC 프로그램 (nc)')
+                        if l_path.endswith('.xml') and 'coeff' not in l_path:
+                            available_cats.add('메타데이터 (xml)')
+                        if 'parquet' in l_path:
+                            available_cats.add('Parquet 데이터 (parquet)')
+                        if l_path.endswith('.log') or l_path.endswith('.csv'):
+                            available_cats.add('장비 로그 (log)')
+            else:
+                if archive_map.get('roughness'): available_cats.add('표면 조도 (Surface Roughness)')
+                if archive_map.get('tdms'): available_cats.add('고주파 센서 (tdms)')
+                if archive_map.get('nc'): available_cats.add('NC 프로그램 (nc)')
+                if archive_map.get('xml'): available_cats.add('메타데이터 (xml)')
+                if archive_map.get('parquet'): available_cats.add('Parquet 데이터 (parquet)')
+                if archive_map.get('log'): available_cats.add('장비 로그 (log)')
+                        
+            categories = [
+                '표면 조도 (Surface Roughness)',
+                '고주파 센서 (tdms)',
+                'NC 프로그램 (nc)',
+                '메타데이터 (xml)',
+                'Parquet 데이터 (parquet)',
+                '장비 로그 (log)'
+            ]
+            
+            valid_categories = [c for c in categories if c in available_cats]
+            selected_cats = []
+            
+            if not valid_categories:
+                st.warning("다운로드할 수 있는 상세 데이터 파일이 원본 폴더 및 아카이브에 존재하지 않습니다.")
+            else:
+                selected_cats = st.multiselect("다운로드할 데이터 유형 선택 (여러 개 선택 가능):", valid_categories)
+            
+            if st.button("선택한 데이터 다운로드 준비하기", key="btn_selective"):
+                if not selected_cats:
+                    st.warning("선택된 데이터가 없습니다.")
+                else:
+                    with st.spinner("파일을 준비하는 중입니다..."):
+                        import tempfile
+                        import zipfile
+                        
+                        dl_items = []
+                        for cat in selected_cats:
+                            cat_files = []
+                            cat_eng = ""
+                            cat_key = ""
+                            if '표면 조도' in cat: cat_eng = "SurfaceRoughness"; cat_key = 'roughness'
+                            elif '고주파' in cat: cat_eng = "TDMS"; cat_key = 'tdms'
+                            elif 'NC' in cat: cat_eng = "NCProgram"; cat_key = 'nc'
+                            elif '메타데이터' in cat: cat_eng = "XMLMetadata"; cat_key = 'xml'
+                            elif 'Parquet' in cat: cat_eng = "ParquetData"; cat_key = 'parquet'
+                            elif '로그' in cat: cat_eng = "EquipmentLog"; cat_key = 'log'
+                            
+                            if folder_exists:
+                                for root, dirs, files in os.walk(folder_path):
+                                    for file in files:
+                                        abs_path = os.path.join(root, file)
+                                        rel_path = os.path.relpath(abs_path, folder_path)
+                                        l_path = abs_path.lower()
+                                        
+                                        include = False
+                                        if cat == '표면 조도 (Surface Roughness)' and ('surface' in l_path or '조도' in l_path or l_path.endswith('.fpk')):
+                                            include = True
+                                        elif cat == '고주파 센서 (tdms)' and l_path.endswith('.tdms'):
+                                            include = True
+                                        elif cat == 'NC 프로그램 (nc)' and l_path.endswith('.nc'):
+                                            include = True
+                                        elif cat == '메타데이터 (xml)' and l_path.endswith('.xml') and 'coeff' not in l_path:
+                                            include = True
+                                        elif cat == 'Parquet 데이터 (parquet)' and 'parquet' in l_path:
+                                            include = True
+                                        elif cat == '장비 로그 (log)' and (l_path.endswith('.log') or l_path.endswith('.csv')):
+                                            include = True
                                             
-                                            include = False
-                                            if cat == '표면 조도 (Surface Roughness)' and ('surface' in l_path or '조도' in l_path or l_path.endswith('.fpk')):
-                                                include = True
-                                            elif cat == '고주파 센서 (tdms)' and l_path.endswith('.tdms'):
-                                                include = True
-                                            elif cat == 'NC 프로그램 (nc)' and l_path.endswith('.nc'):
-                                                include = True
-                                            elif cat == '메타데이터 (xml)' and l_path.endswith('.xml') and 'coeff' not in l_path:
-                                                include = True
-                                            elif cat == 'Parquet 데이터 (parquet)' and 'parquet' in l_path:
-                                                include = True
-                                            elif cat == '장비 로그 (log)' and l_path.endswith('.log'):
-                                                include = True
-                                                
-                                            if include:
-                                                cat_files.append((abs_path, rel_path))
-                                                
-                                    if not cat_files:
-                                        continue
+                                        if include:
+                                            cat_files.append((abs_path, rel_path))
+                            else:
+                                for abs_p, bname, arcname in archive_map.get(cat_key, []):
+                                    if os.path.exists(abs_p):
+                                        cat_files.append((abs_p, arcname))
                                         
-                                    cat_short_name = cat.split(' (')[0]
-                                    if len(cat_files) == 1:
-                                        abs_path, rel_path = cat_files[0]
-                                        file_name = os.path.basename(abs_path)
-                                        mime = "application/octet-stream"
-                                        ext = os.path.splitext(file_name)[1]
-                                        
-                                        if file_name.endswith('.xml'): mime = "text/xml"
-                                        elif file_name.endswith('.txt') or file_name.endswith('.log'): mime = "text/plain"
-                                        
-                                        dl_fname = f"{base_name}_{cat_eng}{ext}"
-                                        
-                                        dl_items.append({
-                                            'label': f"📥 {cat_short_name} 다운로드 ({file_name})",
-                                            'path': abs_path,
-                                            'fname': dl_fname,
-                                            'mime': mime
-                                        })
-                                    else:
-                                        temp_zip = tempfile.NamedTemporaryFile(delete=False, suffix='.zip')
-                                        with zipfile.ZipFile(temp_zip.name, 'w', zipfile.ZIP_DEFLATED) as zf:
-                                            for abs_path, rel_path in cat_files:
-                                                zf.write(abs_path, arcname=rel_path)
-                                                
-                                        dl_fname = f"{base_name}_{cat_eng}.zip"
-                                        dl_items.append({
-                                            'label': f"📥 {cat_short_name} 다운로드 (ZIP)",
-                                            'path': temp_zip.name,
-                                            'fname': dl_fname,
-                                            'mime': "application/zip"
-                                        })
+                            if not cat_files:
+                                continue
                                 
-                                st.session_state['dl_sel_items'] = dl_items
+                            cat_short_name = cat.split(' (')[0]
+                            if len(cat_files) == 1:
+                                abs_path, rel_path = cat_files[0]
+                                file_name = os.path.basename(abs_path)
+                                mime = "application/octet-stream"
+                                ext = os.path.splitext(file_name)[1]
                                 
-                    if st.session_state.get('dl_sel_items'):
-                        st.success("선택하신 파일들이 준비되었습니다! 아래 버튼을 눌러 개별 다운로드하세요.")
-                        for idx, item in enumerate(st.session_state['dl_sel_items']):
-                            with open(item['path'], "rb") as f:
-                                st.download_button(
-                                    label=item['label'],
-                                    data=f,
-                                    file_name=item['fname'],
-                                    mime=item['mime'],
-                                    key=f"dl_btn_{sf}_{idx}"
-                                )
+                                if file_name.endswith('.xml'): mime = "text/xml"
+                                elif file_name.endswith('.txt') or file_name.endswith('.log') or file_name.endswith('.csv'): mime = "text/plain"
+                                
+                                dl_fname = f"{base_name}_{cat_eng}{ext}"
+                                dl_items.append({
+                                    'label': f"📥 {cat_short_name} 다운로드 ({file_name})",
+                                    'path': abs_path,
+                                    'fname': dl_fname,
+                                    'mime': mime
+                                })
+                            else:
+                                temp_zip = tempfile.NamedTemporaryFile(delete=False, suffix='.zip')
+                                with zipfile.ZipFile(temp_zip.name, 'w', zipfile.ZIP_DEFLATED) as zf:
+                                    for abs_path, rel_path in cat_files:
+                                        zf.write(abs_path, arcname=rel_path)
+                                        
+                                dl_fname = f"{base_name}_{cat_eng}.zip"
+                                dl_items.append({
+                                    'label': f"📥 {cat_short_name} 다운로드 (ZIP)",
+                                    'path': temp_zip.name,
+                                    'fname': dl_fname,
+                                    'mime': "application/zip"
+                                })
+                        
+                        st.session_state['dl_sel_items'] = dl_items
+                        
+            if st.session_state.get('dl_sel_items'):
+                st.success("선택하신 파일들이 준비되었습니다! 아래 버튼을 눌러 개별 다운로드하세요.")
+                for idx, item in enumerate(st.session_state['dl_sel_items']):
+                    if os.path.exists(item['path']):
+                        with open(item['path'], "rb") as f:
+                            st.download_button(
+                                label=item['label'],
+                                data=f,
+                                file_name=item['fname'],
+                                mime=item['mime'],
+                                key=f"dl_btn_{sf}_{idx}"
+                            )
 
 elif nav_menu == "DB 테이블 조회":
     st.header("🗄️ DB 테이블 통합 조회")

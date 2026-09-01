@@ -6,11 +6,14 @@ from nptdms import TdmsFile
 
 from job_manager import get_or_create_job
 
+from vault_manager import save_to_vault
+
 def parse_tdms(file_path, job_id):
     """
     TDMS 파일 처리를 담당하는 모듈.
     무거운 파싱을 피하기 위해 원본 대신 read_metadata()를 사용해 
     가공 시작 일시 등 메타데이터만 0.1초만에 스캔하여 DB를 보완하고 파일 경로를 매핑합니다.
+    동시에 원본 TDMS 파일을 archive_vault에 안전하게 복사 백업합니다.
     """
     print(f"  -> [TDMS Parser] 파일: {os.path.basename(file_path)} / Job ID: {job_id}")
     
@@ -57,8 +60,25 @@ def parse_tdms(file_path, job_id):
 
         # 파일 경로 업데이트
         job.tdms_file_path = file_path
+        
+        # Vault에 TDMS 원본 백업
+        tdms_vault_rel = save_to_vault(file_path, "tdms_files", f"Job_{job.job_id}", os.path.basename(file_path))
+        
         db.commit()
-        print(f"    - TDMS 메타데이터 파싱 및 파일 참조 매핑 완료 (내부 PK: {job.job_id})")
+        print(f"    - TDMS 메타데이터 파싱, Vault 백업({tdms_vault_rel}) 및 파일 참조 매핑 완료 (내부 PK: {job.job_id})")
+        
+        # Parquet 시각화 데이터 즉시 연동 생성
+        try:
+            from tdms_visualizer import process_tdms_file
+            res = process_tdms_file(job)
+            if res and res[0]:
+                job.tdms_parquet_path = res[0]
+                job.tdms_fft_parquet_path = res[1]
+                db.commit()
+                print(f"    - TDMS 시각화 Parquet 즉시 생성 완료: {res[0]}")
+        except Exception as v_err:
+            print(f"    - [Visualizer 즉시 연동 경고]: {v_err}")
+            
         return True
 
     except Exception as e:

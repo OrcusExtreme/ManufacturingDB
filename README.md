@@ -5,7 +5,7 @@
 [![ORM](https://img.shields.io/badge/SQLAlchemy-2.0%2B-red.svg)](https://www.sqlalchemy.org/)
 [![Frontend](https://img.shields.io/badge/Streamlit-1.61%2B-FF4B4B.svg)](https://streamlit.io/)
 [![Standard](https://img.shields.io/badge/Standard-ISO%2014649%20(STEP--NC)-green.svg)](https://www.iso.org/)
-[![Release](https://img.shields.io/badge/Release-V2.0.1-brightgreen.svg)](https://github.com/OrcusExtreme/ManufacturingDB)
+[![Release](https://img.shields.io/badge/Release-V2.0.2-brightgreen.svg)](https://github.com/OrcusExtreme/ManufacturingDB)
 
 공작기계지능화실험실(Machine Tool Intelligence Lab)의 **통합 스마트 제조 데이터베이스 및 실시간 분석 플랫폼**입니다.  
 공작기계(CNC)에서 생성되는 다양한 이기종 데이터(XML 메타데이터, NC 프로그램, 100kHz+ 고주파 NI TDMS 진동 센서, 1Hz CNC 상태 로그, 표면 조도 측정 CSV, 3D CAD 도면)를 **Watchdog 기반으로 자동 감시·수집·파싱**하여 **ISO 14649(STEP-NC) 표준 기반 RDBMS**에 정규화 적재하고, 연구원 및 관리자에게 고성능 웹 대시보드를 제공합니다.
@@ -185,6 +185,10 @@ python run_system.py
 ---
 
 ## 📜 릴리즈 노트 (Release Notes)
+
+### [V2.0.2] - 2026-09-01
+- **포트 이원화 배포**: 관리자(8501), 사용자(8502) 대시보드 포트 분리 및 Python UI 안정화
+- **백그라운드 처리 최적화**: 파싱 및 데이터 삽입 과정의 백그라운드 데몬 및 프로세스 처리 개선
 
 ### [V2.0.1] - 2026-08-31
 - **DB 스키마 명세 고도화**: ISO 14649 표준 준수 14개 테이블의 완벽한 컬럼 정의 및 제약조건/CASCADE 정책 문서화

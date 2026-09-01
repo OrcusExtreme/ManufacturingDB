@@ -10,6 +10,11 @@ from vault_manager import save_to_vault
 
 from job_manager import get_or_create_job
 
+BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PROJECT_ROOT = os.path.dirname(BACKEND_DIR)
+PROCESSED_DIR = os.path.join(PROJECT_ROOT, "processed_data")
+os.makedirs(PROCESSED_DIR, exist_ok=True)
+
 def parse_roughness(job_folder_path, job_id=None):
     """
     job_folder_path (예: machining_raw_data/Alchemist_Test_250917) 내의 
@@ -32,8 +37,6 @@ def parse_roughness(job_folder_path, job_id=None):
                 
         # 2. 곡선 파일 파싱 및 Parquet 저장
         curve_files = glob.glob(os.path.join(target_dir, "*평가곡선*.CSV"))
-        parquet_dir = os.path.join(job_folder_path, "processed_parquet")
-        os.makedirs(parquet_dir, exist_ok=True)
         
         for cf in curve_files:
             try:
@@ -45,7 +48,7 @@ def parse_roughness(job_folder_path, job_id=None):
                 else:
                     measure_name = base_name
                     
-                parquet_path = os.path.join(parquet_dir, f"roughness_{measure_name}.parquet")
+                parquet_path = os.path.join(PROCESSED_DIR, f"roughness_job_{job_pk}_{measure_name}.parquet")
                 
                 # Parsing specific mitutoyo curve CSV
                 # We skip lines until DATANUM: is found

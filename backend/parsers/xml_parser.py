@@ -185,13 +185,19 @@ def parse_xml(file_path, job_id):
         if len(folder_parts) >= 3:
             parsed_rp = folder_parts[-3]
             parsed_cpn = folder_parts[-2]
+            
+        is_num = folder_parts[-1].isdigit() if folder_parts else False
         
-        # Check uniqueness by source_folder ONLY to prevent IntegrityError
-        existing_job = db.query(Job).filter(
-            Job.source_folder == job_id
-        ).first()
+        # Check uniqueness by job_id PK or source_folder
+        if is_num:
+            existing_job = db.query(Job).filter(
+                (Job.job_id == int(folder_parts[-1])) | (Job.source_folder == job_id)
+            ).first()
+        else:
+            existing_job = db.query(Job).filter(
+                Job.source_folder == job_id
+            ).first()
         
-        xml_vault_path = save_to_vault(file_path, "jobs", job_id, "metadata.xml")
         xml_binary_data_to_save = None
         if os.path.exists(file_path):
             with open(file_path, 'rb') as xf:
@@ -202,7 +208,12 @@ def parse_xml(file_path, job_id):
                     print(f"    - [알림] XML 파일이 15MB를 초과하여 DB 내부 저장을 생략합니다.")
         
         if existing_job:
-            print(f"    - 이미 존재하는 Job (폴더: {job_id}) 발견. Job 정보를 업데이트합니다.")
+            canonical_sf = f"{parsed_rp or existing_job.research_project or 'Unknown'}/{parsed_cpn or existing_job.custom_part_name or 'Unknown'}/{existing_job.job_id}"
+            if existing_job.source_folder != canonical_sf:
+                existing_job.source_folder = canonical_sf
+                
+            xml_vault_path = save_to_vault(file_path, "jobs", *canonical_sf.split('/'), "metadata.xml")
+            print(f"    - 이미 존재하는 Job (PK: {existing_job.job_id} / 폴더: {existing_job.source_folder}) 발견. Job 정보를 업데이트합니다.")
             existing_job.start_time = start_time
             existing_job.workplan_id = workplan_id
             existing_job.work_id = work_id
@@ -228,7 +239,6 @@ def parse_xml(file_path, job_id):
                 db.add(JobFileArchive(job_id=existing_job.job_id, xml_file_path=xml_vault_path, xml_file_content=xml_binary_data_to_save))
         else:
             new_job = Job(
-                source_folder=job_id,
                 workplan_id=workplan_id,
                 work_id=work_id,
                 machine_code=root.findtext('MachineCode'),
@@ -246,6 +256,11 @@ def parse_xml(file_path, job_id):
             )
             db.add(new_job)
             db.flush()
+            
+            new_job.source_folder = f"{parsed_rp or 'Unknown'}/{parsed_cpn or 'Unknown'}/{new_job.job_id}"
+            db.flush()
+            
+            xml_vault_path = save_to_vault(file_path, "jobs", *new_job.source_folder.split('/'), "metadata.xml")
             db.add(JobFileArchive(job_id=new_job.job_id, xml_file_path=xml_vault_path, xml_file_content=xml_binary_data_to_save))
             
         db.commit()

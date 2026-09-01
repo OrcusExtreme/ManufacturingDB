@@ -6,20 +6,50 @@ from scipy.signal import welch
 from nptdms import TdmsFile
 from DB.database import SessionLocal
 from DB.models import Job, JobFileArchive
+from vault_manager import save_to_vault, get_abs_vault_path
 
 TARGET_DATAPOINTS = 10000
 
+# Root processed_data directory (independent from machining_raw_data)
+BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(BACKEND_DIR)
+PROCESSED_DIR = os.path.join(PROJECT_ROOT, "processed_data")
+os.makedirs(PROCESSED_DIR, exist_ok=True)
+
+def find_tdms_path(job):
+    """
+    Job의 TDMS 파일 경로를 찾습니다.
+    1. job.tdms_file_path 확인
+    2. 없으면 archive_vault 내의 백업 TDMS 탐색
+    """
+    if job.tdms_file_path and os.path.exists(job.tdms_file_path):
+        return job.tdms_file_path
+        
+    # Vault 탐색
+    vault_rel_paths = [
+        f"tdms_files/Job_{job.job_id}/{os.path.basename(job.tdms_file_path)}" if job.tdms_file_path else None,
+        f"tdms/Job_{job.job_id}/{os.path.basename(job.tdms_file_path)}" if job.tdms_file_path else None,
+        f"jobs/{job.source_folder}/data.tdms" if job.source_folder else None
+    ]
+    for vp in vault_rel_paths:
+        if vp:
+            abs_p = get_abs_vault_path(vp)
+            if abs_p and os.path.exists(abs_p):
+                return abs_p
+                
+    return None
+
 def process_tdms_file(job):
     print(f"\n[TDMS Visualizer] 작업 시작: Job ID {job.job_id}")
-    tdms_path = job.tdms_file_path
+    tdms_path = find_tdms_path(job)
     
-    if not os.path.exists(tdms_path):
-        print(f"  - [오류] 파일을 찾을 수 없습니다: {tdms_path}")
+    if not tdms_path or not os.path.exists(tdms_path):
+        print(f"  - [오류] TDMS 파일을 찾을 수 없습니다: {job.tdms_file_path}")
         return False
         
     try:
         start_t = time.time()
-        print(f"  - TDMS 로딩 중... (파일 크기: {os.path.getsize(tdms_path)/1024/1024:.1f} MB)")
+        print(f"  - TDMS 로딩 중... (경로: {tdms_path}, 크기: {os.path.getsize(tdms_path)/1024/1024:.1f} MB)")
         
         cnc_df = pd.DataFrame()
         daq_df = pd.DataFrame()
@@ -76,14 +106,9 @@ def process_tdms_file(job):
                 fft_df = pd.DataFrame(fft_data)
                 print(f"  - DAQ 그룹 파싱 및 주파수 분석 완료 (Time 샘플: {len(daq_df)}, FFT Bin: {len(fft_df)})")
         
-        # Parquet 저장 경로를 원본 TDMS 폴더 하위의 'processed_parquet' 폴더로 지정
-        tdms_dir = os.path.dirname(tdms_path)
-        processed_dir = os.path.join(tdms_dir, 'processed_parquet')
-        if not os.path.exists(processed_dir):
-            os.makedirs(processed_dir)
-            
-        parquet_path = os.path.join(processed_dir, f"job_{job.job_id}_viz.parquet")
-        fft_parquet_path = os.path.join(processed_dir, f"job_{job.job_id}_fft.parquet")
+        # Parquet 저장 경로를 독립된 processed_data 폴더로 지정
+        parquet_path = os.path.join(PROCESSED_DIR, f"job_{job.job_id}_viz.parquet")
+        fft_parquet_path = os.path.join(PROCESSED_DIR, f"job_{job.job_id}_fft.parquet")
         
         # CNC와 DAQ 행 길이가 다를 수 있으므로 인덱스를 리셋하고 concat (가로 병합)
         if not cnc_df.empty or not daq_df.empty:
@@ -123,17 +148,25 @@ def run_visualizer_batch():
     while True:
         db = SessionLocal()
         try:
-            # TDMS 파일 경로는 존재하지만 아직 Parquet 처리가 안 된 Job 검색
-            jobs = db.query(Job).filter(
-                Job.tdms_file_path.isnot(None),
-                Job.tdms_parquet_path.is_(None)
+            # TDMS 파일 경로는 존재하지만 Parquet가 없거나 파일이 유실된 Job 검색
+            candidate_jobs = db.query(Job).filter(
+                Job.tdms_file_path.isnot(None)
             ).all()
             
+            jobs = []
+            for j in candidate_jobs:
+                if not j.tdms_parquet_path:
+                    jobs.append(j)
+                elif not os.path.exists(j.tdms_parquet_path):
+                    expected_p = os.path.join(PROCESSED_DIR, f"job_{j.job_id}_viz.parquet")
+                    if not os.path.exists(expected_p):
+                        jobs.append(j)
+            
             if jobs:
-                print(f"총 {len(jobs)}개의 신규 TDMS 파일을 처리합니다.")
+                print(f"총 {len(jobs)}개의 TDMS Parquet 미생성/유실 건을 처리합니다.")
                 for job in jobs:
                     res = process_tdms_file(job)
-                    if res is False:
+                    if res is False or not res:
                         continue
                     
                     parquet_path, fft_parquet_path = res
@@ -141,25 +174,31 @@ def run_visualizer_batch():
                         job.tdms_parquet_path = parquet_path
                         job.tdms_fft_parquet_path = fft_parquet_path
                         
-                        # DB에 Parquet 파일 원본(BLOB) 삽입
+                        # Vault에도 Parquet 이중 백업
+                        tdms_parquet_vault = save_to_vault(parquet_path, "processed_parquet", f"job_{job.job_id}_viz.parquet")
+                        tdms_fft_vault = save_to_vault(fft_parquet_path, "processed_parquet", f"job_{job.job_id}_fft.parquet") if fft_parquet_path else None
+                        
+                        # machining_raw_data 내 processed_parquet 폴더에도 동기화 복사
+                        if job.source_folder:
+                            raw_job_dir = os.path.join(PROJECT_ROOT, "machining_raw_data", *job.source_folder.split('/'), "processed_parquet")
+                            os.makedirs(raw_job_dir, exist_ok=True)
+                            import shutil
+                            shutil.copy2(parquet_path, os.path.join(raw_job_dir, f"job_{job.job_id}_viz.parquet"))
+                            if fft_parquet_path:
+                                shutil.copy2(fft_parquet_path, os.path.join(raw_job_dir, f"job_{job.job_id}_fft.parquet"))
+                        
                         job_archive = db.query(JobFileArchive).filter(JobFileArchive.job_id == job.job_id).first()
                         if not job_archive:
                             job_archive = JobFileArchive(job_id=job.job_id)
                             db.add(job_archive)
                             
-                        if os.path.exists(parquet_path):
-                            with open(parquet_path, 'rb') as f:
-                                job_archive.tdms_parquet_file = f.read()
-                        if fft_parquet_path and os.path.exists(fft_parquet_path):
-                            with open(fft_parquet_path, 'rb') as f:
-                                job_archive.tdms_fft_parquet_file = f.read()
+                        job_archive.tdms_parquet_file_path = tdms_parquet_vault
+                        job_archive.tdms_fft_parquet_file_path = tdms_fft_vault
                         
                         db.commit()
-                        print(f"  - DB 업데이트 완료 (Job ID: {job.job_id})")
+                        print(f"  - DB, Vault 및 raw_data 동기화 완료 (Job ID: {job.job_id})")
                     else:
-                        job.tdms_parquet_path = "FAILED"
-                        db.commit()
-                        print(f"  - 파싱 실패, Job {job.job_id} 제외 처리")
+                        print(f"  - 파싱 실패 또는 대상 그룹 없음 (Job ID: {job.job_id})")
         except Exception as e:
             print(f"배치 실행 중 오류 발생: {e}")
             db.rollback()
@@ -170,3 +209,4 @@ def run_visualizer_batch():
 
 if __name__ == "__main__":
     run_visualizer_batch()
+

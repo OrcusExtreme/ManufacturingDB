@@ -42,6 +42,86 @@ class MachiningDataHandler(FileSystemEventHandler):
             del self.processed_files[file_path_norm]
         self.file_queue.put(event.src_path)
         
+    def on_deleted(self, event):
+        path_norm = os.path.normpath(event.src_path)
+        if path_norm in self.processed_files:
+            del self.processed_files[path_norm]
+            
+        # machining_raw_data 하위 경로 분석
+        parts = path_norm.split(os.sep)
+        try:
+            raw_idx = parts.index("machining_raw_data")
+            rel_parts = [p for p in parts[raw_idx + 1:] if p]
+        except ValueError:
+            return
+            
+        # 백그라운드 스레드에서 프로젝트/부품/Job/파일 단위 유실 검사 및 자동 복구 수행
+        threading.Thread(target=self._auto_restore_by_rel_parts, args=(rel_parts,), daemon=True).start()
+
+    def _auto_restore_by_rel_parts(self, rel_parts):
+        time.sleep(1.5)  # 디바운스 대기
+        from DB.database import SessionLocal
+        from DB.models import Job
+        from recovery_engine import restore_single_job_to_raw_data
+        
+        db = SessionLocal()
+        try:
+            target_jobs = []
+            if len(rel_parts) == 0:
+                # machining_raw_data 폴더 자체가 통째로 삭제된 경우 -> 전체 복원
+                target_jobs = db.query(Job).all()
+            elif len(rel_parts) == 1:
+                # 프로젝트 단위 폴더 삭제 (예: TestProject, Alchemist)
+                proj = rel_parts[0]
+                target_jobs = db.query(Job).filter(
+                    (Job.research_project == proj) | (Job.source_folder.like(f"{proj}/%"))
+                ).all()
+            elif len(rel_parts) == 2:
+                # Part 단위 폴더 삭제 (예: Alchemist/Bracket)
+                prefix = f"{rel_parts[0]}/{rel_parts[1]}/"
+                target_jobs = db.query(Job).filter(Job.source_folder.like(f"{prefix}%")).all()
+            else:
+                # Job 단위 또는 개별 파일 삭제 (예: Alchemist/Bracket/1 또는 .../metadata.xml)
+                if rel_parts[2] == "CAD_Files":
+                    # Part 레벨 CAD 파일 삭제 감지 시 Part에 속한 Job의 CAD 복원
+                    prefix = f"{rel_parts[0]}/{rel_parts[1]}/"
+                    target_jobs = db.query(Job).filter(Job.source_folder.like(f"{prefix}%")).all()
+                else:
+                    sf = f"{rel_parts[0]}/{rel_parts[1]}/{rel_parts[2]}"
+                    is_num = rel_parts[2].isdigit()
+                    target_jobs = db.query(Job).filter(
+                        (Job.source_folder == sf) | 
+                        ((Job.job_id == int(rel_parts[2])) if is_num else False)
+                    ).all()
+                    
+            if not target_jobs:
+                if len(rel_parts) > 0:
+                    deleted_target = '/'.join(rel_parts)
+                    print(f"\n[자동 복원 알림] 삭제 감지된 '{deleted_target}'는 DB에 등록된 가공 이력이 없어 복원 대상에서 제외됩니다.")
+                return
+                
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            watch_dir = os.path.join(os.path.dirname(base_dir), "machining_raw_data")
+            
+            for job in target_jobs:
+                sf = job.source_folder or f"Job_{job.job_id}"
+                dest_dir = os.path.join(watch_dir, *sf.split('/'))
+                
+                # 폴더가 없거나 파일이 유실된 경우 복원
+                if not os.path.exists(dest_dir) or len(os.listdir(dest_dir)) == 0:
+                    print(f"\n[자동 복원 트리거] {sf} (Job ID: {job.job_id}) 유실 감지 -> Vault/DB에서 자동 복원을 진행합니다.")
+                    dest, count = restore_single_job_to_raw_data(job.job_id)
+                    if count > 0:
+                        print(f"[자동 복원 완료] {sf}에 총 {count}개의 파일이 복구되었습니다.\n")
+                        if os.path.exists(dest_dir):
+                            for root_d, _, files in os.walk(dest_dir):
+                                for f in files:
+                                    self._mark_processed(os.path.normpath(os.path.join(root_d, f)))
+        except Exception as e:
+            print(f"[자동 복원 에러]: {e}")
+        finally:
+            db.close()
+        
     def _process_queue(self):
         while True:
             file_path = self.file_queue.get()
@@ -118,7 +198,24 @@ class MachiningDataHandler(FileSystemEventHandler):
             return
             
         if len(rel_parts) > 3 and rel_parts[3].lower() == "etc":
-            print(f"[처리 보류] etc 폴더 내의 참고용 파일은 파싱하지 않습니다: {file_path_norm}")
+            project_name = rel_parts[0]
+            part_name = rel_parts[1]
+            folder_level_3 = rel_parts[2]
+            current_job_id = f"{project_name}/{part_name}/{folder_level_3}"
+            
+            print(f"[Vault 백업] etc 참고용 파일을 안전 보관소(Vault)에 백업합니다: {file_path_norm}")
+            from job_manager import get_or_create_job
+            from DB.database import SessionLocal
+            from vault_manager import save_to_vault
+            
+            db_s = SessionLocal()
+            try:
+                job = get_or_create_job(db_s, current_job_id)
+                save_to_vault(file_path_norm, "etc_files", f"Job_{job.job_id}", file_name)
+            except Exception as e_etc:
+                print(f"[etc Vault 백업 에러]: {e_etc}")
+            finally:
+                db_s.close()
             return
             
         project_name = rel_parts[0]

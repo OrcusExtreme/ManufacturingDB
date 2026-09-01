@@ -52,3 +52,13 @@ def get_abs_vault_path(relative_vault_path):
         return None
     subpaths = relative_vault_path.split("/")
     return os.path.join(VAULT_ROOT, *subpaths)
+
+def file_exists_in_vault(relative_vault_path):
+    """
+    Checks if a file exists in the vault.
+    """
+    if not relative_vault_path:
+        return False
+    abs_path = get_abs_vault_path(relative_vault_path)
+    return abs_path is not None and os.path.exists(abs_path)
+
