@@ -184,7 +184,12 @@ python run_system.py
 
 ---
 
-## 📜 릴리즈 노트 (Release Notes)
+## 🚀 릴리즈 노트 (Release Notes)
+
+### [V2.0.3] - 2026-09-02
+- **관리자 DB 데이터 편집 모듈 탑재**: Admin Dashboard(Port 8501)에 "DB 테이블 관리" 메뉴를 신설하고, Root 계정 인증을 통해 PK/FK를 보호하며 나머지 데이터를 안전하게 편집(UPDATE/INSERT/DELETE)할 수 있는 모달형 실시간 에디터 추가
+- **파일 Vault 복구 엔진 안정화**: Vault 원본 아카이브와 `machining_raw_data` 간의 복구 매핑 경로를 절대경로에서 유연한 상대경로(Relative Path) 체계로 전면 리팩토링 및 데이터 무결성 검증 완료
+- **Job 선택 UI 직관성 개선**: User Dashboard(Port 8502)의 Job ID 선택 드롭다운에 "Job ID - Part 명 가공종류" 포맷(예: Job 2 - Computer 1차 가공)을 적용하여 사용자 편의성 극대화
 
 ### [V2.0.2] - 2026-09-01
 - **포트 이원화 배포**: 관리자(8501), 사용자(8502) 대시보드 포트 분리 및 Python UI 안정화

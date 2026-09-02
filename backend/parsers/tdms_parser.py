@@ -1,5 +1,7 @@
 import os
+import re
 import datetime
+import pandas as pd
 from DB.database import SessionLocal
 from DB.models import Job, Workplan
 from nptdms import TdmsFile
@@ -22,7 +24,20 @@ def parse_tdms(file_path, job_id):
         # Job 가져오기 또는 생성 (XML 독립)
         job = get_or_create_job(db, job_id)
 
-        # --- [NEW] 메타데이터 초고속 추출 로직 ---
+        # 1. 파일명에서 타임스탬프 (YYMMDDHHMMSS) 1차 추출
+        fname = os.path.basename(file_path)
+        m = re.search(r'__(\d{12})\.tdms', fname, re.IGNORECASE)
+        if m:
+            ts_str = m.group(1)
+            try:
+                dt = datetime.datetime.strptime(f"20{ts_str}", "%Y%m%d%H%M%S")
+                if job.start_time is None:
+                    job.start_time = dt
+                    print(f"    - [TDMS Parser] 파일명에서 가공 일시 추출 반영: {dt}")
+            except Exception:
+                pass
+
+        # 2. 메타데이터 초고속 추출 로직
         try:
             with TdmsFile.read_metadata(file_path) as tdms_file:
                 if len(tdms_file.groups()) > 0:
@@ -32,14 +47,17 @@ def parse_tdms(file_path, job_id):
                     if target_ch:
                         props = target_ch.properties
                         
-                        # 1. wf_start_time 추출
+                        # wf_start_time 추출
                         wf_start_time = props.get('wf_start_time')
-                        if wf_start_time is not None:
-                            dt = wf_start_time.item()
-                            if isinstance(dt, datetime.datetime) and job.start_time is None:
+                        if wf_start_time is not None and job.start_time is None:
+                            try:
+                                dt = pd.to_datetime(wf_start_time).to_pydatetime()
                                 job.start_time = dt
+                                print(f"    - [TDMS Parser] wf_start_time 메타데이터 추출 반영: {dt}")
+                            except Exception:
+                                pass
                                 
-                        # 2. ProgramName, MaterialCode 추출 및 Workplan/Part 보완
+                        # ProgramName, MaterialCode 추출 및 Workplan/Part 보완
                         prog_name = props.get('ProgramName')
                         mat_code = props.get('MaterialCode')
                         
@@ -59,7 +77,8 @@ def parse_tdms(file_path, job_id):
         # -------------------------------------------
 
         # 파일 경로 업데이트
-        job.tdms_file_path = file_path
+        from vault_manager import get_rel_raw_data_path
+        job.tdms_file_path = get_rel_raw_data_path(file_path)
         
         # Vault에 TDMS 원본 백업
         tdms_vault_rel = save_to_vault(file_path, "tdms_files", f"Job_{job.job_id}", os.path.basename(file_path))

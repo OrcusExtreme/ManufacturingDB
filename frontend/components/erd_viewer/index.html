@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ERD Viewer Component</title>
+    <style>
+        :root {
+            /* Dark Theme Variables (Default) */
+            --bg-gradient: linear-gradient(145deg, #0d0f17 0%, #151824 100%);
+            --canvas-border: rgba(255, 255, 255, 0.12);
+            --node-bg: #1a1c26;
+            --node-border: rgba(255, 255, 255, 0.25);
+            --node-hover-bg: #222634;
+            --node-hover-border: #38bdf8;
+            --node-hover-glow: rgba(56, 189, 248, 0.4);
+            --node-selected-bg: #1e293b;
+            --node-selected-border: #00e5ff;
+            --node-selected-glow: rgba(0, 229, 255, 0.65);
+            --text-title: #ffffff;
+            --text-title-selected: #38bdf8;
+            --text-badge: #94a3b8;
+            --edge-color: #64748b;
+            --edge-highlight: #38bdf8;
+            --card-badge-bg: #0f172a;
+            --card-badge-border: rgba(255, 255, 255, 0.2);
+            --card-badge-text: #94a3b8;
+            --hud-bg: rgba(18, 22, 34, 0.85);
+            --hud-border: rgba(255, 255, 255, 0.15);
+            --ctrl-btn-bg: #1e2433;
+            --ctrl-btn-text: #e2e8f0;
+            --ctrl-btn-hover: #0284c7;
+            --top-hint-bg: rgba(18, 22, 34, 0.85);
+            --top-hint-text: #e2e8f0;
+            --top-hint-accent: #38bdf8;
+            --crow-circle: #ffffff;
+        }
+
+        /* Light Theme Palette */
+        body.light-theme {
+            --bg-gradient: linear-gradient(145deg, #f8fafc 0%, #f1f5f9 100%);
+            --canvas-border: rgba(0, 0, 0, 0.1);
+            --node-bg: #ffffff;
+            --node-border: #cbd5e1;
+            --node-hover-bg: #f0f9ff;
+            --node-hover-border: #0284c7;
+            --node-hover-glow: rgba(2, 132, 199, 0.25);
+            --node-selected-bg: #e0f2fe;
+            --node-selected-border: #0284c7;
+            --node-selected-glow: rgba(2, 132, 199, 0.45);
+            --text-title: #0f172a;
+            --text-title-selected: #0369a1;
+            --text-badge: #64748b;
+            --edge-color: #94a3b8;
+            --edge-highlight: #0284c7;
+            --card-badge-bg: #f8fafc;
+            --card-badge-border: #cbd5e1;
+            --card-badge-text: #334155;
+            --hud-bg: rgba(255, 255, 255, 0.92);
+            --hud-border: rgba(0, 0, 0, 0.12);
+            --ctrl-btn-bg: #f1f5f9;
+            --ctrl-btn-text: #334155;
+            --ctrl-btn-hover: #0284c7;
+            --top-hint-bg: rgba(255, 255, 255, 0.92);
+            --top-hint-text: #1e293b;
+            --top-hint-accent: #0284c7;
+            --crow-circle: #334155;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+        body {
+            margin: 0; padding: 0; overflow: hidden;
+            background: var(--bg-gradient);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans KR", sans-serif;
+            color: var(--text-title);
+            border-radius: 12px;
+            border: 1px solid var(--canvas-border);
+            transition: background 0.3s ease;
+        }
+        #erd-wrapper {
+            width: 100%; height: 540px; position: relative;
+            overflow: hidden; cursor: grab;
+        }
+        #erd-wrapper:active { cursor: grabbing; }
+
+        /* SVG Canvas */
+        #erd-svg {
+            width: 100%; height: 100%; display: block;
+        }
+
+        /* ERD Node Box Styling */
+        .erd-node {
+            cursor: pointer;
+            transition: transform 0.15s ease, filter 0.15s ease;
+        }
+        .erd-node rect {
+            fill: var(--node-bg);
+            stroke: var(--node-border);
+            stroke-width: 1.6;
+            rx: 6px; ry: 6px;
+            transition: all 0.2s ease;
+        }
+        .erd-node:hover rect {
+            fill: var(--node-hover-bg);
+            stroke: var(--node-hover-border);
+            stroke-width: 2.2;
+            filter: drop-shadow(0 0 10px var(--node-hover-glow));
+        }
+        .erd-node.selected rect {
+            fill: var(--node-selected-bg);
+            stroke: var(--node-selected-border);
+            stroke-width: 2.6;
+            filter: drop-shadow(0 0 14px var(--node-selected-glow));
+        }
+        .erd-node text.title {
+            fill: var(--text-title);
+            font-size: 13px;
+            font-weight: 600;
+            text-anchor: middle;
+            dominant-baseline: central;
+            pointer-events: none;
+            transition: fill 0.2s ease;
+        }
+        .erd-node text.badge {
+            fill: var(--text-badge);
+            font-size: 10.5px;
+            font-weight: 500;
+            text-anchor: middle;
+            pointer-events: none;
+        }
+        .erd-node.selected text.title {
+            fill: var(--text-title-selected);
+            font-weight: 700;
+        }
+
+        /* Connector Lines */
+        .erd-edge {
+            fill: none;
+            stroke: var(--edge-color);
+            stroke-width: 1.6;
+            stroke-linecap: round;
+            transition: stroke 0.2s ease;
+        }
+        .erd-edge.highlight {
+            stroke: var(--edge-highlight);
+            stroke-width: 2.4;
+            filter: drop-shadow(0 0 6px var(--node-hover-glow));
+        }
+
+        /* Cardinality Tag */
+        .card-badge rect {
+            fill: var(--card-badge-bg);
+            stroke: var(--card-badge-border);
+            stroke-width: 1;
+            rx: 4; ry: 4;
+        }
+        .card-badge text {
+            fill: var(--card-badge-text);
+            font-size: 10px;
+            font-weight: 700;
+            text-anchor: middle;
+            dominant-baseline: central;
+            font-family: monospace;
+        }
+
+        /* Crow's Foot Marker */
+        .crow-circle {
+            fill: var(--crow-circle);
+            stroke: var(--edge-color);
+            stroke-width: 1.5;
+        }
+
+        /* Floating Controls UI */
+        .hud-control-panel {
+            position: absolute; bottom: 16px; right: 16px;
+            display: flex; flex-direction: column; gap: 6px;
+            z-index: 10;
+        }
+        .hud-btn-grid {
+            display: grid; grid-template-columns: repeat(3, 34px); gap: 4px;
+            background: var(--hud-bg);
+            backdrop-filter: blur(8px);
+            padding: 6px; border-radius: 10px;
+            border: 1px solid var(--hud-border);
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+        }
+        .ctrl-btn {
+            width: 34px; height: 34px;
+            background: var(--ctrl-btn-bg); border: 1px solid var(--hud-border);
+            color: var(--ctrl-btn-text); font-size: 13px; font-weight: bold;
+            border-radius: 6px; cursor: pointer;
+            display: flex; justify-content: center; align-items: center;
+            transition: all 0.15s ease;
+        }
+        .ctrl-btn:hover {
+            background: var(--ctrl-btn-hover); color: #ffffff;
+            border-color: var(--ctrl-btn-hover);
+        }
+
+        /* Top Info Guide */
+        .top-hint {
+            position: absolute; top: 12px; left: 16px;
+            background: var(--top-hint-bg);
+            backdrop-filter: blur(8px);
+            padding: 6px 14px; border-radius: 20px;
+            border: 1px solid var(--hud-border);
+            font-size: 12px; font-weight: 500;
+            color: var(--top-hint-text);
+            display: flex; align-items: center; gap: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            pointer-events: none;
+        }
+        .top-hint b { color: var(--top-hint-accent); }
+    </style>
+</head>
+<body>
+    <div id="erd-wrapper">
+        <div class="top-hint">
+            <span><b>DB 관계도(ERD)</b>: 테이블 박스를 클릭하여 해당 테이블의 데이터와 스키마를 조회하세요</span>
+        </div>
+
+        <svg id="erd-svg" viewBox="0 0 1020 740" preserveAspectRatio="xMidYMid meet">
+            <g id="erd-viewport">
+                <g id="edges-layer"></g>
+                <g id="nodes-layer"></g>
+            </g>
+        </svg>
+
+        <!-- Navigation & Theme Controls HUD -->
+        <div class="hud-control-panel">
+            <div class="hud-btn-grid">
+                <button class="ctrl-btn" id="theme-toggle-btn" onclick="toggleTheme()" title="테마 전환 (라이트/다크)">🌓</button>
+                <button class="ctrl-btn" onclick="panCanvas(0, 40)" title="위로 이동">▲</button>
+                <button class="ctrl-btn" onclick="zoomCanvas(1.15)" title="확대">🔍+</button>
+                
+                <button class="ctrl-btn" onclick="panCanvas(40, 0)" title="좌로 이동">◀</button>
+                <button class="ctrl-btn" onclick="resetZoom()" title="시점 초기화">🔄</button>
+                <button class="ctrl-btn" onclick="panCanvas(-40, 0)" title="우로 이동">▶</button>
+                
+                <div></div>
+                <button class="ctrl-btn" onclick="panCanvas(0, -40)" title="아래로 이동">▼</button>
+                <button class="ctrl-btn" onclick="zoomCanvas(0.85)" title="축소">🔍-</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 14개 테이블 노드 좌표
+        const nodes = {
+            "part": {"x": 360, "y": 30, "w": 110, "h": 56, "name": "Part"},
+            "tool": {"x": 30, "y": 170, "w": 100, "h": 56, "name": "Tool"},
+            "cad_file_archive": {"x": 210, "y": 170, "w": 145, "h": 56, "name": "CadFileArchive"},
+            "workplan": {"x": 440, "y": 170, "w": 120, "h": 56, "name": "Workplan"},
+            "workingstep": {"x": 25, "y": 330, "w": 125, "h": 56, "name": "Workingstep"},
+            "job": {"x": 445, "y": 330, "w": 110, "h": 56, "name": "Job"},
+            "workplan_file_archive": {"x": 640, "y": 330, "w": 165, "h": 56, "name": "WorkplanFileArchive"},
+            "machine_log": {"x": 25, "y": 490, "w": 125, "h": 56, "name": "MachineLog"},
+            "inspection": {"x": 235, "y": 490, "w": 115, "h": 56, "name": "Inspection"},
+            "env_memo": {"x": 435, "y": 490, "w": 115, "h": 56, "name": "EnvMemo"},
+            "surface_roughness": {"x": 630, "y": 490, "w": 150, "h": 56, "name": "SurfaceRoughness"},
+            "job_file_archive": {"x": 850, "y": 490, "w": 135, "h": 56, "name": "JobFileArchive"},
+            "log_file_archive": {"x": 18, "y": 645, "w": 138, "h": 56, "name": "LogFileArchive"},
+            "surface_roughness_archive": {"x": 605, "y": 645, "w": 195, "h": 56, "name": "SurfaceRoughnessArchive"}
+        };
+
+        // 관계선 정의
+        const edges = [
+            {"from": "part", "to": "cad_file_archive", "type": "1:N", "path": "M 385 86 C 385 130, 282 110, 282 170"},
+            {"from": "part", "to": "workplan", "type": "1:N", "path": "M 445 86 C 445 130, 500 110, 500 170"},
+            {"from": "tool", "to": "workingstep", "type": "1:N", "path": "M 80 226 L 80 330"},
+            {"from": "workplan", "to": "workingstep", "type": "1:N", "path": "M 465 226 C 465 290, 150 280, 150 345"},
+            {"from": "workplan", "to": "job", "type": "1:N", "path": "M 500 226 L 500 330"},
+            {"from": "workplan", "to": "workplan_file_archive", "type": "1:1", "path": "M 535 226 C 535 285, 720 270, 720 330"},
+            {"from": "job", "to": "machine_log", "type": "1:N", "path": "M 445 375 C 280 400, 87 420, 87 490"},
+            {"from": "job", "to": "inspection", "type": "1:1", "path": "M 465 386 C 465 440, 292 430, 292 490"},
+            {"from": "job", "to": "env_memo", "type": "1:1", "path": "M 495 386 L 495 490"},
+            {"from": "job", "to": "surface_roughness", "type": "1:N", "path": "M 535 386 C 535 440, 705 430, 705 490"},
+            {"from": "job", "to": "job_file_archive", "type": "1:1", "path": "M 555 375 C 720 400, 917 420, 917 490"},
+            {"from": "machine_log", "to": "log_file_archive", "type": "1:1", "path": "M 87 546 L 87 645"},
+            {"from": "surface_roughness", "to": "surface_roughness_archive", "type": "1:1", "path": "M 705 546 L 705 645"}
+        ];
+
+        let currentSelected = "part";
+        let rowCounts = {};
+        let scale = 1.0;
+        let translateX = 0;
+        let translateY = 0;
+        let isDragging = false;
+        let startX, startY;
+        let manualThemeOverride = null;
+
+        // Streamlit Component Bridge Protocol
+        function sendStreamlitMessage(type, data = {}) {
+            window.parent.postMessage({
+                isStreamlitMessage: true,
+                type: type,
+                ...data
+            }, "*");
+        }
+
+        function setComponentValue(val) {
+            sendStreamlitMessage("streamlit:setComponentValue", { value: val });
+        }
+
+        function setFrameHeight(height) {
+            sendStreamlitMessage("streamlit:setFrameHeight", { height: height });
+        }
+
+        function onSelectTable(tableKey) {
+            currentSelected = tableKey;
+            renderEdges();
+            renderNodes();
+            setComponentValue(tableKey);
+        }
+
+        function renderEdges() {
+            const container = document.getElementById('edges-layer');
+            let svgHtml = '';
+
+            edges.forEach((edge, idx) => {
+                const fromNode = nodes[edge.from];
+                const toNode = nodes[edge.to];
+                if (!fromNode || !toNode) return;
+
+                const isHighlighted = (edge.from === currentSelected || edge.to === currentSelected);
+                const edgeClass = isHighlighted ? 'erd-edge highlight' : 'erd-edge';
+
+                svgHtml += `<path id="edge-${idx}" class="${edgeClass}" d="${edge.path}" />`;
+
+                const midPoints = getPathMidpoint(edge.path, fromNode, toNode);
+                if (midPoints) {
+                    const badgeW = edge.type === '1:N' ? 30 : 26;
+                    svgHtml += `
+                        <g class="card-badge" transform="translate(${midPoints.x - badgeW/2}, ${midPoints.y - 9})">
+                            <rect width="${badgeW}" height="18" />
+                            <text x="${badgeW/2}" y="9">${edge.type}</text>
+                        </g>
+                    `;
+                    svgHtml += `<circle class="crow-circle" cx="${midPoints.cx}" cy="${midPoints.cy}" r="3.5" />`;
+                }
+            });
+
+            container.innerHTML = svgHtml;
+        }
+
+        function getPathMidpoint(d, fromNode, toNode) {
+            const parts = d.split(' ');
+            const startX = parseFloat(parts[1]) || (fromNode.x + fromNode.w/2);
+            const startY = parseFloat(parts[2]) || (fromNode.y + fromNode.h);
+            const endX = parseFloat(parts[parts.length-2]) || (toNode.x + toNode.w/2);
+            const endY = parseFloat(parts[parts.length-1]) || toNode.y;
+
+            return {
+                x: (startX + endX) / 2,
+                y: (startY + endY) / 2,
+                cx: endX,
+                cy: endY - 12
+            };
+        }
+
+        function renderNodes() {
+            const container = document.getElementById('nodes-layer');
+            let svgHtml = '';
+
+            for (const [tableKey, node] of Object.entries(nodes)) {
+                const isSelected = (tableKey === currentSelected);
+                const count = rowCounts[tableKey] !== undefined ? rowCounts[tableKey].toLocaleString() + '건' : '';
+                const nodeClass = isSelected ? 'erd-node selected' : 'erd-node';
+
+                svgHtml += `
+                    <g class="${nodeClass}" id="node-${tableKey}" onclick="onSelectTable('${tableKey}')">
+                        <rect x="${node.x}" y="${node.y}" width="${node.w}" height="${node.h}" />
+                        <text class="title" x="${node.x + node.w/2}" y="${node.y + (count ? 20 : 28)}">
+                            ${node.name}
+                        </text>
+                        ${count ? `<text class="badge" x="${node.x + node.w/2}" y="${node.y + 40}">${count}</text>` : ''}
+                    </g>
+                `;
+            }
+
+            container.innerHTML = svgHtml;
+        }
+
+        function setupPanZoom() {
+            const wrapper = document.getElementById('erd-wrapper');
+            
+            wrapper.addEventListener('mousedown', (e) => {
+                if (e.target.closest('.hud-control-panel') || e.target.closest('.erd-node')) return;
+                isDragging = true;
+                startX = e.clientX - translateX;
+                startY = e.clientY - translateY;
+            });
+
+            window.addEventListener('mousemove', (e) => {
+                if (!isDragging) return;
+                translateX = e.clientX - startX;
+                translateY = e.clientY - startY;
+                updateTransform();
+            });
+
+            window.addEventListener('mouseup', () => {
+                isDragging = false;
+            });
+
+            wrapper.addEventListener('wheel', (e) => {
+                e.preventDefault();
+                const delta = e.deltaY > 0 ? 0.9 : 1.1;
+                zoomCanvas(delta);
+            }, { passive: false });
+        }
+
+        function zoomCanvas(factor) {
+            scale = Math.min(Math.max(0.5, scale * factor), 2.2);
+            updateTransform();
+        }
+
+        function panCanvas(dx, dy) {
+            translateX += dx;
+            translateY += dy;
+            updateTransform();
+        }
+
+        function resetZoom() {
+            scale = 1.0;
+            translateX = 0;
+            translateY = 0;
+            updateTransform();
+        }
+
+        function updateTransform() {
+            const viewport = document.getElementById('erd-viewport');
+            if (viewport) {
+                viewport.setAttribute('transform', `translate(${translateX}, ${translateY}) scale(${scale})`);
+            }
+        }
+
+        function toggleTheme() {
+            const isLight = document.body.classList.contains('light-theme');
+            if (isLight) {
+                document.body.classList.remove('light-theme');
+                manualThemeOverride = 'dark';
+            } else {
+                document.body.classList.add('light-theme');
+                manualThemeOverride = 'light';
+            }
+            renderEdges();
+            renderNodes();
+        }
+
+        function applyStreamlitTheme(theme) {
+            if (manualThemeOverride !== null) return; // User manual toggle takes precedence
+            
+            if (theme && theme.base === 'light') {
+                document.body.classList.add('light-theme');
+            } else {
+                document.body.classList.remove('light-theme');
+            }
+        }
+
+        // Streamlit message listener
+        window.addEventListener("message", (event) => {
+            if (!event.data || event.data.type !== "streamlit:render") return;
+
+            const { args, theme } = event.data;
+            if (args) {
+                if (args.selected_table) {
+                    currentSelected = args.selected_table;
+                }
+                if (args.table_row_counts) {
+                    rowCounts = args.table_row_counts;
+                }
+                if (args.height) {
+                    document.getElementById('erd-wrapper').style.height = args.height + 'px';
+                }
+            }
+
+            applyStreamlitTheme(theme);
+            renderEdges();
+            renderNodes();
+            setFrameHeight(document.getElementById('erd-wrapper').offsetHeight + 10);
+        });
+
+        // Initialize on load
+        window.onload = () => {
+            renderEdges();
+            renderNodes();
+            setupPanZoom();
+            sendStreamlitMessage("streamlit:componentReady", { apiVersion: 1 });
+            setFrameHeight(550);
+        };
+    </script>
+</body>
+</html>

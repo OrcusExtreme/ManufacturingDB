@@ -36,8 +36,9 @@ def parse_nc(file_path, job_id_str=None):
             return False
             
         # 해당 Job의 Workplan에 nc_file_path 업데이트
+        from vault_manager import get_rel_raw_data_path
         if job.workplan:
-            job.workplan.nc_file_path = file_path
+            job.workplan.nc_file_path = get_rel_raw_data_path(file_path)
             
             # program_code가 없는 경우 NC 파일명을 프로그램 코드로 임시 사용
             if not job.workplan.program_code or job.workplan.program_code == "UNKNOWN":

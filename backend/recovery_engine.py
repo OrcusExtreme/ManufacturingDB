@@ -11,7 +11,7 @@ from DB.models import (
     LogFileArchive, SurfaceRoughness, SurfaceRoughnessArchive,
     EnvMemo, Inspection, CadFileArchive, Part, Workplan
 )
-from vault_manager import get_abs_vault_path, VAULT_ROOT
+from vault_manager import get_abs_vault_path, VAULT_ROOT, get_abs_raw_data_path, get_rel_raw_data_path
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RAW_DATA_DIR = os.path.join(PROJECT_ROOT, "machining_raw_data")
@@ -80,8 +80,10 @@ def get_job_archive_files(job_id):
                 if f.endswith('.tdms'):
                     abs_p = os.path.join(tdms_vault_dir, f)
                     file_map['tdms'].append((abs_p, f, f))
-        elif job.tdms_file_path and os.path.exists(job.tdms_file_path):
-            file_map['tdms'].append((job.tdms_file_path, os.path.basename(job.tdms_file_path), os.path.basename(job.tdms_file_path)))
+        elif job.tdms_file_path:
+            abs_tdms_path = get_abs_raw_data_path(job.tdms_file_path)
+            if abs_tdms_path and os.path.exists(abs_tdms_path):
+                file_map['tdms'].append((abs_tdms_path, os.path.basename(abs_tdms_path), os.path.basename(abs_tdms_path)))
             
         # 4. Logs
         for mlog in job.machine_logs:
@@ -105,10 +107,14 @@ def get_job_archive_files(job_id):
                             file_map['roughness'].append((abs_p, os.path.basename(abs_p), f"Surface_Roughness/{os.path.basename(abs_p)}"))
                             
         # 6. Parquet
-        if job.tdms_parquet_path and os.path.exists(job.tdms_parquet_path):
-            file_map['parquet'].append((job.tdms_parquet_path, os.path.basename(job.tdms_parquet_path), os.path.basename(job.tdms_parquet_path)))
-        if job.tdms_fft_parquet_path and os.path.exists(job.tdms_fft_parquet_path):
-            file_map['parquet'].append((job.tdms_fft_parquet_path, os.path.basename(job.tdms_fft_parquet_path), os.path.basename(job.tdms_fft_parquet_path)))
+        if job.tdms_parquet_path:
+            abs_parquet = get_abs_raw_data_path(job.tdms_parquet_path)
+            if abs_parquet and os.path.exists(abs_parquet):
+                file_map['parquet'].append((abs_parquet, os.path.basename(abs_parquet), os.path.basename(abs_parquet)))
+        if job.tdms_fft_parquet_path:
+            abs_fft = get_abs_raw_data_path(job.tdms_fft_parquet_path)
+            if abs_fft and os.path.exists(abs_fft):
+                file_map['parquet'].append((abs_fft, os.path.basename(abs_fft), os.path.basename(abs_fft)))
             
         # 7. etc (기타 참고용 파일)
         etc_vault_dir = os.path.join(VAULT_ROOT, "etc_files", f"Job_{job.job_id}")
@@ -396,6 +402,235 @@ def create_single_job_zip(job_id, categories=None):
         
     return temp_zip_path
 
+def backfill_missing_job_metadata():
+    """
+    DB에 등록된 모든 Job 중 start_time, end_time, cutting_seconds, moving_distance,
+    log_file_path, tdms_parquet_path 등이 누락된 건을
+    1) XML(기존 DB) -> 2) TDMS/Parquet -> 3) LOG 순서의 3단계 Fallback으로 자동 역추적 및 보정(Backfill)합니다.
+    """
+    import re
+    import csv
+    import datetime
+    import pandas as pd
+    import numpy as np
+    
+    updated_count = 0
+    with Session(engine) as session:
+        jobs = session.query(Job).all()
+        for job in jobs:
+            modified = False
+            
+            # --- 2순위: TDMS / Parquet 파일 기반 Fallback ---
+            candidate_pqs = [
+                job.tdms_parquet_path,
+                os.path.join(PROJECT_ROOT, "processed_data", f"job_{job.job_id}_viz.parquet"),
+                get_abs_vault_path(f"processed_parquet/job_{job.job_id}_viz.parquet")
+            ]
+            
+            valid_pq = None
+            for cpq in candidate_pqs:
+                if cpq and os.path.exists(cpq):
+                    valid_pq = cpq
+                    break
+                    
+            if valid_pq:
+                if not job.tdms_parquet_path or not os.path.exists(get_abs_raw_data_path(job.tdms_parquet_path)):
+                    job.tdms_parquet_path = get_rel_raw_data_path(valid_pq)
+                    modified = True
+                    
+                try:
+                    df = pd.read_parquet(valid_pq)
+                    
+                    # 1. 일시 (start_time, end_time)
+                    time_col = None
+                    for col in ['Time Channel CNC', 'Timestamp', 'time']:
+                        if col in df.columns:
+                            time_col = col
+                            break
+                    if time_col is not None:
+                        valid_times = pd.to_datetime(df[time_col]).dropna()
+                        if not valid_times.empty:
+                            if job.start_time is None:
+                                job.start_time = valid_times.iloc[0].to_pydatetime()
+                                modified = True
+                                print(f"  [Backfill] Job {job.job_id}: Parquet에서 start_time 복구 -> {job.start_time}")
+                            if job.end_time is None:
+                                job.end_time = valid_times.iloc[-1].to_pydatetime()
+                                modified = True
+                                print(f"  [Backfill] Job {job.job_id}: Parquet에서 end_time 복구 -> {job.end_time}")
+                                
+                            # 2. 가공 시간 (cutting_seconds)
+                            if job.cutting_seconds is None:
+                                dt_series = pd.to_datetime(df[time_col]).diff().dt.total_seconds().fillna(1.0)
+                                dt_series[dt_series > 10] = 1.0
+                                rpm = df['CNC-Z-SpindleSpeed'] if 'CNC-Z-SpindleSpeed' in df.columns else 0
+                                feed = df['CNC-ActualFeedRate'] if 'CNC-ActualFeedRate' in df.columns else 0
+                                is_cut = (rpm > 100) & (feed > 0)
+                                if is_cut.any():
+                                    job.cutting_seconds = round(float(dt_series[is_cut].sum()), 1)
+                                else:
+                                    job.cutting_seconds = round(float(dt_series.sum()), 1)
+                                modified = True
+                                print(f"  [Backfill] Job {job.job_id}: Parquet에서 cutting_seconds 복구 -> {job.cutting_seconds} 초")
+                                
+                    # 3. 이동 거리 (moving_distance, cutting_moving_distance)
+                    if job.moving_distance is None:
+                        if {'CNC-X-Position', 'CNC-Y-Position', 'CNC-Z-Position'}.issubset(df.columns):
+                            dx = df['CNC-X-Position'].diff().fillna(0)
+                            dy = df['CNC-Y-Position'].diff().fillna(0)
+                            dz = df['CNC-Z-Position'].diff().fillna(0)
+                            dist_3d = np.sqrt(dx**2 + dy**2 + dz**2)
+                            job.moving_distance = round(float(dist_3d.sum()), 1)
+                            modified = True
+                            print(f"  [Backfill] Job {job.job_id}: Parquet에서 moving_distance 복구 -> {job.moving_distance} mm")
+                            
+                            rpm = df['CNC-Z-SpindleSpeed'] if 'CNC-Z-SpindleSpeed' in df.columns else 0
+                            feed = df['CNC-ActualFeedRate'] if 'CNC-ActualFeedRate' in df.columns else 0
+                            is_cut = (rpm > 100) & (feed > 0)
+                            if is_cut.any() and job.cutting_moving_distance is None:
+                                job.cutting_moving_distance = round(float(dist_3d[is_cut].sum()), 1)
+                                print(f"  [Backfill] Job {job.job_id}: Parquet에서 cutting_moving_distance 복구 -> {job.cutting_moving_distance} mm")
+                except Exception as pe:
+                    print(f"  [Backfill 경고] Job {job.job_id} Parquet 읽기 오류: {pe}")
+
+            # TDMS 원본 파일 탐색 및 경로 보완
+            tdms_vault_dir = os.path.join(VAULT_ROOT, "tdms_files", f"Job_{job.job_id}")
+            if os.path.exists(tdms_vault_dir):
+                for f in os.listdir(tdms_vault_dir):
+                    if f.endswith('.tdms'):
+                        abs_tdms = os.path.join(tdms_vault_dir, f)
+                        if not job.tdms_file_path:
+                            job.tdms_file_path = get_rel_raw_data_path(abs_tdms)
+                            modified = True
+                        if job.start_time is None:
+                            m = re.search(r'__(\d{12})\.tdms', f)
+                            if m:
+                                ts_str = m.group(1)
+                                try:
+                                    dt = datetime.datetime.strptime(f"20{ts_str}", "%Y%m%d%H%M%S")
+                                    job.start_time = dt
+                                    modified = True
+                                    print(f"  [Backfill] Job {job.job_id}: TDMS 파일명에서 start_time 복구 -> {dt}")
+                                except Exception:
+                                    pass
+                        break
+
+            # --- 3순위: LOG 파일 기반 Fallback ---
+            vault_log_dir = os.path.join(VAULT_ROOT, "machine_logs", f"Job_{job.job_id}")
+            log_candidates = []
+            if job.log_file_path:
+                abs_log = get_abs_raw_data_path(job.log_file_path)
+                if abs_log and os.path.exists(abs_log):
+                    log_candidates.append(abs_log)
+            if os.path.exists(vault_log_dir):
+                for f in os.listdir(vault_log_dir):
+                    log_candidates.append(os.path.join(vault_log_dir, f))
+                    
+            if log_candidates:
+                target_log_f = log_candidates[0]
+                if not job.log_file_path or not os.path.exists(get_abs_raw_data_path(job.log_file_path)):
+                    job.log_file_path = get_rel_raw_data_path(target_log_f)
+                    modified = True
+                    
+                # 파일명 타임스탬프 (KST)
+                if job.start_time is None:
+                    for lf in log_candidates:
+                        m = re.search(r'__(\d{12})(?:_ext)?\.log', os.path.basename(lf))
+                        if m:
+                            ts_str = m.group(1)
+                            try:
+                                dt = datetime.datetime.strptime(f"20{ts_str}", "%Y%m%d%H%M%S")
+                                job.start_time = dt
+                                modified = True
+                                print(f"  [Backfill] Job {job.job_id}: 로그 파일명에서 start_time 복구 -> {dt}")
+                                break
+                            except Exception:
+                                pass
+                                
+                # 로그 내용 파싱 (moving_distance / cutting_seconds / start_time / end_time 누락 시)
+                if (job.moving_distance is None or job.cutting_seconds is None or 
+                    job.start_time is None or job.end_time is None) and os.path.exists(target_log_f):
+                    try:
+                        f_enc = 'utf-8'
+                        try:
+                            with open(target_log_f, 'r', encoding='utf-8') as tf:
+                                tf.read(2048)
+                        except UnicodeDecodeError:
+                            f_enc = 'cp949'
+                            
+                        first_t = None
+                        last_t = None
+                        max_ctime = 0.0
+                        cutting_rows = 0
+                        total_log_dist = 0.0
+                        cutting_log_dist = 0.0
+                        px_prev, py_prev, pz_prev = None, None, None
+                        
+                        with open(target_log_f, 'r', encoding=f_enc, errors='ignore') as lf_in:
+                            sample = lf_in.read(1024)
+                            lf_in.seek(0)
+                            delim = '\t' if '\t' in sample else ','
+                            reader = csv.DictReader(lf_in, delimiter=delim)
+                            
+                            for row in reader:
+                                row_t = row.get('time', '').strip()
+                                if row_t:
+                                    if first_t is None: first_t = row_t
+                                    last_t = row_t
+                                    
+                                ctime_val = float(row.get('ctime', 0) or 0)
+                                if ctime_val > max_ctime: max_ctime = ctime_val
+                                
+                                rpm = float(row.get('crpm', 0) or 0)
+                                feed = float(row.get('cfr', 0) or 0)
+                                is_cut = (str(row.get('cut', '0')).strip() == '1') or (rpm > 100 and feed > 0)
+                                if is_cut: cutting_rows += 1
+                                
+                                if 'cpx' in row and 'cpy' in row and 'cpz' in row:
+                                    x_cur = float(row.get('cpx', 0) or 0)
+                                    y_cur = float(row.get('cpy', 0) or 0)
+                                    z_cur = float(row.get('cpz', 0) or 0)
+                                    if px_prev is not None:
+                                        step_d = ((x_cur - px_prev)**2 + (y_cur - py_prev)**2 + (z_cur - pz_prev)**2)**0.5
+                                        total_log_dist += step_d
+                                        if is_cut: cutting_log_dist += step_d
+                                    px_prev, py_prev, pz_prev = x_cur, y_cur, z_cur
+                                    
+                        if job.start_time is None and first_t:
+                            try:
+                                job.start_time = datetime.datetime.strptime(first_t.split('.')[0].strip(), "%y%m%d %H:%M:%S")
+                                modified = True
+                            except Exception: pass
+                            
+                        if job.end_time is None and last_t:
+                            try:
+                                job.end_time = datetime.datetime.strptime(last_t.split('.')[0].strip(), "%y%m%d %H:%M:%S")
+                                modified = True
+                            except Exception: pass
+                            
+                        if job.cutting_seconds is None and (max_ctime > 0 or cutting_rows > 0):
+                            job.cutting_seconds = round(max_ctime if max_ctime > 0 else cutting_rows * 0.1, 1)
+                            modified = True
+                            print(f"  [Backfill] Job {job.job_id}: 로그에서 cutting_seconds 복구 -> {job.cutting_seconds} 초")
+                            
+                        if job.moving_distance is None and total_log_dist > 0:
+                            job.moving_distance = round(total_log_dist, 1)
+                            modified = True
+                            print(f"  [Backfill] Job {job.job_id}: 로그에서 moving_distance 복구 -> {job.moving_distance} mm")
+                            if job.cutting_moving_distance is None and cutting_log_dist > 0:
+                                job.cutting_moving_distance = round(cutting_log_dist, 1)
+                    except Exception as le:
+                        print(f"  [Backfill 경고] Job {job.job_id} Log 파싱 오류: {le}")
+
+            if modified:
+                updated_count += 1
+                
+        session.commit()
+    print(f"[Backfill 완료] 총 {updated_count}개의 Job 메타데이터가 보정되었습니다.")
+    return updated_count
+
 if __name__ == "__main__":
+    backfill_missing_job_metadata()
     count = recover_all_jobs()
     print(f"\n총 {count}개의 Job이 복구되었습니다.")
+

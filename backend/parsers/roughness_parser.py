@@ -96,10 +96,27 @@ def parse_roughness(job_folder_path, job_id=None):
                                 rz_vals.append(np.max(seg) - np.min(seg))
                         rz_val = float(np.mean(rz_vals)) if rz_vals else 0.0
                         
+                        # Copy to machining_raw_data
+                        from vault_manager import get_rel_raw_data_path
+                        from DB.models import Job
+                        raw_parquet_path = parquet_path
+                        try:
+                            job_record = session.query(Job).filter_by(job_id=job_pk).first()
+                            if job_record and job_record.source_folder:
+                                import shutil
+                                raw_job_dir = os.path.join(os.path.dirname(PROCESSED_DIR), "machining_raw_data", *job_record.source_folder.split('/'), "processed_parquet")
+                                os.makedirs(raw_job_dir, exist_ok=True)
+                                raw_parquet_path = os.path.join(raw_job_dir, os.path.basename(parquet_path))
+                                shutil.copy2(parquet_path, raw_parquet_path)
+                        except Exception as e:
+                            print(f"Failed to copy roughness parquet to raw_data: {e}")
+                        
+                        rel_parquet_path = get_rel_raw_data_path(raw_parquet_path)
+                        
                         # Insert DB record
                         existing = session.query(SurfaceRoughness).filter_by(job_id=job_pk, measure_name=measure_name).first()
                         if existing:
-                            existing.profile_parquet_path = parquet_path
+                            existing.profile_parquet_path = rel_parquet_path
                             existing.ra = ra_val
                             existing.rq = rq_val
                             existing.rz = rz_val
@@ -109,7 +126,7 @@ def parse_roughness(job_folder_path, job_id=None):
                             sr = SurfaceRoughness(
                                 job_id=job_pk,
                                 measure_name=measure_name,
-                                profile_parquet_path=parquet_path,
+                                profile_parquet_path=rel_parquet_path,
                                 ra=ra_val,
                                 rq=rq_val,
                                 rz=rz_val

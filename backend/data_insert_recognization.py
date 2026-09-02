@@ -295,6 +295,12 @@ class MachiningDataHandler(FileSystemEventHandler):
         parse_nc(file_path, job_id)
 
 def start_pipeline(watch_dir):
+    try:
+        from recovery_engine import backfill_missing_job_metadata
+        backfill_missing_job_metadata()
+    except Exception as b_err:
+        print(f"[경고] Job 메타데이터 Backfill 실행 중 오류: {b_err}")
+
     event_handler = MachiningDataHandler()
     
     print(f"[알림] 기존 파일 스캔 중... ({watch_dir})")

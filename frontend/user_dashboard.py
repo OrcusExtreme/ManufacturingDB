@@ -21,8 +21,11 @@ def resolve_parquet_file(file_path, default_filename=None):
     Parquet 파일의 실제 경로를 찾습니다.
     DB 경로 -> processed_data -> archive_vault 순으로 탐색
     """
-    if file_path and os.path.exists(file_path):
-        return file_path
+    from backend.vault_manager import get_abs_raw_data_path
+    if file_path:
+        abs_p = get_abs_raw_data_path(file_path)
+        if abs_p and os.path.exists(abs_p):
+            return abs_p
     if default_filename:
         # 1. processed_data 탐색
         p1 = os.path.join(PROJECT_ROOT, "processed_data", default_filename)
@@ -121,6 +124,28 @@ def load_data(query, params=None):
         return pd.read_sql(text(query), con=engine, params=params)
     return pd.read_sql(text(query), con=engine)
 
+@st.cache_data(ttl=60)
+def fetch_job_options():
+    query = """
+        SELECT j.job_id, COALESCE(j.custom_part_name, p.part_code, 'Unknown') as part_name, j.machining_type
+        FROM job j
+        LEFT JOIN workplan w ON j.workplan_id = w.workplan_id
+        LEFT JOIN part p ON w.part_code = p.part_code
+        ORDER BY j.job_id DESC
+    """
+    df = load_data(query)
+    job_ids = df['job_id'].tolist() if not df.empty else []
+    
+    job_labels = {}
+    if not df.empty:
+        for _, row in df.iterrows():
+            m_type = row['machining_type'] if pd.notna(row['machining_type']) and row['machining_type'] else ""
+            p_name = row['part_name'] if pd.notna(row['part_name']) else ""
+            job_labels[row['job_id']] = f"Job {row['job_id']} - {p_name} {m_type}".strip()
+            
+    return job_ids, job_labels
+
+
 @st.dialog("NC 데이터 원본 조회", width="large")
 def show_nc_dialog(wp_id):
     query = f"SELECT nc_file_content FROM workplan_file_archive WHERE workplan_id = '{wp_id}'"
@@ -210,10 +235,10 @@ with st.sidebar:
         st.rerun()
     
 
-@st.dialog("🖼️ CAD 모델 형상 이미지", width="large")
+@st.dialog("📐 3D CAD 모델 뷰어 (360° 회전 / 메시 모드)", width="large")
 def open_cad_dialog(part_code, cad_file_name):
     st.markdown(f"**부품명(Part Code):** `{part_code}` &nbsp;|&nbsp; **CAD 파일명:** `{cad_file_name}`")
-    render_cad_viewer(part_code, height=520)
+    render_cad_viewer(part_code, height=540)
 
 if nav_menu == "계층형 마스터 데이터":
     st.subheader("계층형 구조 조회 (ISO 14649)")
@@ -249,7 +274,7 @@ if nav_menu == "계층형 마스터 데이터":
                 with col_c1:
                     st.markdown(f"**📐 연관 CAD 모델:** `{c_fname}` ({c_ftype})")
                 with col_c2:
-                    if st.button("🖼️ 형상 이미지 보기", key=f"btn_cad_modal_{p_code}", type="primary", use_container_width=True):
+                    if st.button("👁️ 3D 뷰어 / 메시 보기", key=f"btn_cad_modal_{p_code}", type="primary", use_container_width=True):
                         open_cad_dialog(p_code, c_fname)
                 
                 with st.expander("📄 CAD 파일 메타데이터 정보 보기", expanded=False):
@@ -511,9 +536,7 @@ elif nav_menu == "가공 검색":
         )
 
 elif nav_menu == "가공 이력 & 센서 분석":
-    all_jobs_query = "SELECT job_id FROM job ORDER BY job_id DESC"
-    all_jobs_df = load_data(all_jobs_query)
-    all_job_ids = all_jobs_df['job_id'].tolist() if not all_jobs_df.empty else []
+    all_job_ids, job_labels = fetch_job_options()
     
     if not all_job_ids:
         st.warning("등록된 가공 이력(Job)이 없습니다.")
@@ -545,7 +568,7 @@ elif nav_menu == "가공 이력 & 센서 분석":
                 st.subheader(f"Job 상세 분석 (Job ID: {target_job_id})")
             with c_select:
                 idx = all_job_ids.index(target_job_id)
-                selected_target = st.selectbox("분석할 Job ID", all_job_ids, index=idx, label_visibility="collapsed")
+                selected_target = st.selectbox("분석할 Job ID", all_job_ids, index=idx, format_func=lambda x: job_labels.get(x, f"Job {x}"), label_visibility="collapsed")
                 if selected_target != target_job_id:
                     st.session_state.target_job_id = selected_target
                     st.rerun()
@@ -579,7 +602,29 @@ elif nav_menu == "가공 이력 & 센서 분석":
                     st.markdown("##### 📄 Job 요약 정보")
                     proj_name = str(job_info['research_project'])
                     part_display = str(part_name)
-                    date_str = str(job_info['start_time']).split('.')[0] if pd.notnull(job_info['start_time']) else "알 수 없음"
+                    date_str = "알 수 없음"
+                    if pd.notnull(job_info['start_time']):
+                        date_str = str(job_info['start_time']).split('.')[0]
+                    else:
+                        # Fallback 1: 로그/TDMS 파일명 추출
+                        for p_candidate in [job_info['log_file_path'], job_info['tdms_file_path']]:
+                            if p_candidate and pd.notnull(p_candidate):
+                                m = re.search(r'__(\d{12})(?:_ext)?\.(?:log|tdms)', str(p_candidate))
+                                if m:
+                                    ts = m.group(1)
+                                    date_str = f"20{ts[0:2]}-{ts[2:4]}-{ts[4:6]} {ts[6:8]}:{ts[8:10]}:{ts[10:12]}"
+                                    break
+                        # Fallback 2: Parquet 타임스탬프 추출
+                        if date_str == "알 수 없음" and pd.notnull(job_info['tdms_parquet_path']):
+                            try:
+                                pq_p = resolve_parquet_file(job_info['tdms_parquet_path'], f"job_{target_job_id}_viz.parquet")
+                                if pq_p and os.path.exists(pq_p):
+                                    df_temp = pd.read_parquet(pq_p, columns=['Time Channel CNC'])
+                                    if not df_temp.empty and 'Time Channel CNC' in df_temp.columns:
+                                        t_val = df_temp['Time Channel CNC'].dropna().iloc[0]
+                                        date_str = str(t_val).split('.')[0]
+                            except Exception:
+                                pass
                     
                     st.write(f"**프로젝트:** {proj_name if proj_name and proj_name != 'None' else '없음'}")
                     st.write(f"**Part 이름:** {part_display if part_display and part_display != 'None' else '없음'}")
@@ -605,8 +650,10 @@ elif nav_menu == "가공 이력 & 센서 분석":
                 # 2. EXT Log Metrics Card
                 with st.container(border=True):
                     st.markdown("##### ⚙️ CNC 로그 요약 (1Hz)")
-                    log_path = job_info['log_file_path']
-                    if pd.notnull(log_path):
+                    from backend.vault_manager import get_abs_raw_data_path
+                    log_path_raw = job_info['log_file_path']
+                    log_path = get_abs_raw_data_path(log_path_raw) if pd.notnull(log_path_raw) else None
+                    if log_path and os.path.exists(log_path):
                         try:
                             try:
                                 log_data = pd.read_csv(log_path, sep='\t', encoding='utf-8')
@@ -748,9 +795,12 @@ elif nav_menu == "가공 이력 & 센서 분석":
                         curves_df = sr_df[sr_df['profile_parquet_path'].notnull()]
                         if not curves_df.empty:
                             selected_curve = st.selectbox("단면 프로파일 선택", curves_df['measure_name'], label_visibility="collapsed")
+                            from backend.vault_manager import get_abs_raw_data_path
                             curve_path = curves_df[curves_df['measure_name'] == selected_curve].iloc[0]['profile_parquet_path']
+                            curve_path = get_abs_raw_data_path(curve_path) if pd.notnull(curve_path) else None
                             try:
-                                curve_data = pd.read_parquet(curve_path)
+                                if curve_path and os.path.exists(curve_path):
+                                    curve_data = pd.read_parquet(curve_path)
                                 fig_curve = px.line(curve_data, x='X', y='Z')
                                 fig_curve.update_layout(xaxis_title="길이 (X, mm)", yaxis_title="높이 (Z, μm)", margin=dict(l=0, r=0, t=30, b=0), height=300)
                                 st.plotly_chart(fig_curve, use_container_width=True)
@@ -762,9 +812,7 @@ elif nav_menu == "가공 이력 & 센서 분석":
                         st.info("표면조도 데이터 없음")
 
 elif nav_menu == "데이터 다운로드":
-    all_jobs_query = "SELECT job_id FROM job ORDER BY job_id DESC"
-    all_jobs_df = load_data(all_jobs_query)
-    all_job_ids = all_jobs_df['job_id'].tolist() if not all_jobs_df.empty else []
+    all_job_ids, job_labels = fetch_job_options()
     
     if not all_job_ids:
         st.warning("등록된 가공 이력(Job)이 없습니다.")
@@ -777,7 +825,7 @@ elif nav_menu == "데이터 다운로드":
         st.subheader(f"데이터 다운로드 (Job ID: {target_job_id})")
         
         idx = all_job_ids.index(target_job_id)
-        selected_target = st.selectbox("다운로드할 Job ID를 선택하세요:", all_job_ids, index=idx, key='dl_job_select')
+        selected_target = st.selectbox("다운로드할 Job ID를 선택하세요:", all_job_ids, index=idx, format_func=lambda x: job_labels.get(x, f"Job {x}"), key='dl_job_select')
         if selected_target != target_job_id:
             st.session_state.target_job_id = selected_target
             st.rerun()
@@ -990,32 +1038,148 @@ elif nav_menu == "데이터 다운로드":
                             )
 
 elif nav_menu == "DB 테이블 조회":
-    st.header("🗄️ DB 테이블 통합 조회")
-    st.markdown("데이터베이스에 존재하는 모든 테이블의 데이터를 조회합니다.")
+    st.header("DB 테이블 관계도(ERD) 및 데이터 통합 조회")
+    st.markdown("아래 **데이터베이스 관계도(ERD)**에서 테이블 박스를 클릭하면, 해당 테이블의 스키마 구조와 실시간 데이터를 조회할 수 있습니다.")
     
     from sqlalchemy import inspect
+    from erd_component import render_interactive_erd, TABLE_METADATA
     
     inspector = inspect(engine)
-    table_names = inspector.get_table_names()
+    all_db_tables = inspector.get_table_names()
     
-    if not table_names:
-        st.info("데이터베이스에 테이블이 존재하지 않습니다.")
-    else:
-        selected_table = st.selectbox("조회할 테이블을 선택하세요:", table_names)
+    # 1. 테이블별 실시간 레코드 수 계산 (캐싱)
+    @st.cache_data(ttl=60)
+    def get_table_statistics():
+        counts = {}
+        with engine.connect() as conn:
+            for t in all_db_tables:
+                try:
+                    res = conn.execute(text(f"SELECT COUNT(*) FROM `{t}`")).scalar()
+                    counts[t] = res or 0
+                except Exception:
+                    counts[t] = 0
+        return counts
         
-        if selected_table:
-            st.subheader(f"`{selected_table}` 테이블 데이터")
-            
-            try:
-                with engine.connect() as conn:
-                    # table_names are sourced from the DB schema itself, safe from SQL injection
-                    query = f"SELECT * FROM `{selected_table}`"
-                    df = pd.read_sql(text(query), conn)
+    table_counts = get_table_statistics()
+    
+    # 2. 현재 선택된 테이블 상태 확인 (URL 쿼리 파라미터 / 세션 상태 연동)
+    query_params_table = st.query_params.get("table")
+    if query_params_table and query_params_table in all_db_tables:
+        st.session_state['selected_erd_table'] = query_params_table
+    elif 'selected_erd_table' not in st.session_state or st.session_state['selected_erd_table'] not in all_db_tables:
+        st.session_state['selected_erd_table'] = "part"
+        
+    current_table = st.session_state['selected_erd_table']
+    
+    # 3. 상단 인터랙티브 ERD 다이어그램 렌더링 (양방향 클릭 이벤트 실시간 수신)
+    with st.container(border=True):
+        clicked_table = render_interactive_erd(
+            selected_table=current_table,
+            table_row_counts=table_counts,
+            height=540,
+            key="erd_viewer_component"
+        )
+        
+    # 사용자가 ERD 노드를 클릭하여 테이블 선택이 변경된 경우 즉시 갱신
+    if clicked_table and clicked_table in all_db_tables and clicked_table != current_table:
+        st.session_state['selected_erd_table'] = clicked_table
+        st.query_params['table'] = clicked_table
+        current_table = clicked_table
+        st.rerun()
+
+    # 4. 선택된 테이블 메타데이터 정보 카드
+    meta_info = TABLE_METADATA.get(current_table, {
+        "label": current_table,
+        "kr_name": current_table,
+        "desc": "데이터베이스 테이블"
+    })
+    
+    with st.container(border=True):
+        m1, m2, m3 = st.columns([4, 1, 1])
+        with m1:
+            st.markdown(f"### `{current_table}` ({meta_info.get('kr_name')})")
+            st.write(f"**테이블 설명:** {meta_info.get('desc')}")
+        with m2:
+            st.metric(label="총 레코드 수", value=f"{table_counts.get(current_table, 0):,} 건")
+        with m3:
+            cols_info = inspector.get_columns(current_table)
+            st.metric(label="컬럼 수", value=f"{len(cols_info)} 개")
+
+    # 5. 스키마 및 데이터 조회 탭
+    tab_data, tab_schema = st.tabs(["📑 테이블 데이터 실시간 조회", "📐 테이블 스키마 및 관계 정의"])
+    
+    with tab_data:
+        try:
+            with engine.connect() as conn:
+                # 필터 및 정렬 옵션
+                f1, f2, f3 = st.columns([2, 1, 1])
+                with f1:
+                    search_kw = st.text_input("🔍 데이터 검색 (키워드)", placeholder="검색할 값을 입력하세요...", key=f"search_{current_table}")
+                with f2:
+                    row_limit = st.selectbox("조회 행 수 제한", [100, 300, 500, 1000, "전체"], index=0, key=f"limit_{current_table}")
+                with f3:
+                    st.write("")
+                    st.write("")
+                    
+                limit_clause = f"LIMIT {row_limit}" if row_limit != "전체" else ""
+                query = f"SELECT * FROM `{current_table}` {limit_clause}"
+                df = pd.read_sql(text(query), conn)
+                
+                if search_kw:
+                    mask = df.astype(str).apply(lambda row: row.str.contains(search_kw, case=False, na=False)).any(axis=1)
+                    df = df[mask]
                 
                 if df.empty:
-                    st.warning("선택한 테이블에 데이터가 없습니다.")
+                    st.warning("선택한 테이블에 데이터가 없거나 검색 조건에 일치하는 결과가 없습니다.")
                 else:
-                    st.dataframe(df, use_container_width=True)
-                    st.caption(f"총 {len(df)} 행(Row)의 데이터가 조회되었습니다.")
-            except Exception as e:
-                st.error(f"데이터 조회 중 오류가 발생했습니다: {e}")
+                    st.dataframe(df, use_container_width=True, height=420)
+                    st.caption(f"조회 결과: 총 **{len(df):,}** 행(Row) / **{len(df.columns)}** 열(Column)")
+                    
+                    # CSV 다운로드
+                    csv_data = df.to_csv(index=False).encode('utf-8-sig')
+                    st.download_button(
+                        label=f"📥 `{current_table}` 테이블 CSV 내보내기",
+                        data=csv_data,
+                        file_name=f"{current_table}_export.csv",
+                        mime="text/csv",
+                        key=f"csv_dl_{current_table}"
+                    )
+        except Exception as e:
+            st.error(f"데이터 조회 중 오류가 발생했습니다: {e}")
+            
+    with tab_schema:
+        try:
+            cols_info = inspector.get_columns(current_table)
+            pk_info = inspector.get_pk_constraint(current_table)
+            pk_cols = pk_info.get('constrained_columns', []) if pk_info else []
+            fks = inspector.get_foreign_keys(current_table)
+            fk_map = {}
+            for fk in fks:
+                for c, rc in zip(fk['constrained_columns'], fk['referred_columns']):
+                    fk_map[c] = f"🔗 {fk['referred_table']}.{rc}"
+                    
+            schema_data = []
+            for col in cols_info:
+                c_name = col['name']
+                c_type = str(col['type'])
+                is_pk = "🔑 PK" if c_name in pk_cols else ""
+                fk_target = fk_map.get(c_name, "")
+                is_nullable = "YES" if col.get('nullable', True) else "NO (NOT NULL)"
+                default_val = str(col.get('default', '')) if col.get('default') is not None else "NULL"
+                comment = col.get('comment', '') or ""
+                
+                schema_data.append({
+                    "컬럼명": c_name,
+                    "데이터 타입": c_type,
+                    "기본키(PK)": is_pk,
+                    "외래키(FK) 참조": fk_target,
+                    "Null 허용": is_nullable,
+                    "기본값": default_val,
+                    "설명(Comment)": comment
+                })
+                
+            schema_df = pd.DataFrame(schema_data)
+            st.dataframe(schema_df, use_container_width=True, hide_index=True)
+        except Exception as se:
+            st.error(f"스키마 정보 조회 중 오류: {se}")
+

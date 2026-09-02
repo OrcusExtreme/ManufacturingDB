@@ -1,5 +1,7 @@
 import os
 import csv
+import re
+import datetime
 from DB.database import SessionLocal
 from DB.models import Job, MachineLog, LogFileArchive
 from vault_manager import save_to_vault
@@ -26,6 +28,19 @@ def parse_log(file_path, job_id):
         # Job 가져오기 또는 생성 (XML 독립)
         job = get_or_create_job(db, job_id)
 
+        # 로그 파일명에서 타임스탬프 (YYMMDDHHMMSS) 추출하여 start_time 보완
+        fname = os.path.basename(file_path)
+        m = re.search(r'__(\d{12})(?:_ext)?\.log', fname)
+        if m:
+            ts_str = m.group(1)
+            try:
+                dt = datetime.datetime.strptime(f"20{ts_str}", "%Y%m%d%H%M%S")
+                if job.start_time is None:
+                    job.start_time = dt
+                    print(f"    - [Log Parser] 파일명에서 가공 일시 추출 반영: {dt}")
+            except Exception as dt_err:
+                pass
+
         f = None
         try:
             with open(file_path, 'r', encoding='utf-8') as test_f:
@@ -40,6 +55,17 @@ def parse_log(file_path, job_id):
         total_rpm = 0.0
         row_count = 0
         alarm_msgs = set()
+        
+        # 가공 메타데이터 Fallback 산출용 변수
+        first_time_str = None
+        last_time_str = None
+        max_ctime = 0.0
+        cutting_row_count = 0
+        total_dist_3d = 0.0
+        cutting_dist_3d = 0.0
+        prev_x = None
+        prev_y = None
+        prev_z = None
 
         with f:
             sample = f.read(1024)
@@ -53,10 +79,40 @@ def parse_log(file_path, job_id):
                 reader = csv.DictReader(f, delimiter=delimiter)
             
             for row in reader:
+                # 타임스탬프
+                row_t = row.get('time', '').strip()
+                if row_t:
+                    if first_time_str is None:
+                        first_time_str = row_t
+                    last_time_str = row_t
+                    
+                # ctime
+                ctime_val = safe_float(row.get('ctime', 0))
+                if ctime_val > max_ctime:
+                    max_ctime = ctime_val
+                    
                 load = safe_float(row.get('cls', 0))
                 rpm = safe_float(row.get('crpm', 0))
                 feed = safe_float(row.get('cfr', 0))
                 
+                # 절삭 상태 판별
+                cut_flag = str(row.get('cut', '0')).strip()
+                is_cutting = (cut_flag == '1') or (rpm > 100 and feed > 0)
+                if is_cutting:
+                    cutting_row_count += 1
+                
+                # 3D 좌표 이동거리 적분 (cpx, cpy, cpz)
+                if 'cpx' in row and 'cpy' in row and 'cpz' in row:
+                    px = safe_float(row.get('cpx', 0))
+                    py = safe_float(row.get('cpy', 0))
+                    pz = safe_float(row.get('cpz', 0))
+                    if prev_x is not None:
+                        d_step = ((px - prev_x)**2 + (py - prev_y)**2 + (pz - prev_z)**2)**0.5
+                        total_dist_3d += d_step
+                        if is_cutting:
+                            cutting_dist_3d += d_step
+                    prev_x, prev_y, prev_z = px, py, pz
+
                 # 전류 데이터가 있을 경우 추출 (컬럼명이 curr 또는 current 인 경우)
                 current = safe_float(row.get('curr', row.get('current', 0)))
                 
@@ -79,8 +135,37 @@ def parse_log(file_path, job_id):
         alarm_count = len(alarm_msgs)
         critical_alarms = ", ".join(list(alarm_msgs)) if alarm_msgs else None
         
+        # 3단계 Fallback: Job 메타데이터 보완 (start_time, end_time, cutting_seconds, moving_distance)
+        if job.start_time is None and first_time_str:
+            try:
+                t_clean = first_time_str.split('.')[0].strip()
+                job.start_time = datetime.datetime.strptime(t_clean, "%y%m%d %H:%M:%S")
+                print(f"    - [Log Parser] time 컬럼에서 start_time 설정: {job.start_time}")
+            except Exception:
+                pass
+                
+        if job.end_time is None and last_time_str:
+            try:
+                t_clean = last_time_str.split('.')[0].strip()
+                job.end_time = datetime.datetime.strptime(t_clean, "%y%m%d %H:%M:%S")
+                print(f"    - [Log Parser] time 컬럼에서 end_time 설정: {job.end_time}")
+            except Exception:
+                pass
+
+        if job.cutting_seconds is None and (max_ctime > 0 or cutting_row_count > 0):
+            job.cutting_seconds = round(max_ctime if max_ctime > 0 else cutting_row_count * 0.1, 1)
+            print(f"    - [Log Parser] ctime/cut 기반 cutting_seconds 설정: {job.cutting_seconds} 초")
+            
+        if job.moving_distance is None and total_dist_3d > 0:
+            job.moving_distance = round(total_dist_3d, 1)
+            print(f"    - [Log Parser] cpx/cpy/cpz 3D 궤적 기반 moving_distance 설정: {job.moving_distance} mm")
+            if job.cutting_moving_distance is None and cutting_dist_3d > 0:
+                job.cutting_moving_distance = round(cutting_dist_3d, 1)
+                print(f"    - [Log Parser] cpx/cpy/cpz 3D 궤적 기반 cutting_moving_distance 설정: {job.cutting_moving_distance} mm")
+
         # Job 테이블에 원본 파일 경로 매핑
-        job.log_file_path = file_path
+        from vault_manager import get_rel_raw_data_path
+        job.log_file_path = get_rel_raw_data_path(file_path)
         
         # MachineLog 요약 정보 삽입 또는 업데이트
         existing_log = db.query(MachineLog).filter(MachineLog.job_id == job.job_id).first()

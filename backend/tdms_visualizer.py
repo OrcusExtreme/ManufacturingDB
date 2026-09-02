@@ -22,8 +22,10 @@ def find_tdms_path(job):
     1. job.tdms_file_path 확인
     2. 없으면 archive_vault 내의 백업 TDMS 탐색
     """
-    if job.tdms_file_path and os.path.exists(job.tdms_file_path):
-        return job.tdms_file_path
+    from vault_manager import get_abs_raw_data_path, get_abs_vault_path
+    abs_tdms_path = get_abs_raw_data_path(job.tdms_file_path)
+    if abs_tdms_path and os.path.exists(abs_tdms_path):
+        return abs_tdms_path
         
     # Vault 탐색
     vault_rel_paths = [
@@ -120,6 +122,60 @@ def process_tdms_file(job):
             merged_df = pd.concat([cnc_df, daq_df], axis=1)
             merged_df.to_parquet(parquet_path, engine='pyarrow')
             
+            # 시작/종료 일시 및 가공시간, 이동거리 추출 (job 메타데이터 보완)
+            time_col = None
+            for col in ['Time Channel CNC', 'Timestamp', 'time']:
+                if col in merged_df.columns:
+                    time_col = col
+                    break
+            if time_col is not None:
+                try:
+                    valid_times = pd.to_datetime(merged_df[time_col]).dropna()
+                    if not valid_times.empty:
+                        min_t = valid_times.iloc[0].to_pydatetime()
+                        max_t = valid_times.iloc[-1].to_pydatetime()
+                        if job.start_time is None:
+                            job.start_time = min_t
+                            print(f"  - [TDMS Visualizer] Parquet 타임스탬프 기반 start_time 설정: {min_t}")
+                        if job.end_time is None:
+                            job.end_time = max_t
+                            print(f"  - [TDMS Visualizer] Parquet 타임스탬프 기반 end_time 설정: {max_t}")
+                            
+                        # 가공시간(cutting_seconds) 산출
+                        if job.cutting_seconds is None:
+                            dt_series = pd.to_datetime(merged_df[time_col]).diff().dt.total_seconds().fillna(1.0)
+                            dt_series[dt_series > 10] = 1.0
+                            rpm = merged_df['CNC-Z-SpindleSpeed'] if 'CNC-Z-SpindleSpeed' in merged_df.columns else 0
+                            feed = merged_df['CNC-ActualFeedRate'] if 'CNC-ActualFeedRate' in merged_df.columns else 0
+                            is_cut = (rpm > 100) & (feed > 0)
+                            if is_cut.any():
+                                job.cutting_seconds = round(float(dt_series[is_cut].sum()), 1)
+                            else:
+                                job.cutting_seconds = round(float(dt_series.sum()), 1)
+                            print(f"  - [TDMS Visualizer] Parquet 기반 cutting_seconds 설정: {job.cutting_seconds} 초")
+                except Exception as t_err:
+                    pass
+
+            # 이동거리(moving_distance, cutting_moving_distance) 산출
+            if job.moving_distance is None:
+                try:
+                    if {'CNC-X-Position', 'CNC-Y-Position', 'CNC-Z-Position'}.issubset(merged_df.columns):
+                        dx = merged_df['CNC-X-Position'].diff().fillna(0)
+                        dy = merged_df['CNC-Y-Position'].diff().fillna(0)
+                        dz = merged_df['CNC-Z-Position'].diff().fillna(0)
+                        dist_3d = np.sqrt(dx**2 + dy**2 + dz**2)
+                        job.moving_distance = round(float(dist_3d.sum()), 1)
+                        print(f"  - [TDMS Visualizer] Parquet 3D 궤적 기반 moving_distance 설정: {job.moving_distance} mm")
+                        
+                        rpm = merged_df['CNC-Z-SpindleSpeed'] if 'CNC-Z-SpindleSpeed' in merged_df.columns else 0
+                        feed = merged_df['CNC-ActualFeedRate'] if 'CNC-ActualFeedRate' in merged_df.columns else 0
+                        is_cut = (rpm > 100) & (feed > 0)
+                        if is_cut.any() and job.cutting_moving_distance is None:
+                            job.cutting_moving_distance = round(float(dist_3d[is_cut].sum()), 1)
+                            print(f"  - [TDMS Visualizer] Parquet 3D 궤적 기반 cutting_moving_distance 설정: {job.cutting_moving_distance} mm")
+                except Exception as dist_err:
+                    pass
+
             # FFT 데이터 저장
             if not fft_df.empty:
                 fft_df.to_parquet(fft_parquet_path, engine='pyarrow')
@@ -157,9 +213,9 @@ def run_visualizer_batch():
             for j in candidate_jobs:
                 if not j.tdms_parquet_path:
                     jobs.append(j)
-                elif not os.path.exists(j.tdms_parquet_path):
-                    expected_p = os.path.join(PROCESSED_DIR, f"job_{j.job_id}_viz.parquet")
-                    if not os.path.exists(expected_p):
+                elif not os.path.exists(get_abs_raw_data_path(j.tdms_parquet_path)):
+                    expected_p = get_abs_raw_data_path(j.tdms_parquet_path)
+                    if not expected_p or not os.path.exists(expected_p):
                         jobs.append(j)
             
             if jobs:
@@ -171,21 +227,27 @@ def run_visualizer_batch():
                     
                     parquet_path, fft_parquet_path = res
                     if parquet_path:
-                        job.tdms_parquet_path = parquet_path
-                        job.tdms_fft_parquet_path = fft_parquet_path
-                        
-                        # Vault에도 Parquet 이중 백업
-                        tdms_parquet_vault = save_to_vault(parquet_path, "processed_parquet", f"job_{job.job_id}_viz.parquet")
-                        tdms_fft_vault = save_to_vault(fft_parquet_path, "processed_parquet", f"job_{job.job_id}_fft.parquet") if fft_parquet_path else None
+                        from vault_manager import get_rel_raw_data_path
                         
                         # machining_raw_data 내 processed_parquet 폴더에도 동기화 복사
+                        raw_parquet_path = parquet_path
+                        raw_fft_path = fft_parquet_path
                         if job.source_folder:
                             raw_job_dir = os.path.join(PROJECT_ROOT, "machining_raw_data", *job.source_folder.split('/'), "processed_parquet")
                             os.makedirs(raw_job_dir, exist_ok=True)
                             import shutil
-                            shutil.copy2(parquet_path, os.path.join(raw_job_dir, f"job_{job.job_id}_viz.parquet"))
+                            raw_parquet_path = os.path.join(raw_job_dir, f"job_{job.job_id}_viz.parquet")
+                            shutil.copy2(parquet_path, raw_parquet_path)
                             if fft_parquet_path:
-                                shutil.copy2(fft_parquet_path, os.path.join(raw_job_dir, f"job_{job.job_id}_fft.parquet"))
+                                raw_fft_path = os.path.join(raw_job_dir, f"job_{job.job_id}_fft.parquet")
+                                shutil.copy2(fft_parquet_path, raw_fft_path)
+                                
+                        job.tdms_parquet_path = get_rel_raw_data_path(raw_parquet_path)
+                        job.tdms_fft_parquet_path = get_rel_raw_data_path(raw_fft_path)
+                        
+                        # Vault에도 Parquet 이중 백업
+                        tdms_parquet_vault = save_to_vault(parquet_path, "processed_parquet", f"job_{job.job_id}_viz.parquet")
+                        tdms_fft_vault = save_to_vault(fft_parquet_path, "processed_parquet", f"job_{job.job_id}_fft.parquet") if fft_parquet_path else None
                         
                         job_archive = db.query(JobFileArchive).filter(JobFileArchive.job_id == job.job_id).first()
                         if not job_archive:

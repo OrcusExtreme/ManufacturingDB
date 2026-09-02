@@ -63,7 +63,7 @@ with st.sidebar:
     st.divider()
     st.title("내비게이션")
     
-    options_list = ["가공 검색", "데이터 수정", "데이터 삽입"]
+    options_list = ["가공 검색", "데이터 수정", "데이터 삽입", "DB 테이블 관리"]
     
     if 'current_nav' not in st.session_state:
         st.session_state.current_nav = st.session_state.get('nav_menu', "데이터 수정")
@@ -73,7 +73,7 @@ with st.sidebar:
     nav_menu = option_menu(
         menu_title=None, 
         options=options_list, 
-        icons=["search", "pencil-square", "cloud-upload"], 
+        icons=["search", "pencil-square", "cloud-upload", "database"], 
         menu_icon="cast", 
         default_index=default_idx,
         styles={
@@ -688,8 +688,8 @@ elif nav_menu == "데이터 삽입":
         file_cad = st.file_uploader("CAD 파일 업로드", type=["stl", "step", "stp"], accept_multiple_files=False, key="uploader_cad", label_visibility="collapsed")
         
         if cad_existing_name:
-            with st.expander(f"👁️ 기존 CAD 모델 형상 미리보기 ({cad_existing_name})", expanded=False):
-                render_cad_viewer(target_part_name, height=380)
+            with st.expander(f"👁️ 기존 CAD 모델 3D 뷰어 ({cad_existing_name}) - 360° 회전 / 메시 모드", expanded=False):
+                render_cad_viewer(target_part_name, height=460)
         
         existing_job_folder = None
         job_selected_ready = False
@@ -925,3 +925,7 @@ elif nav_menu == "데이터 삽입":
                 msg_dir = target_job_dir if target_job_dir else cad_dir
                 st.success(f"성공적으로 {saved_count}개의 파일을 업로드했습니다! (메인 폴더: {msg_dir})")
                 st.info("데이터가 계층형 폴더에 저장되었으며, 백엔드 Watchdog에 의해 파이프라인 처리가 시작됩니다.")
+                
+elif nav_menu == "DB 테이블 관리":
+    import admin_db_editor
+    admin_db_editor.render_db_editor(engine)
