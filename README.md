@@ -5,7 +5,7 @@
 [![ORM](https://img.shields.io/badge/SQLAlchemy-2.0%2B-red.svg)](https://www.sqlalchemy.org/)
 [![Frontend](https://img.shields.io/badge/Streamlit-1.61%2B-FF4B4B.svg)](https://streamlit.io/)
 [![Standard](https://img.shields.io/badge/Standard-ISO%2014649%20(STEP--NC)-green.svg)](https://www.iso.org/)
-[![Release](https://img.shields.io/badge/Release-V2.0.2-brightgreen.svg)](https://github.com/OrcusExtreme/ManufacturingDB)
+[![Release](https://img.shields.io/badge/Release-V2.0.4-brightgreen.svg)](https://github.com/OrcusExtreme/ManufacturingDB)
 
 공작기계지능화실험실(Machine Tool Intelligence Lab)의 **통합 스마트 제조 데이터베이스 및 실시간 분석 플랫폼**입니다.  
 공작기계(CNC)에서 생성되는 다양한 이기종 데이터(XML 메타데이터, NC 프로그램, 100kHz+ 고주파 NI TDMS 진동 센서, 1Hz CNC 상태 로그, 표면 조도 측정 CSV, 3D CAD 도면)를 **Watchdog 기반으로 자동 감시·수집·파싱**하여 **ISO 14649(STEP-NC) 표준 기반 RDBMS**에 정규화 적재하고, 연구원 및 관리자에게 고성능 웹 대시보드를 제공합니다.
@@ -185,6 +185,9 @@ python run_system.py
 ---
 
 ## 🚀 릴리즈 노트 (Release Notes)
+
+### [V2.0.4] - 2026-09-03
+- **프로젝트 디렉터리 클린업 (Directory Cleanup)**: 과거 파싱 작업에 사용되었던 1회성 추출 스크립트(`extract_xml.py` 등), 디버깅용 임시 스크립트, 실행 로그 파일(`st_err.log` 등), 사용하지 않는 찌꺼기 폴더(`TESTSET`, `temp_pyrefly` 등)를 일괄 삭제하여 프로젝트 루트 환경 최적화
 
 ### [V2.0.3] - 2026-09-02
 - **관리자 DB 데이터 편집 모듈 탑재**: Admin Dashboard(Port 8501)에 "DB 테이블 관리" 메뉴를 신설하고, Root 계정 인증을 통해 PK/FK를 보호하며 나머지 데이터를 안전하게 편집(UPDATE/INSERT/DELETE)할 수 있는 모달형 실시간 에디터 추가

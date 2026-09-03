@@ -18,6 +18,9 @@ ENV/
 machining_data.db
 machining_raw_data/
 __data__/
+archive_vault/
+processed_data/
+failed_data/
 
 # IDEs
 .vscode/
