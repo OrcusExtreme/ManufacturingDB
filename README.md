@@ -5,7 +5,7 @@
 [![ORM](https://img.shields.io/badge/SQLAlchemy-2.0%2B-red.svg)](https://www.sqlalchemy.org/)
 [![Frontend](https://img.shields.io/badge/Streamlit-1.61%2B-FF4B4B.svg)](https://streamlit.io/)
 [![Standard](https://img.shields.io/badge/Standard-ISO%2014649%20(STEP--NC)-green.svg)](https://www.iso.org/)
-[![Release](https://img.shields.io/badge/Release-V2.0.4-brightgreen.svg)](https://github.com/OrcusExtreme/ManufacturingDB)
+[![Release](https://img.shields.io/badge/Release-V2.3.1-brightgreen.svg)](https://github.com/OrcusExtreme/ManufacturingDB)
 
 공작기계지능화실험실(Machine Tool Intelligence Lab)의 **통합 스마트 제조 데이터베이스 및 실시간 분석 플랫폼**입니다.  
 공작기계(CNC)에서 생성되는 다양한 이기종 데이터(XML 메타데이터, NC 프로그램, 100kHz+ 고주파 NI TDMS 진동 센서, 1Hz CNC 상태 로그, 표면 조도 측정 CSV, 3D CAD 도면)를 **Watchdog 기반으로 자동 감시·수집·파싱**하여 **ISO 14649(STEP-NC) 표준 기반 RDBMS**에 정규화 적재하고, 연구원 및 관리자에게 고성능 웹 대시보드를 제공합니다.
@@ -30,9 +30,11 @@
 - 파일 전송 완료(Lock 해제) 감지 후 확장자별 병렬 파서 자동 구동 (`xml`, `tdms`, `nc`, `log`, `csv`, `step`/`stl`)
 - 비동기 백그라운드 데몬(`tdms_visualizer.py`)을 통한 시간 도메인 & FFT 주파수 스펙트럼 Parquet 자동 생성
 
-### 4. 이원화된 Streamlit 웹 인터페이스
-- **관리자 대시보드 (Port 8501)**: Job 메타데이터/환경/품질 점검 CUD 폼, CASCADE 삭제, ZIP 재난 복구, 수동 웹 업로더
-- **사용자/연구원 대시보드 (Port 8502)**: ISO 14649 트리뷰, Plotly 기반 고주파 진동 Envelope & FFT 스펙트럼 분석, 2D 표면조도 프로파일 시각화, 선택적 데이터 다운로드
+### 4. 단일 통합 Streamlit 웹 대시보드 (Port 8501)
+Job 검색부터 ISO 14649 트리뷰, 센서/조도 분석(Plotly Envelope & FFT), 메타데이터·환경·품질 수정, 데이터 삽입,
+DB 테이블 조회/편집, 재난 복구(ZIP)까지 하나의 화면 흐름에서 처리합니다. 별도의 관리자/사용자 계정 구분 없이
+모든 기능에 접근할 수 있으며, Job 삭제나 DB 테이블 직접 편집처럼 파괴적인 작업에는 확인 절차(삭제 확인
+다이얼로그, Root 계정 재인증)가 남아 있습니다.
 
 ---
 
@@ -58,8 +60,7 @@
        │
        ▼
 [Streamlit Frontend UI]
-  ├─ Admin Dashboard (Port 8501) : 데이터 관리, 품질/환경 수정, 원자적 삭제, 복구 ZIP 생성
-  └─ User Dashboard  (Port 8502) : 가공 검색, Plotly 센서 분석, 조도 프로파일, 데이터 다운로드
+  └─ 통합 대시보드 (Port 8501) : Job 검색·분석, 메타데이터/환경/품질 수정, 데이터 삽입, DB 조회/편집, 복구 ZIP 생성
 ```
 
 ---
@@ -108,9 +109,11 @@ ManufacturingDB/
 │   ├── data_insert_recognization.py  # Watchdog 파일 감시 및 큐 분배기
 │   ├── job_manager.py                # Job 생성 및 중복 확인 유틸리티
 │   ├── recovery_engine.py            # Vault/DB 기반 재난 복구 ZIP 생성기
-│   ├── tool_inserter.py              # 공구 마스터 Excel 파서
+│   ├── tool_inserter.py              # 공구 마스터 Excel 파서 (엑셀 업서트, UI에서도 실행 가능)
 │   ├── tdms_visualizer.py            # 백그라운드 TDMS Parquet/FFT 변환 데몬
 │   ├── vault_manager.py              # 파일 SHA 해시 기반 Vault 아카이빙
+│   ├── integrity.py                  # SHA-256 원본 복원 검증 단일 로직 (3-상태 결과)
+│   ├── integrity_monitor.py          # 원본 복원 검증 백그라운드 감시자 (주기 실행 + 로그 경고)
 │   ├── DB/                           
 │   │   ├── database.py               # SQLAlchemy 커넥션 풀링 및 세션 팩토리
 │   │   └── models.py                 # 14개 테이블 DDL 및 ORM 정의
@@ -121,9 +124,20 @@ ManufacturingDB/
 │       ├── roughness_parser.py       # 표면조도(Ra/Rq/Rz) 및 평가곡선 파서
 │       ├── cad_parser.py             # STEP/STL 도면 파서
 │       └── nc_parser.py              # NC 프로그램 G코드 파서
-└── frontend/                         # Streamlit 대시보드
-    ├── admin_dashboard.py            # 관리자 대시보드 (Port 8501)
-    └── user_dashboard.py             # 사용자 분석 대시보드 (Port 8502)
+└── frontend/                         # Streamlit 통합 대시보드 (Port 8501)
+    ├── dashboard.py                   # 단일 엔트리포인트: 페이지 설정, 사이드바 내비게이션
+    ├── cad_viewer_component.py        # 3D CAD(STEP/STL) 뷰어 컴포넌트
+    ├── erd_component.py               # 인터랙티브 ERD 다이어그램 컴포넌트
+    └── components/                    # 화면별 모듈화된 렌더링 컴포넌트
+        ├── common.py                  # 공통 유틸(경로 설정, 캐싱 쿼리, ZIP 생성 등)
+        ├── filters.py                 # 5단계 캐스케이딩 Job 검색 필터
+        ├── job_workspace.py           # Job 검색·분석·수정·다운로드 통합 화면
+        ├── master_tree.py             # 계층형 마스터 데이터(ISO 14649 트리) 조회
+        ├── tool_master.py             # 공구 마스터 엑셀(.xlsx) 업서트 및 목록 조회
+        ├── data_upload.py             # 가공 데이터 수동 업로드
+        ├── db_explorer.py             # DB 테이블 ERD/조회/정렬·조건 필터/편집/CSV 내보내기
+        ├── download_center.py         # 프로젝트 ▸ Part ▸ Job ▸ 세부 데이터 다운로드 내비게이션
+        └── recovery.py                # 시스템 백업/복구 (전체 복구 ZIP 생성)
 ```
 
 ---
@@ -152,39 +166,90 @@ PYTHONPATH=backend
 ```
 
 ### 4. 원클릭 시스템 실행 (Run System)
-`run_system.py`를 실행하면 필수 패키지 설치 확인, DB 스키마 자동 초기화, 파이프라인 및 두 대시보드가 서브프로세스로 동시 기동됩니다.
+`run_system.py`를 실행하면 필수 패키지 설치 확인, DB 스키마 자동 초기화, 파이프라인 및 통합 대시보드가 서브프로세스로 동시 기동됩니다.
 ```bash
 python run_system.py
 ```
 
 ### 5. 서비스 접속
-- **관리자 대시보드 (Admin Dashboard)**: [http://localhost:8501](http://localhost:8501)
-- **사용자 분석 대시보드 (User Dashboard)**: [http://localhost:8502](http://localhost:8502)
+- **통합 대시보드**: [http://localhost:8501](http://localhost:8501)
 
 ---
 
 ## 📈 대시보드 주요 기능 안내 (UI Features)
 
-### 🛠️ 관리자 대시보드 (Port 8501)
-1. **데이터 수정**:
-   - 연구 프로젝트명, Part명, 가공차수, 실험일자 범위 기반의 5단계 동적 계층 필터
-   - Tab 1(메타데이터), Tab 2(온습도/작업자/칩형태 환경메모), Tab 3(치수공차/형상/PASS·FAIL 품질점검) 통합 편집
-   - 원자적 연쇄 삭제(`CASCADE`) 모달 지원
-   - `복구 파일(ZIP) 생성`: Vault에서 원본 파일들을 역추적하여 폴더 구조 그대로 압축 다운로드
-2. **가공 검색**: 엑셀 형태의 17개 종합 지표 테이블, 고유 범위 슬라이더 고급 필터
-3. **데이터 삽입**: CAD 도면, XML, NC, TDMS, Log, 조도 CSV 웹 수동 업로드
+로그인·역할 구분 없이 하나의 화면에서 모든 기능에 접근합니다. Job 삭제, DB 테이블 직접 편집처럼 되돌릴 수
+없는 작업에는 확인 다이얼로그 또는 Root 계정 재인증이 남아 있습니다.
 
-### 🔬 사용자 및 분석 대시보드 (Port 8502)
-1. **계층형 마스터 데이터**: ISO 14649 공정 트리(Part ➔ Workplan ➔ Workingstep ➔ Tool) 및 CAD 모델 조회
-2. **가공 이력 & 센서 분석**:
-   - 좌측: 가공 요약 메타, CNC 1Hz 통계 지표(`cls`, `crpm`, `cfr`), 조도 파라미터, 품질 합부 태그
-   - 우측: 고주파 TDMS 센서 Line 차트, DAQ 진동 Envelope 밴드 차트, 주파수(FFT) PSD 로그 스펙트럼 차트, 마이크로미터 표면조도 단면 곡선 시각화
-3. **데이터 다운로드**: 대상 Job의 전체 폴더 ZIP 다운로드 또는 확장자별 맞춤형 선택 다운로드
-4. **DB 테이블 조회**: RDBMS 내 14개 테이블의 Raw 데이터를 실시간 쿼리하여 데이터 정합성 검증
+1. **Job 워크스페이스**: 연구 프로젝트명·Part명·가공차수·실험일자 범위 기반 5단계 동적 필터로 Job을 검색한
+   뒤, 하나의 화면에서 탭으로 전환하며 처리합니다.
+   - `분석 보기`: CNC 1Hz 통계(`cls`, `crpm`, `cfr`), 고주파 TDMS 센서 Line 차트, DAQ 진동 Envelope 밴드 차트,
+     FFT PSD 로그 스펙트럼, 마이크로미터 표면조도 단면 곡선 시각화
+   - `메타데이터 · 환경 · 품질 수정`(편집 모드): Job 메타데이터, 온습도/작업자/칩형태 환경메모,
+     치수공차/형상/PASS·FAIL 품질점검 통합 편집
+   - 하단 `영구 삭제`: 원자적 연쇄 삭제(`CASCADE`) 확인 모달 지원
+   - 원본 파일 다운로드는 `데이터 다운로드` 메뉴로 일원화되어 있습니다
+2. **계층형 마스터 데이터**: ISO 14649 공정 트리(Part ➔ Workplan ➔ Workingstep ➔ Tool) 및 CAD 모델 조회
+3. **공구 마스터**: 엑셀(`.xlsx`) 업로드로 공구 마스터 일괄 upsert(`tool_code` 기준) 및 전체 공구 목록 조회
+4. **데이터 삽입**: CAD 도면(`.stl`/`.stp`/`.step`), XML, NC, TDMS, Log, 조도 CSV 웹 수동 업로드.
+   사이드바의 `DB 스키마 구조` 바로 아래에 배치되어 가장 먼저 접근됩니다
+5. **DB 테이블**: 인터랙티브 ERD에서 테이블을 선택해 실시간 조회·검색, 속성별 정렬(오름/내림차순)과 속성 ▸
+   비교 조건 ▸ 값 드롭다운 필터링, CSV 내보내기 지원. 표를 직접 편집한 뒤 저장하면 Root 인증을 거쳐 반영
+6. **데이터 다운로드**: 프로젝트 ▸ Part ▸ Job 순으로 좁혀가며 선택 범위를 ZIP으로 내려받습니다. 가공
+   이력(Job)까지 선택하면 그 Job에 **실제로 존재하는 데이터 유형만** 버튼으로 나타나고(파일 개수 표시),
+   버튼 클릭 시 해당 유형만 즉시 내려받거나 개별 파일 단위로 받을 수 있습니다. 원본 폴더가 삭제된 Job은
+   Vault/DB 아카이브에서 자동 조달되며, 필요하면 로컬 디스크로 원본 복원도 가능합니다
+7. **시스템 백업/복구**: Vault/DB에서 원본 파일들을 역추적하여 폴더 구조 그대로 압축(ZIP) 다운로드
+
+사이드바는 `DB 관계도(ERD) 보기` 버튼(전체 테이블 관계도 팝업) 아래에 데이터 입출력 메뉴(`데이터 삽입`,
+`데이터 다운로드`)를 두고, 구분선 아래에 나머지 조회·관리 메뉴를 배치합니다.
+
+### 🔒 원본 복원 검증은 백그라운드에서만 수행됩니다
+
+XML/NC/CAD 원본이 저장 시점과 바이트 단위로 동일한지에 대한 SHA-256 검증은 화면에서 제거되었고,
+데이터 수집 파이프라인이 기동 직후와 이후 30분 주기로 자동 수행합니다(`backend/integrity_monitor.py`).
+판정은 `일치 / 불일치 / 검증 불가(기준 해시 미기록)` 3-상태를 그대로 유지하며, 실행 로그에 다음과 같이 남습니다.
+
+```text
+[원본 복원 검증] 일치 4건 / 불일치 0건 / 검증 불가 0건 / 원본 미보존 1건
+```
+
+불일치가 감지되면 해당 대상의 기준 해시와 재계산 해시가 `[경고]` 라인으로 함께 출력됩니다. 해시 재계산
+로직은 여전히 `backend/integrity.py` 한 곳만 사용합니다.
 
 ---
 
 ## 🚀 릴리즈 노트 (Release Notes)
+
+### [V2.3.1] - 2026-09-08
+- **원본 복원 검증 백그라운드 전환** (`backend/integrity_monitor.py`): UI에서 복원 검증 화면을 완전히 제거하고,
+  파이프라인이 기동 시 1회 + 30분 주기로 전체 아카이브(XML/NC/CAD)를 자동 재검증하여 결과를 로그로 남기도록 변경.
+  불일치 감지 시 기준/재계산 해시를 함께 경고 출력. 서브프로세스를 `-u`로 띄워 파이프라인 로그가 즉시 보이도록 수정
+- **사이드바 재구성**: `핵심 테이블 구조 안내` 안내문을 제거하고, `DB 관계도(ERD) 보기` 버튼 아래에
+  `데이터 삽입`·`데이터 다운로드`를 별도 그룹으로 배치한 뒤 구분선 아래에 나머지 내비게이션 메뉴 배치
+- **데이터 다운로드 내비게이션 신설** (`components/download_center.py`): 프로젝트 ▸ Part ▸ Job 순으로 범위를 좁혀
+  ZIP 일괄 다운로드. Job까지 선택하면 그 Job에 실제 존재하는 데이터 유형만 버튼(파일 개수 포함)으로 노출되어
+  유형별·개별 파일 단위 다운로드 가능. 원본 폴더 유실 시 Vault/DB 아카이브에서 자동 조달 및 로컬 복원 지원
+- **다운로드 경로 일원화**: Job 워크스페이스의 `다운로드` 탭을 제거하고 모든 원본 파일 다운로드를
+  `데이터 다운로드` 메뉴로 통합
+- **DB 테이블 정렬·조건 필터**: 속성별 오름/내림차순 정렬과 `속성 ▸ 비교 조건 ▸ 값` 드롭다운 필터(값 목록은
+  해당 컬럼의 실제 DISTINCT 값에서 제공, 직접 입력도 가능)를 SQL 레벨에서 적용
+- **사이드바 개편**: `DB 관계도(ERD) 보기` 팝업 버튼 추가, `데이터 삽입` 메뉴를 DB 스키마 구조 버튼 바로 아래로 이동
+- **업로드 형식 제한 명확화**: CAD는 `.stl`/`.stp`/`.step`, 공구 마스터 엑셀은 `.xlsx`만 허용
+- **공구 사진·실장착 표시 기능 제거**: 공구 마스터 화면에서 실물 사진 등록/조회 및 실제 장착 공구 표시 UI 삭제
+
+### [V2.2.0] - 2026-09-07
+- **원본 복원 검증 (Restore & Verify) 신설**: XML/NC/CAD LONGBLOB 저장 시점에 SHA-256을 함께 기록(`backend/integrity.py`)
+  하고, "원본 복원 검증" 화면에서 지금 DB에서 꺼낸 원본을 재계산해 비교. 결과는 항상 `✅ 일치 / ❌ 불일치 /
+  ⚪ 검증 불가` 3가지 상태로 노출되어 "검증 불가"가 실패로 오인되지 않도록 함
+- **공구 마스터 화면 신설**: 기존 백엔드 전용이던 `tool_inserter.py` 엑셀 업서트를 UI에서 직접 실행 가능하도록
+  연결. 공구별로 현재 실제 기계 장착 여부(`is_mounted`)와 실물 사진(`photo_content`)을 등록·조회 가능
+
+### [V2.1.0] - 2026-09-07
+- **관리자/사용자 대시보드 단일 통합 (Unified Dashboard)**: 별도 포트로 분리돼 있던 관리자 대시보드(8501)와
+  사용자 대시보드(8502)를 로그인·역할 구분 없는 하나의 대시보드(Port 8501)로 통합. "가공 검색"에 중복돼
+  있던 필터 로직을 `components/filters.py`로 추출하고, Job 검색·분석·수정·다운로드를 "Job 워크스페이스"
+  탭 하나로 합쳐 화면 이동 뎁스를 줄임. `frontend/components/` 아래로 화면별 렌더링 로직을 모듈화
 
 ### [V2.0.4] - 2026-09-03
 - **프로젝트 디렉터리 클린업 (Directory Cleanup)**: 과거 파싱 작업에 사용되었던 1회성 추출 스크립트(`extract_xml.py` 등), 디버깅용 임시 스크립트, 실행 로그 파일(`st_err.log` 등), 사용하지 않는 찌꺼기 폴더(`TESTSET`, `temp_pyrefly` 등)를 일괄 삭제하여 프로젝트 루트 환경 최적화

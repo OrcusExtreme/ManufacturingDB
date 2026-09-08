@@ -25,6 +25,10 @@ failed_data/
 # IDEs
 .vscode/
 .idea/
+.claude/
+
+# Logs
+*.log
 
 # macOS
 .DS_Store

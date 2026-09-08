@@ -5,6 +5,7 @@ import xml.etree.ElementTree as ET
 from DB.database import SessionLocal
 from DB.models import Part, Workplan, Workingstep, Job, Tool, WorkplanFileArchive, JobFileArchive
 from vault_manager import save_to_vault
+from integrity import sha256_bytes
 
 def safe_float(val, default=0.0):
     try:
@@ -108,7 +109,8 @@ def parse_xml(file_path, job_id):
             wp_archive = WorkplanFileArchive(
                 workplan_id=workplan_id,
                 nc_file_path=nc_vault_path,
-                nc_file_content=nc_binary_data_to_save
+                nc_file_content=nc_binary_data_to_save,
+                nc_file_sha256=sha256_bytes(nc_binary_data_to_save) if nc_binary_data_to_save else None
             )
             db.add(wp_archive)
             db.flush()
@@ -208,10 +210,14 @@ def parse_xml(file_path, job_id):
                     print(f"    - [알림] XML 파일이 15MB를 초과하여 DB 내부 저장을 생략합니다.")
         
         if existing_job:
-            canonical_sf = f"{parsed_rp or existing_job.research_project or 'Unknown'}/{parsed_cpn or existing_job.custom_part_name or 'Unknown'}/{existing_job.job_id}"
+            # source_folder는 반드시 실제 디스크 폴더 경로(job_id 파라미터)와 일치해야 한다.
+            # job_id PK 기반 문자열로 재구성하면 watchdog이 인식한 실제 폴더명과 어긋나서
+            # (1) 같은 폴더의 다른 파일(NC/TDMS/Log)이 이 Job을 못 찾아 중복 Job을 만들고
+            # (2) 다운로드/복구 기능이 존재하는 실제 폴더를 "유실됨"으로 오판하게 된다.
+            canonical_sf = job_id
             if existing_job.source_folder != canonical_sf:
                 existing_job.source_folder = canonical_sf
-                
+
             xml_vault_path = save_to_vault(file_path, "jobs", *canonical_sf.split('/'), "metadata.xml")
             print(f"    - 이미 존재하는 Job (PK: {existing_job.job_id} / 폴더: {existing_job.source_folder}) 발견. Job 정보를 업데이트합니다.")
             existing_job.start_time = start_time
@@ -231,12 +237,14 @@ def parse_xml(file_path, job_id):
             if parsed_cpn and not existing_job.custom_part_name:
                 existing_job.custom_part_name = parsed_cpn
                 
+            xml_sha256 = sha256_bytes(xml_binary_data_to_save) if xml_binary_data_to_save else None
             job_archive = db.query(JobFileArchive).filter(JobFileArchive.job_id == existing_job.job_id).first()
             if job_archive:
                 job_archive.xml_file_path = xml_vault_path
                 job_archive.xml_file_content = xml_binary_data_to_save
+                job_archive.xml_file_sha256 = xml_sha256
             else:
-                db.add(JobFileArchive(job_id=existing_job.job_id, xml_file_path=xml_vault_path, xml_file_content=xml_binary_data_to_save))
+                db.add(JobFileArchive(job_id=existing_job.job_id, xml_file_path=xml_vault_path, xml_file_content=xml_binary_data_to_save, xml_file_sha256=xml_sha256))
         else:
             new_job = Job(
                 workplan_id=workplan_id,
@@ -256,12 +264,18 @@ def parse_xml(file_path, job_id):
             )
             db.add(new_job)
             db.flush()
-            
-            new_job.source_folder = f"{parsed_rp or 'Unknown'}/{parsed_cpn or 'Unknown'}/{new_job.job_id}"
+
+            # source_folder는 watchdog이 실제로 감지한 디스크 폴더 경로(job_id 파라미터)를 그대로 사용한다.
+            # job_id PK 기반으로 재구성하면 실제 폴더명과 어긋나 이후 NC/TDMS/Log 파일이 이 Job을
+            # 찾지 못하고 중복 Job을 만들며, 다운로드/복구 기능도 존재하는 폴더를 "유실됨"으로 오판한다.
+            new_job.source_folder = job_id
             db.flush()
-            
+
             xml_vault_path = save_to_vault(file_path, "jobs", *new_job.source_folder.split('/'), "metadata.xml")
-            db.add(JobFileArchive(job_id=new_job.job_id, xml_file_path=xml_vault_path, xml_file_content=xml_binary_data_to_save))
+            db.add(JobFileArchive(
+                job_id=new_job.job_id, xml_file_path=xml_vault_path, xml_file_content=xml_binary_data_to_save,
+                xml_file_sha256=sha256_bytes(xml_binary_data_to_save) if xml_binary_data_to_save else None
+            ))
             
         db.commit()
         print(f"    - XML 파싱 완료. DB 저장 성공 (폴더명: {job_id})")

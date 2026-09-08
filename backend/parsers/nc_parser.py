@@ -55,15 +55,19 @@ def parse_nc(file_path, job_id_str=None):
                         print(f"    - [알림] NC 파일이 15MB를 초과하여 DB 내부 저장을 생략합니다.")
             
             from DB.models import WorkplanFileArchive
+            from integrity import sha256_bytes
+            nc_sha256 = sha256_bytes(nc_binary_data) if nc_binary_data else None
             wp_archive = db.query(WorkplanFileArchive).filter(WorkplanFileArchive.workplan_id == job.workplan_id).first()
             if wp_archive:
                 wp_archive.nc_file_path = file_path
                 wp_archive.nc_file_content = nc_binary_data
+                wp_archive.nc_file_sha256 = nc_sha256
             else:
                 wp_archive = WorkplanFileArchive(
                     workplan_id=job.workplan_id,
                     nc_file_path=file_path,
-                    nc_file_content=nc_binary_data
+                    nc_file_content=nc_binary_data,
+                    nc_file_sha256=nc_sha256
                 )
                 db.add(wp_archive)
                 

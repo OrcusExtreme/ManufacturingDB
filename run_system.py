@@ -26,31 +26,27 @@ def install_requirements():
 def start_services():
     base_dir = os.path.dirname(os.path.abspath(__file__))
     
-    print("🧹 [1/5] 더미 데이터 청소를 실행합니다...")
+    print("🧹 [1/4] 더미 데이터 청소를 실행합니다...")
     cleaner_path = os.path.join(base_dir, "backend", "clean_dummy_data.py")
     subprocess.call([sys.executable, cleaner_path])
-    
-    print("🚀 [2/5] 데이터 수집 파이프라인(Backend)을 시작합니다...")
+
+    print("🚀 [2/4] 데이터 수집 파이프라인(Backend)을 시작합니다...")
     parser_path = os.path.join(base_dir, "backend", "data_insert_recognization.py")
-    p1 = subprocess.Popen([sys.executable, parser_path])
+    # -u: 파이프라인 로그(자동 복원 알림, 원본 복원 검증 결과 등)가 버퍼에 갇히지 않고 즉시 출력되도록.
+    p1 = subprocess.Popen([sys.executable, "-u", parser_path])
     processes.append(p1)
     
     # 파서가 초기화될 시간을 잠깐 줍니다.
     time.sleep(2)
     
-    print("🚀 [3/5] 관리자용 대시보드를 시작합니다 (Port 8501)...")
-    admin_path = os.path.join(base_dir, "frontend", "admin_dashboard.py")
-    p2 = subprocess.Popen([sys.executable, "-m", "streamlit", "run", admin_path, "--server.port", "8501"])
+    print("🚀 [3/4] 통합 대시보드를 시작합니다 (Port 8501)...")
+    dashboard_path = os.path.join(base_dir, "frontend", "dashboard.py")
+    p2 = subprocess.Popen([sys.executable, "-m", "streamlit", "run", dashboard_path, "--server.port", "8501"])
     processes.append(p2)
-    
-    print("🚀 [4/5] 사용자용 대시보드를 시작합니다 (Port 8502)...")
-    user_path = os.path.join(base_dir, "frontend", "user_dashboard.py")
-    p3 = subprocess.Popen([sys.executable, "-m", "streamlit", "run", user_path, "--server.port", "8502"])
-    processes.append(p3)
 
-    print("🚀 [5/5] TDMS 파켓 변환 백그라운드 서비스를 시작합니다...")
+    print("🚀 [4/4] TDMS 파켓 변환 백그라운드 서비스를 시작합니다...")
     tdms_viz_path = os.path.join(base_dir, "backend", "tdms_visualizer.py")
-    p4 = subprocess.Popen([sys.executable, tdms_viz_path])
+    p4 = subprocess.Popen([sys.executable, "-u", tdms_viz_path])
     processes.append(p4)
 
 def stop_services():

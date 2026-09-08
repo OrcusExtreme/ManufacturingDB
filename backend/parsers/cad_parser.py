@@ -2,6 +2,7 @@ import os
 from DB.database import SessionLocal
 from DB.models import Part, CadFileArchive
 from vault_manager import save_to_vault
+from integrity import sha256_bytes
 
 from job_manager import get_or_create_job
 
@@ -60,9 +61,12 @@ def parse_cad(file_path, project_name, part_name):
             CadFileArchive.file_name == file_name
         ).first()
         
+        cad_sha256 = sha256_bytes(file_content_to_save) if file_content_to_save else None
+
         if existing_cad:
             existing_cad.file_path = cad_vault_path
             existing_cad.file_content = file_content_to_save
+            existing_cad.file_sha256 = cad_sha256
             print(f"    - CAD 파일 업데이트 완료 (Part: {part_code})")
         else:
             new_cad = CadFileArchive(
@@ -70,7 +74,8 @@ def parse_cad(file_path, project_name, part_name):
                 file_name=file_name,
                 file_type=ext,
                 file_path=cad_vault_path,
-                file_content=file_content_to_save
+                file_content=file_content_to_save,
+                file_sha256=cad_sha256
             )
             db.add(new_cad)
             print(f"    - CAD 파일 삽입 완료 (Part: {part_code})")

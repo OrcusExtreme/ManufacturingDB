@@ -1,0 +1,289 @@
+import os
+import tempfile
+import zipfile
+
+import pandas as pd
+import streamlit as st
+
+from .common import PROJECT_ROOT, load_data
+
+ALL = "(전체)"
+RAW_DIR = os.path.join(PROJECT_ROOT, "machining_raw_data")
+
+# (표시 이름, 파일명용 영문 슬러그, 판별 규칙) - 위에서부터 먼저 일치하는 유형으로 분류된다.
+CATEGORY_RULES = [
+    ("메타데이터 (XML)", "XMLMetadata", lambda p: p.endswith(".xml") and "coeff" not in p),
+    ("NC 프로그램", "NCProgram", lambda p: p.endswith(".nc")),
+    ("고주파 센서 (TDMS)", "TDMS", lambda p: p.endswith((".tdms", ".tdms_index"))),
+    ("표면 조도", "SurfaceRoughness", lambda p: "surface" in p or "조도" in p or p.endswith(".fpk")),
+    ("장비 로그", "EquipmentLog", lambda p: p.endswith((".log", ".txt", ".csv"))),
+    ("Parquet 분석 데이터", "ParquetData", lambda p: p.endswith(".parquet")),
+    ("CAD 모델", "CADModel", lambda p: p.endswith((".stl", ".stp", ".step"))),
+]
+ETC_LABEL = "기타 파일"
+CATEGORY_ORDER = [label for label, _slug, _rule in CATEGORY_RULES] + [ETC_LABEL]
+CATEGORY_SLUGS = {label: slug for label, slug, _rule in CATEGORY_RULES}
+CATEGORY_SLUGS[ETC_LABEL] = "EtcFiles"
+
+
+def _categorize(path):
+    lower = path.lower()
+    for label, _slug, rule in CATEGORY_RULES:
+        if rule(lower):
+            return label
+    return ETC_LABEL
+
+
+@st.cache_data(ttl=60)
+def _job_files(job_id, source_folder):
+    """Job 1건의 (실제 경로, 상대 경로) 목록. 원본 폴더가 있으면 폴더에서, 없으면 Vault/DB 아카이브에서 가져온다."""
+    folder = _job_folder(source_folder)
+    if folder:
+        found = []
+        for root, _dirs, names in os.walk(folder):
+            for name in names:
+                abs_path = os.path.join(root, name)
+                found.append((abs_path, os.path.relpath(abs_path, folder).replace("\\", "/")))
+        if found:
+            return found
+
+    from recovery_engine import get_job_archive_files
+
+    archived = []
+    for items in get_job_archive_files(job_id).values():
+        for abs_path, _base_name, arcname in items:
+            if os.path.exists(abs_path):
+                archived.append((abs_path, arcname))
+    return archived
+
+
+def _job_folder(source_folder):
+    """machining_raw_data 아래 실제 원본 폴더 경로. 없으면 None."""
+    normalized = (source_folder or "").replace("\\", "/").strip("/")
+    if not normalized:
+        return None
+    folder = os.path.join(RAW_DIR, *normalized.split("/"))
+    return folder if os.path.isdir(folder) else None
+
+
+@st.cache_data(ttl=60)
+def _job_catalog():
+    df = load_data("""
+        SELECT j.job_id, j.source_folder, j.start_time, j.machining_type, j.research_project,
+               COALESCE(j.custom_part_name, p.part_code) AS part_name
+        FROM job j
+        LEFT JOIN workplan w ON j.workplan_id = w.workplan_id
+        LEFT JOIN part p ON w.part_code = p.part_code
+        ORDER BY j.job_id
+    """)
+    if df.empty:
+        return df
+
+    folder_parts = df['source_folder'].fillna("").str.replace("\\", "/", regex=False).str.split("/")
+    df['project_name'] = df['research_project'].fillna(folder_parts.str[0]).replace("", pd.NA).fillna("(프로젝트 미지정)")
+    df['part_name'] = df['part_name'].fillna(folder_parts.str[1]).replace("", pd.NA).fillna("(Part 미지정)")
+    return df
+
+
+def _collect_files(jobs_df, category=None):
+    """선택 범위의 (실제 경로, 압축 내 경로) 목록. category가 None이면 모든 유형을 포함한다."""
+    collected = []
+    for _, row in jobs_df.iterrows():
+        source_folder = row['source_folder'] or f"{row['project_name']}/{row['part_name']}/{row['job_id']}"
+        prefix = source_folder.replace("\\", "/").strip("/")
+        for abs_path, rel_path in _job_files(row['job_id'], row['source_folder'] or ""):
+            if category is None or _categorize(abs_path) == category:
+                collected.append((abs_path, f"{prefix}/{rel_path}"))
+    return collected
+
+
+def _make_zip(files):
+    temp_zip = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
+    temp_zip.close()
+    used_names = set()
+    with zipfile.ZipFile(temp_zip.name, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as zf:
+        for abs_path, arcname in files:
+            unique = arcname
+            counter = 1
+            while unique in used_names:
+                base, ext = os.path.splitext(arcname)
+                unique = f"{base}_{counter}{ext}"
+                counter += 1
+            used_names.add(unique)
+            zf.write(abs_path, arcname=unique)
+    return temp_zip.name
+
+
+def _prepare(state_key, files, download_name):
+    """파일이 1개면 원본 그대로, 여러 개면 ZIP으로 묶어 다운로드 슬롯에 담는다."""
+    if len(files) == 1:
+        abs_path = files[0][0]
+        st.session_state[state_key] = {
+            'path': abs_path,
+            'file_name': os.path.basename(abs_path),
+            'mime': "application/octet-stream",
+        }
+    else:
+        st.session_state[state_key] = {
+            'path': _make_zip(files),
+            'file_name': f"{download_name}.zip",
+            'mime': "application/zip",
+        }
+
+
+def _offer_download(state_key, label):
+    prepared = st.session_state.get(state_key)
+    if prepared and os.path.exists(prepared['path']):
+        with open(prepared['path'], "rb") as f:
+            st.download_button(
+                label=f"{label} — {prepared['file_name']}", data=f, file_name=prepared['file_name'],
+                mime=prepared['mime'], key=f"{state_key}_btn", type="primary",
+            )
+
+
+def render_download_center():
+    st.subheader("데이터 다운로드 내비게이션")
+    st.caption("프로젝트 → Part → Job 순으로 좁혀가며 원하는 범위를 내려받습니다. 가공 이력(Job)까지 고르면 "
+               "해당 Job에 실제로 존재하는 데이터 유형만 버튼으로 나타납니다.")
+
+    catalog = _job_catalog()
+    if catalog.empty:
+        st.warning("등록된 가공 이력(Job)이 없어 다운로드할 데이터가 없습니다.")
+        return
+
+    n1, n2, n3 = st.columns(3)
+    with n1:
+        projects = sorted(catalog['project_name'].unique().tolist())
+        sel_project = st.selectbox("1️⃣ 프로젝트 (Project Name)", [ALL] + projects, key="dc_project")
+
+    scoped = catalog if sel_project == ALL else catalog[catalog['project_name'] == sel_project]
+
+    with n2:
+        parts = sorted(scoped['part_name'].unique().tolist())
+        sel_part = st.selectbox("2️⃣ 부품 (Part Name)", [ALL] + parts, key="dc_part")
+
+    if sel_part != ALL:
+        scoped = scoped[scoped['part_name'] == sel_part]
+
+    with n3:
+        job_ids = scoped['job_id'].tolist()
+        job_labels = {
+            row['job_id']: f"Job {row['job_id']} · {row['part_name']} ({str(row['start_time']).split('.')[0] if pd.notnull(row['start_time']) else '시간 미상'})"
+            for _, row in scoped.iterrows()
+        }
+        sel_job = st.selectbox(
+            "3️⃣ 가공 이력 (Job)", [ALL] + job_ids,
+            format_func=lambda x: x if x == ALL else job_labels.get(x, f"Job {x}"), key="dc_job",
+        )
+
+    if sel_job != ALL:
+        scoped = scoped[scoped['job_id'] == sel_job]
+
+    if sel_job != ALL:
+        # Job이 정해지면 프로젝트/부품도 하나로 확정되므로, 실제 값으로 파일명을 만든다.
+        job_row = scoped.iloc[0]
+        name_parts = [job_row['project_name'], job_row['part_name'], f"Job{sel_job}"]
+    else:
+        name_parts = [
+            sel_project if sel_project != ALL else "AllProjects",
+            sel_part if sel_part != ALL else "AllParts",
+            "AllJobs",
+        ]
+    scope_name = "_".join(str(p) for p in name_parts).replace(" ", "").replace("/", "-")
+
+    # 선택 범위가 바뀌면 이전 범위로 준비해 둔 다운로드는 무효다.
+    if st.session_state.get('dc_scope_sig') != scope_name:
+        st.session_state['dc_scope_sig'] = scope_name
+        st.session_state.pop('dc_prepared', None)
+        st.session_state.pop('dc_single_download', None)
+
+    st.divider()
+
+    if sel_job == ALL:
+        _render_scope_download(scoped, scope_name)
+    else:
+        _render_job_download(scoped, scope_name, sel_job)
+
+
+def _render_scope_download(scoped, scope_name):
+    st.markdown("#### 📦 선택 범위 전체 다운로드")
+    st.caption("가공 이력(Job)을 선택하면 데이터 유형별·파일별로 나눠 받을 수 있습니다.")
+
+    if st.button("선택 범위 압축 준비", type="primary", key="dc_btn_scope"):
+        files = _collect_files(scoped)
+        if files:
+            with st.spinner("파일을 압축하는 중입니다..."):
+                _prepare('dc_prepared', files, scope_name)
+        else:
+            st.session_state.pop('dc_prepared', None)
+            st.warning("선택한 범위에 내려받을 수 있는 파일이 없습니다.")
+
+    _offer_download('dc_prepared', "📥 다운로드")
+
+
+def _render_job_download(scoped, scope_name, job_id):
+    job_row = scoped.iloc[0]
+
+    if _job_folder(job_row['source_folder']) is None:
+        st.warning("이 Job의 원본 폴더가 로컬 디스크에 없습니다. 아래 다운로드는 Vault/DB 아카이브에서 직접 제공되며, "
+                   "필요하면 원본 폴더로 복원할 수도 있습니다.")
+        if st.button("🔄 로컬 디스크로 원본 복원", key="dc_btn_restore"):
+            from recovery_engine import restore_single_job_to_raw_data
+            with st.spinner("Vault 및 DB로부터 파일을 복원하는 중입니다..."):
+                dest, count = restore_single_job_to_raw_data(int(job_id))
+            if count > 0:
+                st.success(f"총 {count}개의 원본 파일을 {dest}에 복원했습니다.")
+                st.cache_data.clear()
+                st.rerun()
+            else:
+                st.error("복원할 수 있는 백업 파일이 Vault/DB에 존재하지 않습니다.")
+
+    files = _collect_files(scoped)
+    if not files:
+        st.warning("이 Job에는 내려받을 수 있는 파일이 없습니다.")
+        return
+
+    counts = {}
+    for abs_path, _arc in files:
+        label = _categorize(abs_path)
+        counts[label] = counts.get(label, 0) + 1
+    available = sorted(counts.keys(), key=CATEGORY_ORDER.index)
+
+    st.markdown("#### 4️⃣ 내려받을 데이터 유형 선택")
+    st.caption("이 Job에 존재하는 유형만 표시됩니다. 버튼을 누르면 바로 아래에 다운로드 버튼이 나타납니다.")
+
+    buttons = [("전체 데이터", None, len(files))] + [(label, label, counts[label]) for label in available]
+    cols = st.columns(4)
+    for idx, (btn_label, category, count) in enumerate(buttons):
+        with cols[idx % 4]:
+            if st.button(f"{btn_label} ({count})", key=f"dc_cat_{idx}", use_container_width=True):
+                slug = "AllData" if category is None else CATEGORY_SLUGS[category]
+                with st.spinner("파일을 준비하는 중입니다..."):
+                    _prepare('dc_prepared', _collect_files(scoped, category), f"{scope_name}_{slug}")
+
+    _offer_download('dc_prepared', "📥 다운로드")
+
+    st.divider()
+    st.markdown("#### 5️⃣ 개별 파일 다운로드")
+
+    file_rows = pd.DataFrame([
+        {
+            "파일명": os.path.basename(abs_path),
+            "데이터 유형": _categorize(abs_path),
+            "경로": arcname,
+            "크기(MB)": round(os.path.getsize(abs_path) / (1024 * 1024), 3) if os.path.exists(abs_path) else 0,
+        }
+        for abs_path, arcname in files
+    ])
+    st.dataframe(file_rows, use_container_width=True, hide_index=True, height=260)
+
+    picked_idx = st.selectbox(
+        "개별로 내려받을 파일 선택", list(range(len(files))),
+        format_func=lambda i: f"{os.path.basename(files[i][0])}  —  {files[i][1]}",
+        key="dc_single_file",
+    )
+
+    if st.button("이 파일 다운로드 준비", key="dc_btn_single"):
+        _prepare('dc_single_download', [files[picked_idx]], "file")
+
+    _offer_download('dc_single_download', "📥 다운로드")

@@ -1,0 +1,98 @@
+import pandas as pd
+import streamlit as st
+
+from .common import load_data
+from cad_viewer_component import render_cad_viewer
+
+
+@st.dialog("📐 3D CAD 모델 뷰어 (360° 회전 / 메시 모드)", width="large")
+def open_cad_dialog(part_code, cad_file_name):
+    st.markdown(f"**부품명(Part Code):** `{part_code}` &nbsp;|&nbsp; **CAD 파일명:** `{cad_file_name}`")
+    render_cad_viewer(part_code, height=540)
+
+
+def render_master_tree():
+    st.subheader("계층형 구조 조회 (ISO 14649)")
+
+    part_query = """
+        SELECT DISTINCT COALESCE(j.custom_part_name, p.part_code) AS display_part
+        FROM part p
+        LEFT JOIN workplan w ON p.part_code = w.part_code
+        LEFT JOIN job j ON w.workplan_id = j.workplan_id
+        ORDER BY display_part
+    """
+    part_codes_df = load_data(part_query)
+    part_codes = [p for p in part_codes_df['display_part'].tolist() if pd.notnull(p)] if not part_codes_df.empty else []
+
+    if 'mt_selected_parts' not in st.session_state:
+        st.session_state.mt_selected_parts = []
+
+    selected_parts = st.multiselect(
+        "조회할 Part 명 선택 (비워두면 기본 상위 5개 표시)", part_codes,
+        default=[p for p in st.session_state.mt_selected_parts if p in part_codes],
+        key="mt_widget_parts",
+    )
+    st.session_state.mt_selected_parts = selected_parts
+
+    parts_to_show = selected_parts if selected_parts else part_codes[:5]
+
+    for p_code in parts_to_show:
+        with st.expander(f"Part: {p_code}", expanded=True):
+            cad_query = f"""
+                SELECT file_name, file_type, LENGTH(file_content) as file_size, file_path
+                FROM cad_file_archive
+                WHERE part_code = '{p_code}'
+            """
+            cad_df = load_data(cad_query)
+            if not cad_df.empty:
+                c_fname = cad_df.iloc[0]['file_name']
+                c_ftype = str(cad_df.iloc[0]['file_type']).upper()
+
+                col_c1, col_c2 = st.columns([3, 1])
+                with col_c1:
+                    st.markdown(f"**📐 연관 CAD 모델:** `{c_fname}` ({c_ftype})")
+                with col_c2:
+                    if st.button("👁️ 3D 뷰어 / 메시 보기", key=f"btn_cad_modal_{p_code}", type="primary", use_container_width=True):
+                        open_cad_dialog(p_code, c_fname)
+
+                with st.expander("📄 CAD 파일 메타데이터 정보 보기", expanded=False):
+                    st.dataframe(cad_df, width="stretch", hide_index=True)
+                st.divider()
+
+            wp_query = f"""
+                SELECT DISTINCT w.workplan_id, w.program_code, w.nc_file_path
+                FROM workplan w
+                JOIN job j ON w.workplan_id = j.workplan_id
+                JOIN part p ON w.part_code = p.part_code
+                WHERE COALESCE(j.custom_part_name, p.part_code) = '{p_code}'
+            """
+            part_wps = load_data(wp_query)
+
+            if part_wps.empty:
+                st.info("해당 조건에 맞는 Workplan이 없습니다.")
+                continue
+
+            for _, wp_row in part_wps.iterrows():
+                wp_id = wp_row['workplan_id']
+                with st.expander(f"Workplan: {p_code} - {wp_row['program_code']} (ID: {wp_id})", expanded=False):
+                    st.write(f"**NC File Path:** `{wp_row['nc_file_path']}`")
+
+                    ws_query = f"""
+                        SELECT ws.step_order AS '순서', ws.operation_type AS '작업(Op)',
+                               ws.xml_tool_code AS '사용 공구',
+                               t.company_name AS '제조사',
+                               t.tool_type AS '공구종류',
+                               t.cutter_diameter AS '직경',
+                               t.tool_teeth AS '날수'
+                        FROM workingstep ws
+                        LEFT JOIN tool t ON ws.tool_id = t.tool_id
+                        WHERE ws.workplan_id = '{wp_id}'
+                        ORDER BY ws.step_order
+                    """
+                    ws_df = load_data(ws_query)
+
+                    if not ws_df.empty:
+                        st.markdown("##### 하위 가공 스텝 (Workingsteps)")
+                        st.dataframe(ws_df, width="stretch", hide_index=True)
+                    else:
+                        st.info("등록된 Workingstep이 없습니다.")

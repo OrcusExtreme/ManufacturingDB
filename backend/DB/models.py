@@ -39,6 +39,9 @@ class Tool(Base):
     tool_teeth = Column(Integer, comment='날수')
     stock_count = Column(Integer, comment='재고 개수')
     memo = Column(String(255), comment='비고')
+    is_mounted = Column(Boolean, default=False, comment='현재 실제 기계에 장착되어 있는지 여부')
+    photo_filename = Column(String(255), nullable=True, comment='공구 실물 사진 원본 파일명')
+    photo_content = Column(LargeBinary(length=(2**24)-1), nullable=True, comment='공구 실물 사진 바이너리 (MEDIUMBLOB, 최대 16MB)')
 
     workingsteps = relationship("Workingstep", back_populates="tool")
 
@@ -172,7 +175,8 @@ class WorkplanFileArchive(Base):
     workplan_id = Column(String(100), ForeignKey("workplan.workplan_id", ondelete="CASCADE"), primary_key=True)
     nc_file_path = Column(String(1000), comment='NC 원본 파일 Vault 경로')
     nc_file_content = Column(LargeBinary(length=(2**32)-1), nullable=True, comment='NC 원본 바이너리 (최대 4GB LONGBLOB)')
-    
+    nc_file_sha256 = Column(String(64), nullable=True, comment='nc_file_content 저장 시점의 SHA-256 (복원 검증 기준값)')
+
 
 class JobFileArchive(Base):
     __tablename__ = "job_file_archive"
@@ -181,6 +185,7 @@ class JobFileArchive(Base):
     job_id = Column(Integer, ForeignKey("job.job_id", ondelete="CASCADE"), primary_key=True)
     xml_file_path = Column(String(1000), comment='XML 원본 파일 Vault 경로')
     xml_file_content = Column(LargeBinary(length=(2**32)-1), nullable=True, comment='XML 원본 바이너리 (최대 4GB LONGBLOB)')
+    xml_file_sha256 = Column(String(64), nullable=True, comment='xml_file_content 저장 시점의 SHA-256 (복원 검증 기준값)')
     tdms_parquet_file_path = Column(String(1000), comment='TDMS Time-domain Parquet 원본 파일 Vault 경로')
     tdms_fft_parquet_file_path = Column(String(1000), comment='TDMS Frequency-domain(FFT) Parquet 원본 파일 Vault 경로')
     
@@ -194,7 +199,8 @@ class CadFileArchive(Base):
     file_type = Column(String(20), comment='파일 확장자 (step, stp, stl)')
     file_path = Column(String(1000), comment='Vault 경로')
     file_content = Column(LargeBinary(length=(2**32)-1), nullable=True, comment='CAD 원본 바이너리 (15MB 제한)')
-    
+    file_sha256 = Column(String(64), nullable=True, comment='file_content 저장 시점의 SHA-256 (복원 검증 기준값)')
+
     part = relationship("Part")
 
 

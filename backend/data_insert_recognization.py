@@ -301,6 +301,13 @@ def start_pipeline(watch_dir):
     except Exception as b_err:
         print(f"[경고] Job 메타데이터 Backfill 실행 중 오류: {b_err}")
 
+    # 원본 복원 검증은 화면에서 빠지고 여기(백그라운드)에서만 주기적으로 수행된다.
+    try:
+        from integrity_monitor import start_background_verification
+        start_background_verification()
+    except Exception as v_err:
+        print(f"[경고] 원본 복원 검증 백그라운드 시작 실패: {v_err}")
+
     event_handler = MachiningDataHandler()
     
     print(f"[알림] 기존 파일 스캔 중... ({watch_dir})")
