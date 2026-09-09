@@ -1,4 +1,5 @@
-from sqlalchemy import Column, Integer, String, Float, Double, Boolean, DateTime, JSON, ForeignKey, LargeBinary, Text
+from sqlalchemy import (Column, Integer, String, Float, Double, Boolean, DateTime, JSON, ForeignKey,
+                        LargeBinary, Text, UniqueConstraint)
 from sqlalchemy.orm import relationship
 from .database import Base
 
@@ -6,7 +7,10 @@ class Part(Base):
     __tablename__ = "part"
     __table_args__ = {'comment': '가공 대상 부품 마스터 정보'}
 
-    part_code = Column(String(100), primary_key=True, comment='부품 코드 (XML: PartCode)')
+    # 이름을 PK로 쓰면 한글/공백/이름 변경이 그대로 키에 박히고 자식 테이블까지 전파되므로,
+    # 키는 의미 없는 일련번호(1부터 증가)로 두고 사람이 읽는 이름은 part_name 속성으로 분리한다.
+    part_code = Column(Integer, primary_key=True, autoincrement=True, comment='부품 고유 번호 (1부터 자동 증가)')
+    part_name = Column(String(100), nullable=False, unique=True, comment='부품 이름 (XML: PartCode / 폴더명)')
     project_code = Column(String(50), comment='XML: ProjectCode')
     material_code = Column(String(50), comment='XML: MaterialCode')
 
@@ -15,11 +19,17 @@ class Part(Base):
 
 class Workplan(Base):
     __tablename__ = "workplan"
-    __table_args__ = {'comment': 'ISO14649 Workplan: 단일 NC 프로그램(코드) 단위의 정적 계획'}
+    __table_args__ = (
+        # 기존에 문자열 PK로 표현하던 "부품 + 프로그램 + NC 해시" 조합은 유일 제약으로 옮겨,
+        # 중복 차단 기능은 그대로 두고 PK는 숫자 대리키로 유지한다.
+        UniqueConstraint('part_code', 'program_code', 'nc_hash', name='uq_workplan_identity'),
+        {'comment': 'ISO14649 Workplan: 단일 NC 프로그램(코드) 단위의 정적 계획'},
+    )
 
-    workplan_id = Column(String(100), primary_key=True, comment='고유 식별자 (ProgramCode 등 조합)')
-    part_code = Column(String(100), ForeignKey("part.part_code", ondelete="CASCADE"), nullable=False)
+    workplan_id = Column(Integer, primary_key=True, autoincrement=True, comment='Workplan 고유 번호 (1부터 자동 증가)')
+    part_code = Column(Integer, ForeignKey("part.part_code", ondelete="CASCADE"), nullable=False)
     program_code = Column(String(50), comment='XML: ProgramCode / ProgramName')
+    nc_hash = Column(String(32), comment='NC 원본 내용 MD5 앞 8자리 (같은 이름·다른 내용 구분용)')
     nc_file_path = Column(String(255), comment='NC 코드 파일 경로')
 
     part = relationship("Part", back_populates="workplans")
@@ -39,9 +49,6 @@ class Tool(Base):
     tool_teeth = Column(Integer, comment='날수')
     stock_count = Column(Integer, comment='재고 개수')
     memo = Column(String(255), comment='비고')
-    is_mounted = Column(Boolean, default=False, comment='현재 실제 기계에 장착되어 있는지 여부')
-    photo_filename = Column(String(255), nullable=True, comment='공구 실물 사진 원본 파일명')
-    photo_content = Column(LargeBinary(length=(2**24)-1), nullable=True, comment='공구 실물 사진 바이너리 (MEDIUMBLOB, 최대 16MB)')
 
     workingsteps = relationship("Workingstep", back_populates="tool")
 
@@ -51,7 +58,7 @@ class Workingstep(Base):
     __table_args__ = {'comment': 'ISO14649 Workingstep: Workplan 내의 개별 가공 단위(공구 호출 순서)'}
 
     step_id = Column(Integer, primary_key=True, autoincrement=True)
-    workplan_id = Column(String(100), ForeignKey("workplan.workplan_id", ondelete="CASCADE"), nullable=False)
+    workplan_id = Column(Integer, ForeignKey("workplan.workplan_id", ondelete="CASCADE"), nullable=False)
     tool_id = Column(Integer, ForeignKey("tool.tool_id", ondelete="SET NULL"), comment='연결된 공구 ID')
     operation_type = Column(String(50), comment='가공방식 (MachiningOperation 병합)')
     
@@ -69,7 +76,7 @@ class Job(Base):
 
     job_id = Column(Integer, primary_key=True, autoincrement=True, comment='가공 이력 고유 ID')
     source_folder = Column(String(255), unique=True, comment='기존 폴더명 기반의 원본 식별자')
-    workplan_id = Column(String(100), ForeignKey("workplan.workplan_id", ondelete="CASCADE"), nullable=False)
+    workplan_id = Column(Integer, ForeignKey("workplan.workplan_id", ondelete="CASCADE"), nullable=False)
     work_id = Column(String(50), nullable=False, comment='XML: WorkID')
     
     machine_code = Column(String(50), comment='XML: MachineCode')
@@ -97,7 +104,7 @@ class Job(Base):
     tool_conditions = Column(JSON, comment='런타임 공구 상태 (사용횟수, 오프셋, 마모도 등)')
 
     workplan = relationship("Workplan", back_populates="jobs")
-    machine_logs = relationship("MachineLog", back_populates="job", cascade="all, delete-orphan")
+    machine_log = relationship("MachineLog", back_populates="job", cascade="all, delete-orphan", uselist=False)
     inspection = relationship("Inspection", back_populates="job", cascade="all, delete-orphan", uselist=False)
     env_memo = relationship("EnvMemo", back_populates="job", cascade="all, delete-orphan", uselist=False)
     surface_roughnesses = relationship("SurfaceRoughness", back_populates="job", cascade="all, delete-orphan")
@@ -105,10 +112,10 @@ class Job(Base):
 
 class MachineLog(Base):
     __tablename__ = "machine_log"
-    __table_args__ = {'comment': '가공 단위 장비 알람 및 로그 요약 테이블'}
+    __table_args__ = {'comment': '가공 단위 장비 알람 및 로그 요약 테이블 (Job과 1:1)'}
 
     log_id = Column(Integer, primary_key=True, autoincrement=True)
-    job_id = Column(Integer, ForeignKey("job.job_id", ondelete="CASCADE"), nullable=False)
+    job_id = Column(Integer, ForeignKey("job.job_id", ondelete="CASCADE"), nullable=False, unique=True)
     max_spindle_load = Column(Float, comment='최대 스핀들 부하')
     max_spindle_rpm = Column(Float, comment='최대 스핀들 RPM')
     max_feed_rate = Column(Float, comment='최대 이송 속도(Feed Rate)')
@@ -116,7 +123,7 @@ class MachineLog(Base):
     alarm_count = Column(Integer, comment='알람 발생 횟수')
     critical_alarm_msg = Column(Text, comment='주요 알람 메시지 (존재 시)')
 
-    job = relationship("Job", back_populates="machine_logs")
+    job = relationship("Job", back_populates="machine_log")
 
 
 class SurfaceRoughness(Base):
@@ -172,7 +179,7 @@ class WorkplanFileArchive(Base):
     __tablename__ = "workplan_file_archive"
     __table_args__ = {'comment': 'Workplan 관련 대용량 파일 경로 및 원본 아카이브'}
     
-    workplan_id = Column(String(100), ForeignKey("workplan.workplan_id", ondelete="CASCADE"), primary_key=True)
+    workplan_id = Column(Integer, ForeignKey("workplan.workplan_id", ondelete="CASCADE"), primary_key=True)
     nc_file_path = Column(String(1000), comment='NC 원본 파일 Vault 경로')
     nc_file_content = Column(LargeBinary(length=(2**32)-1), nullable=True, comment='NC 원본 바이너리 (최대 4GB LONGBLOB)')
     nc_file_sha256 = Column(String(64), nullable=True, comment='nc_file_content 저장 시점의 SHA-256 (복원 검증 기준값)')
@@ -194,7 +201,7 @@ class CadFileArchive(Base):
     __table_args__ = {'comment': '가공 대상 도면 원본 파일 아카이브 (STEP, STP, STL)'}
     
     cad_id = Column(Integer, primary_key=True, autoincrement=True)
-    part_code = Column(String(100), ForeignKey("part.part_code", ondelete="CASCADE"), nullable=False)
+    part_code = Column(Integer, ForeignKey("part.part_code", ondelete="CASCADE"), nullable=False)
     file_name = Column(String(255), comment='파일 원본명')
     file_type = Column(String(20), comment='파일 확장자 (step, stp, stl)')
     file_path = Column(String(1000), comment='Vault 경로')

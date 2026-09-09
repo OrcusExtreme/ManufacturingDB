@@ -7,7 +7,7 @@ from .common import load_data
 
 
 def _import_excel_section():
-    st.markdown("#### 📥 엑셀로 공구 마스터 일괄 반영")
+    st.markdown("#### :material/upload_file: 엑셀로 공구 마스터 일괄 반영")
     st.caption(
         "실제 기계에 장착/보유 중인 공구 목록이 정리된 엑셀 파일을 올리면, tool_code 기준으로 upsert(있으면 갱신, "
         "없으면 신규 등록)됩니다. 필요한 열: 회사명 / 공구 종류 / 직경 / 규격 / 날 수 / 총 개수 / 공구 코드(또는 "
@@ -47,7 +47,7 @@ def render_tool_master():
         st.warning("등록된 공구가 없습니다. 위에서 엑셀을 업로드해 공구 마스터를 채워주세요.")
         return
 
-    st.markdown("#### 📋 전체 공구 목록")
+    st.markdown("#### :material/build: 전체 공구 목록")
     st.dataframe(
         tools_df,
         use_container_width=True, hide_index=True,

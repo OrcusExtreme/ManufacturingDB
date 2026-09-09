@@ -28,7 +28,7 @@ def run_cleanup():
         db.flush()
         
         # Find all dummy parts
-        dummy_parts = db.query(Part).filter(Part.part_code.like("UNKNOWN_PART_%")).all()
+        dummy_parts = db.query(Part).filter(Part.part_name.like("UNKNOWN_PART%")).all()
         
         for part in dummy_parts:
             # Check if any workplan uses it

@@ -1,2 +1,5 @@
 [server]
 maxUploadSize = 10000
+# frontend/components/*.py 를 수정해도 실행 중인 대시보드가 이전 모듈을 계속 들고 있어
+# 재시작 전까지 변경이 반영되지 않았다. 저장 시 자동 재실행하도록 켠다.
+runOnSave = true

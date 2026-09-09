@@ -54,33 +54,36 @@ def get_or_create_job(db, job_identifier):
         else:
             parsed_rp = folder_parts[0]
         
-    # 5. 더미 Part 조회 및 생성
-    dummy_part_code = parsed_cpn if parsed_cpn else "UNKNOWN_PART"
-    part = db.query(Part).filter(Part.part_code == dummy_part_code).first()
+    # 5. 더미 Part 조회 및 생성 (이름으로 찾고, 키는 DB가 부여한 번호를 사용)
+    dummy_part_name = parsed_cpn if parsed_cpn else "UNKNOWN_PART"
+    part = db.query(Part).filter(Part.part_name == dummy_part_name).first()
     if not part:
         part = Part(
-            part_code=dummy_part_code, 
-            project_code=parsed_rp, 
+            part_name=dummy_part_name,
+            project_code=parsed_rp,
             material_code="Unknown"
         )
         db.add(part)
         db.flush()
-        
-    # 6. 더미 Workplan 조회 및 생성
-    dummy_workplan_id = f"UNKNOWN_WORKPLAN_{dummy_part_code}"
-    workplan = db.query(Workplan).filter(Workplan.workplan_id == dummy_workplan_id).first()
+
+    # 6. 더미 Workplan 조회 및 생성 (부품 + 프로그램 + NC 해시 조합으로 식별)
+    workplan = db.query(Workplan).filter(
+        Workplan.part_code == part.part_code,
+        Workplan.program_code == "Unknown",
+        Workplan.nc_hash == "NOHASH",
+    ).first()
     if not workplan:
         workplan = Workplan(
-            workplan_id=dummy_workplan_id,
-            part_code=dummy_part_code,
-            program_code="Unknown"
+            part_code=part.part_code,
+            program_code="Unknown",
+            nc_hash="NOHASH",
         )
         db.add(workplan)
         db.flush()
-        
+
     # 7. Job 생성 (PK 먼저 생성 후 source_folder를 {Project}/{Part}/{job_id}로 확정)
     new_job = Job(
-        workplan_id=dummy_workplan_id,
+        workplan_id=workplan.workplan_id,
         work_id="UNKNOWN_WORKID",
         research_project=parsed_rp,
         custom_part_name=parsed_cpn

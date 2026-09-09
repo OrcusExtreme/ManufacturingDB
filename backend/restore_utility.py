@@ -43,7 +43,7 @@ def restore_files(output_dir, job_id=None):
             wp_archive = session.query(WorkplanFileArchive).filter_by(workplan_id=job.workplan_id).first()
             if wp_archive and wp_archive.nc_file_content:
                 # 파일명은 원래 경로에서 추론하거나 workplan_id 사용
-                orig_name = os.path.basename(wp_archive.nc_file_path) if wp_archive.nc_file_path else f"{job.workplan_id}.nc"
+                orig_name = os.path.basename(wp_archive.nc_file_path) if wp_archive.nc_file_path else f"WP{job.workplan_id}.nc"
                 nc_path = os.path.join(job_out_dir, orig_name)
                 with open(nc_path, 'wb') as f:
                     f.write(wp_archive.nc_file_content)

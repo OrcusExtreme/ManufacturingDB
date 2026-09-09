@@ -85,9 +85,9 @@ def get_job_archive_files(job_id):
             if abs_tdms_path and os.path.exists(abs_tdms_path):
                 file_map['tdms'].append((abs_tdms_path, os.path.basename(abs_tdms_path), os.path.basename(abs_tdms_path)))
             
-        # 4. Logs
-        for mlog in job.machine_logs:
-            log_archive = session.query(LogFileArchive).filter_by(log_id=mlog.log_id).first()
+        # 4. Logs (Job과 1:1)
+        if job.machine_log:
+            log_archive = session.query(LogFileArchive).filter_by(log_id=job.machine_log.log_id).first()
             if log_archive and log_archive.log_file_path:
                 abs_p = get_abs_vault_path(log_archive.log_file_path)
                 if abs_p and os.path.exists(abs_p):
@@ -176,9 +176,9 @@ def restore_single_job_to_raw_data(job_id_or_source_folder):
                     shutil.copy2(src, dest)
                     restored_files += 1
                 
-        # 4. Logs 복원
-        for mlog in job.machine_logs:
-            log_archive = session.query(LogFileArchive).filter_by(log_id=mlog.log_id).first()
+        # 4. Logs 복원 (Job과 1:1)
+        if job.machine_log:
+            log_archive = session.query(LogFileArchive).filter_by(log_id=job.machine_log.log_id).first()
             if log_archive and log_archive.log_file_path:
                 src = get_abs_vault_path(log_archive.log_file_path)
                 if src and os.path.exists(src):
@@ -240,7 +240,7 @@ def restore_single_job_to_raw_data(job_id_or_source_folder):
                     part_folder_parts = folder_name.split('/')[:2]
                     if len(part_folder_parts) == 2:
                         cad_dest_dir = os.path.join(RAW_DATA_DIR, part_folder_parts[0], part_folder_parts[1], "CAD_Files")
-                        cad_fname = cad_archive.file_name or f"{wp.part_code}.step"
+                        cad_fname = cad_archive.file_name or f"Part{wp.part_code}.step"
                         cad_dest = os.path.join(cad_dest_dir, cad_fname)
                         if not os.path.exists(cad_dest):
                             if _copy_from_vault_or_blob(cad_archive.file_path, cad_archive.file_content, cad_dest):
@@ -316,9 +316,14 @@ def recover_all_jobs(base_output_dir="recovered_data"):
             if job.workplan_id:
                 wp_archive = session.query(WorkplanFileArchive).filter_by(workplan_id=job.workplan_id).first()
                 if wp_archive:
-                    _copy_from_vault_or_blob(wp_archive.nc_file_path, wp_archive.nc_file_content, os.path.join(job_dir, f"{job.workplan_id}.nc"))
-            for mlog in job.machine_logs:
-                log_archive = session.query(LogFileArchive).filter_by(log_id=mlog.log_id).first()
+                    # workplan_id는 숫자 키이므로 복원 파일명은 NC 프로그램 코드를 우선 사용한다.
+                    wp_row = session.query(Workplan).filter_by(workplan_id=job.workplan_id).first()
+                    nc_name = (wp_row.program_code if wp_row and wp_row.program_code else f"WP{job.workplan_id}")
+                    if not nc_name.lower().endswith(".nc"):
+                        nc_name = f"{nc_name}.nc"
+                    _copy_from_vault_or_blob(wp_archive.nc_file_path, wp_archive.nc_file_content, os.path.join(job_dir, nc_name))
+            if job.machine_log:
+                log_archive = session.query(LogFileArchive).filter_by(log_id=job.machine_log.log_id).first()
                 if log_archive and log_archive.log_file_path:
                     src = get_abs_vault_path(log_archive.log_file_path)
                     if src and os.path.exists(src):

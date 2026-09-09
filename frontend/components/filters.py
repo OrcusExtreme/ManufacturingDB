@@ -49,7 +49,7 @@ def render_search_filters(key_prefix="ws"):
 
         with c2:
             part_query = """
-                SELECT DISTINCT COALESCE(j.custom_part_name, p.part_code) AS display_part
+                SELECT DISTINCT COALESCE(j.custom_part_name, p.part_name) AS display_part
                 FROM job j
                 JOIN workplan w ON j.workplan_id = w.workplan_id
                 JOIN part p ON w.part_code = p.part_code
@@ -73,7 +73,7 @@ def render_search_filters(key_prefix="ws"):
 
         with c3:
             job_iteration_query = """
-                SELECT j.job_id, COALESCE(j.custom_part_name, p.part_code) AS part_name, j.start_time
+                SELECT j.job_id, COALESCE(j.custom_part_name, p.part_name) AS part_name, j.start_time
                 FROM job j
                 JOIN workplan w ON j.workplan_id = w.workplan_id
                 JOIN part p ON w.part_code = p.part_code
@@ -89,11 +89,11 @@ def render_search_filters(key_prefix="ws"):
                 part_keys = [f"i_part_{i}" for i in range(len(selected_parts))]
                 for k, v in zip(part_keys, selected_parts):
                     iter_params[k] = v
-                filters_sql.append(f"COALESCE(j.custom_part_name, p.part_code) IN ({', '.join([':' + k for k in part_keys])})")
+                filters_sql.append(f"COALESCE(j.custom_part_name, p.part_name) IN ({', '.join([':' + k for k in part_keys])})")
 
             if filters_sql:
                 job_iteration_query += " WHERE " + " AND ".join(filters_sql)
-            job_iteration_query += " ORDER BY COALESCE(j.custom_part_name, p.part_code), j.start_time ASC"
+            job_iteration_query += " ORDER BY COALESCE(j.custom_part_name, p.part_name), j.start_time ASC"
             job_iter_df = load_data(job_iteration_query, params=iter_params)
 
             job_options = []
@@ -143,7 +143,7 @@ def render_search_filters(key_prefix="ws"):
             )
             st.session_state[k_machs] = selected_machs
 
-    with st.expander("⚙️ 고급 검색 필터", expanded=False):
+    with st.expander("고급 검색 필터", expanded=False, icon=":material/tune:"):
         st.caption("아래 조건들을 설정하면 더 정밀하게 데이터를 필터링할 수 있습니다. (0이면 조건 무시)")
         adv_c1, adv_c2, adv_c3 = st.columns(3)
         with adv_c1:
@@ -180,7 +180,7 @@ def render_search_filters(key_prefix="ws"):
         part_keys = [f"m_part_{i}" for i in range(len(selected_parts))]
         for k, v in zip(part_keys, selected_parts):
             main_params[k] = v
-        conditions.append(f"COALESCE(j.custom_part_name, p.part_code) IN ({', '.join([':' + k for k in part_keys])})")
+        conditions.append(f"COALESCE(j.custom_part_name, p.part_name) IN ({', '.join([':' + k for k in part_keys])})")
 
     if selected_dates and len(selected_dates) == 2:
         start_dt = selected_dates[0].strftime('%Y-%m-%d 00:00:00')
@@ -212,7 +212,7 @@ def render_search_filters(key_prefix="ws"):
 
     job_query = f"""
         SELECT
-            j.job_id, j.start_time, j.research_project, COALESCE(j.custom_part_name, p.part_code) as part_name, j.machining_type,
+            j.job_id, j.start_time, j.research_project, COALESCE(j.custom_part_name, p.part_name) as part_name, j.machining_type,
             j.cutting_seconds, j.is_finish,
             i.surface_roughness_ra, i.surface_roughness_rz, i.pass_fail,
             e.worker_name, e.temperature, e.humidity, e.free_memo,
@@ -260,30 +260,65 @@ JOB_TABLE_COLUMN_CONFIG = {
 }
 
 
-def render_job_table(job_df):
+# 전체 17개 컬럼을 항상 펼치면 가로 스크롤 없이는 읽을 수 없어서, 기본은 아래 핵심 컬럼만 보여준다.
+JOB_TABLE_ESSENTIAL_COLUMNS = [
+    "job_id", "start_time", "part_name", "machining_type",
+    "cutting_seconds", "surface_roughness_ra", "pass_fail", "worker_name",
+]
+
+
+def render_job_table(job_df, key=None, selectable=False, show_all_columns=True):
+    """Job 목록 표를 렌더링한다.
+
+    Args:
+        selectable: True면 행 클릭으로 Job을 선택할 수 있고, 클릭된 job_id를 반환한다.
+        show_all_columns: False면 `JOB_TABLE_ESSENTIAL_COLUMNS`만 표시한다.
+
+    Returns:
+        선택된 job_id (선택이 없거나 selectable=False면 None)
+    """
     import streamlit as st
 
-    st.dataframe(
+    column_config = {
+        "job_id": st.column_config.NumberColumn("Job ID", format="%d"),
+        "start_time": st.column_config.DatetimeColumn("시작 시간", format="YYYY-MM-DD HH:mm"),
+        "research_project": "프로젝트",
+        "part_name": "Part 명",
+        "machining_type": "가공 종류",
+        "cutting_seconds": st.column_config.NumberColumn("가공 시간(초)", format="%.1f"),
+        "is_finish": "완료",
+        "surface_roughness_ra": st.column_config.NumberColumn("조도 Ra(μm)", format="%.3f"),
+        "surface_roughness_rz": st.column_config.NumberColumn("조도 Rz(μm)", format="%.3f"),
+        "pass_fail": "합불 판정",
+        "worker_name": "작업자",
+        "temperature": st.column_config.NumberColumn("온도(°C)", format="%.1f"),
+        "humidity": st.column_config.NumberColumn("습도(%)", format="%.1f"),
+        "free_memo": "작업자 메모",
+        "max_spindle_load": st.column_config.NumberColumn("최대 부하(%)", format="%.1f"),
+        "avg_spindle_rpm": st.column_config.NumberColumn("평균 RPM", format="%.0f"),
+        "alarm_count": st.column_config.NumberColumn("알람 수", format="%d"),
+    }
+
+    column_order = None
+    if not show_all_columns:
+        column_order = [c for c in JOB_TABLE_ESSENTIAL_COLUMNS if c in job_df.columns]
+
+    select_kwargs = {"on_select": "rerun", "selection_mode": "single-row"} if selectable else {}
+
+    event = st.dataframe(
         job_df,
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
-        column_config={
-            "job_id": st.column_config.NumberColumn("Job ID", format="%d"),
-            "start_time": st.column_config.DatetimeColumn("시작 시간", format="YYYY-MM-DD HH:mm"),
-            "research_project": "프로젝트",
-            "part_name": "Part 명",
-            "machining_type": "가공 종류",
-            "cutting_seconds": st.column_config.NumberColumn("가공 시간(초)", format="%.1f"),
-            "is_finish": "완료",
-            "surface_roughness_ra": st.column_config.NumberColumn("조도 Ra(μm)", format="%.3f"),
-            "surface_roughness_rz": st.column_config.NumberColumn("조도 Rz(μm)", format="%.3f"),
-            "pass_fail": "합불 판정",
-            "worker_name": "작업자",
-            "temperature": st.column_config.NumberColumn("온도(°C)", format="%.1f"),
-            "humidity": st.column_config.NumberColumn("습도(%)", format="%.1f"),
-            "free_memo": "작업자 메모",
-            "max_spindle_load": st.column_config.NumberColumn("최대 부하(%)", format="%.1f"),
-            "avg_spindle_rpm": st.column_config.NumberColumn("평균 RPM", format="%.0f"),
-            "alarm_count": st.column_config.NumberColumn("알람 수", format="%d"),
-        },
+        column_config=column_config,
+        column_order=column_order,
+        key=key,
+        **select_kwargs,
     )
+
+    if selectable:
+        selected_rows = list(event.selection["rows"]) if event.selection else []
+        if selected_rows:
+            row_pos = selected_rows[0]
+            if 0 <= row_pos < len(job_df):
+                return int(job_df.iloc[row_pos]["job_id"])
+    return None

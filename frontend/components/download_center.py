@@ -70,7 +70,7 @@ def _job_folder(source_folder):
 def _job_catalog():
     df = load_data("""
         SELECT j.job_id, j.source_folder, j.start_time, j.machining_type, j.research_project,
-               COALESCE(j.custom_part_name, p.part_code) AS part_name
+               COALESCE(j.custom_part_name, p.part_name) AS part_name
         FROM job j
         LEFT JOIN workplan w ON j.workplan_id = w.workplan_id
         LEFT JOIN part p ON w.part_code = p.part_code
@@ -138,6 +138,7 @@ def _offer_download(state_key, label):
             st.download_button(
                 label=f"{label} — {prepared['file_name']}", data=f, file_name=prepared['file_name'],
                 mime=prepared['mime'], key=f"{state_key}_btn", type="primary",
+                icon=":material/download:",
             )
 
 
@@ -206,7 +207,7 @@ def render_download_center():
 
 
 def _render_scope_download(scoped, scope_name):
-    st.markdown("#### 📦 선택 범위 전체 다운로드")
+    st.markdown("#### :material/folder_zip: 선택 범위 전체 다운로드")
     st.caption("가공 이력(Job)을 선택하면 데이터 유형별·파일별로 나눠 받을 수 있습니다.")
 
     if st.button("선택 범위 압축 준비", type="primary", key="dc_btn_scope"):
@@ -218,7 +219,7 @@ def _render_scope_download(scoped, scope_name):
             st.session_state.pop('dc_prepared', None)
             st.warning("선택한 범위에 내려받을 수 있는 파일이 없습니다.")
 
-    _offer_download('dc_prepared', "📥 다운로드")
+    _offer_download('dc_prepared', "다운로드")
 
 
 def _render_job_download(scoped, scope_name, job_id):
@@ -227,7 +228,7 @@ def _render_job_download(scoped, scope_name, job_id):
     if _job_folder(job_row['source_folder']) is None:
         st.warning("이 Job의 원본 폴더가 로컬 디스크에 없습니다. 아래 다운로드는 Vault/DB 아카이브에서 직접 제공되며, "
                    "필요하면 원본 폴더로 복원할 수도 있습니다.")
-        if st.button("🔄 로컬 디스크로 원본 복원", key="dc_btn_restore"):
+        if st.button("로컬 디스크로 원본 복원", key="dc_btn_restore", icon=":material/restore:"):
             from recovery_engine import restore_single_job_to_raw_data
             with st.spinner("Vault 및 DB로부터 파일을 복원하는 중입니다..."):
                 dest, count = restore_single_job_to_raw_data(int(job_id))
@@ -249,7 +250,7 @@ def _render_job_download(scoped, scope_name, job_id):
         counts[label] = counts.get(label, 0) + 1
     available = sorted(counts.keys(), key=CATEGORY_ORDER.index)
 
-    st.markdown("#### 4️⃣ 내려받을 데이터 유형 선택")
+    st.markdown("#### :material/counter_4: 내려받을 데이터 유형 선택")
     st.caption("이 Job에 존재하는 유형만 표시됩니다. 버튼을 누르면 바로 아래에 다운로드 버튼이 나타납니다.")
 
     buttons = [("전체 데이터", None, len(files))] + [(label, label, counts[label]) for label in available]
@@ -261,10 +262,10 @@ def _render_job_download(scoped, scope_name, job_id):
                 with st.spinner("파일을 준비하는 중입니다..."):
                     _prepare('dc_prepared', _collect_files(scoped, category), f"{scope_name}_{slug}")
 
-    _offer_download('dc_prepared', "📥 다운로드")
+    _offer_download('dc_prepared', "다운로드")
 
     st.divider()
-    st.markdown("#### 5️⃣ 개별 파일 다운로드")
+    st.markdown("#### :material/counter_5: 개별 파일 다운로드")
 
     file_rows = pd.DataFrame([
         {
@@ -286,4 +287,4 @@ def _render_job_download(scoped, scope_name, job_id):
     if st.button("이 파일 다운로드 준비", key="dc_btn_single"):
         _prepare('dc_single_download', [files[picked_idx]], "file")
 
-    _offer_download('dc_single_download', "📥 다운로드")
+    _offer_download('dc_single_download', "다운로드")

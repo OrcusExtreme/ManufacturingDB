@@ -15,18 +15,17 @@ def parse_cad(file_path, project_name, part_name):
     
     db = SessionLocal()
     try:
-        part_code = part_name
-        
-        # 1. DB에 Part가 있는지 확인 후 없으면 생성
-        part = db.query(Part).filter(Part.part_code == part_code).first()
+        # 1. DB에 Part가 있는지 확인 후 없으면 생성 (부품은 이름으로 찾고 키는 번호를 쓴다)
+        part = db.query(Part).filter(Part.part_name == part_name).first()
         if not part:
             part = Part(
-                part_code=part_code,
+                part_name=part_name,
                 project_code=project_name,
                 material_code="Unknown"
             )
             db.add(part)
             db.flush()
+        part_code = part.part_code
             
         # 2. 이미 등록된 동일한 파일명의 CAD 파일이 해당 Part에 있는지 확인
         existing = db.query(CadFileArchive).filter(
@@ -53,7 +52,7 @@ def parse_cad(file_path, project_name, part_name):
             print(f"    - [알림] CAD 파일({file_name}) 크기가 15MB를 초과하여 DB 내부 저장을 생략합니다.")
             
         # Vault 저장
-        cad_vault_path = save_to_vault(file_path, "cad_models", f"Part_{part_code}", file_name)
+        cad_vault_path = save_to_vault(file_path, "cad_models", f"Part_{part_name}", file_name)
         
         # 기존 동일 파일이 있는지 확인 (동일 확장자, 파일명 기준)
         existing_cad = db.query(CadFileArchive).filter(
@@ -67,7 +66,7 @@ def parse_cad(file_path, project_name, part_name):
             existing_cad.file_path = cad_vault_path
             existing_cad.file_content = file_content_to_save
             existing_cad.file_sha256 = cad_sha256
-            print(f"    - CAD 파일 업데이트 완료 (Part: {part_code})")
+            print(f"    - CAD 파일 업데이트 완료 (Part: {part_name})")
         else:
             new_cad = CadFileArchive(
                 part_code=part_code,
@@ -78,7 +77,7 @@ def parse_cad(file_path, project_name, part_name):
                 file_sha256=cad_sha256
             )
             db.add(new_cad)
-            print(f"    - CAD 파일 삽입 완료 (Part: {part_code})")
+            print(f"    - CAD 파일 삽입 완료 (Part: {part_name})")
             
         db.commit()
         return True

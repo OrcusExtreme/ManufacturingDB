@@ -5,7 +5,7 @@
 [![ORM](https://img.shields.io/badge/SQLAlchemy-2.0%2B-red.svg)](https://www.sqlalchemy.org/)
 [![Frontend](https://img.shields.io/badge/Streamlit-1.61%2B-FF4B4B.svg)](https://streamlit.io/)
 [![Standard](https://img.shields.io/badge/Standard-ISO%2014649%20(STEP--NC)-green.svg)](https://www.iso.org/)
-[![Release](https://img.shields.io/badge/Release-V2.3.1-brightgreen.svg)](https://github.com/OrcusExtreme/ManufacturingDB)
+[![Release](https://img.shields.io/badge/Release-V2.3.2-brightgreen.svg)](https://github.com/OrcusExtreme/ManufacturingDB)
 
 공작기계지능화실험실(Machine Tool Intelligence Lab)의 **통합 스마트 제조 데이터베이스 및 실시간 분석 플랫폼**입니다.  
 공작기계(CNC)에서 생성되는 다양한 이기종 데이터(XML 메타데이터, NC 프로그램, 100kHz+ 고주파 NI TDMS 진동 센서, 1Hz CNC 상태 로그, 표면 조도 측정 CSV, 3D CAD 도면)를 **Watchdog 기반으로 자동 감시·수집·파싱**하여 **ISO 14649(STEP-NC) 표준 기반 RDBMS**에 정규화 적재하고, 연구원 및 관리자에게 고성능 웹 대시보드를 제공합니다.
@@ -75,7 +75,7 @@ erDiagram
     Workplan ||--o{ Job : "1:N"
     Workplan ||--o| WorkplanFileArchive : "1:1"
     Tool ||--o{ Workingstep : "1:N"
-    Job ||--o{ MachineLog : "1:N"
+    Job ||--o| MachineLog : "1:1"
     Job ||--o| Inspection : "1:1"
     Job ||--o| EnvMemo : "1:1"
     Job ||--o{ SurfaceRoughness : "1:N"
@@ -86,7 +86,7 @@ erDiagram
 
 | 도메인 | 테이블명 | 주요 역할 |
 | :--- | :--- | :--- |
-| **마스터 & 계획** | `part`, `workplan`, `tool`, `workingstep`, `cad_file_archive` | 가공 대상 부품, NC 공정 계획, 공구 제원, 단위 공정 순서, 3D 도면 관리 |
+| **마스터 & 계획** | `part`, `workplan`, `tool`, `workingstep`, `cad_file_archive` | 가공 대상 부품(숫자 PK + `part_name`), NC 공정 계획(숫자 PK + 부품·프로그램·NC해시 유일 제약), 공구 제원, 단위 공정 순서, 3D 도면 관리 |
 | **가공 실행 & 품질** | `job`, `machine_log`, `surface_roughness`, `inspection`, `env_memo` | 가공 이력(시간,거리,에러), CNC 1Hz 부하 요약, 다지점 표면조도, 공차/합부(PASS/FAIL), 온습도/메모 |
 | **아카이브 & 백업** | `workplan_file_archive`, `job_file_archive`, `surface_roughness_archive`, `log_file_archive` | 원본 파일 Vault 저장 경로 및 LONGBLOB 이중화 백업 데이터 |
 
@@ -114,6 +114,7 @@ ManufacturingDB/
 │   ├── vault_manager.py              # 파일 SHA 해시 기반 Vault 아카이빙
 │   ├── integrity.py                  # SHA-256 원본 복원 검증 단일 로직 (3-상태 결과)
 │   ├── integrity_monitor.py          # 원본 복원 검증 백그라운드 감시자 (주기 실행 + 로그 경고)
+│   ├── migrate_keys_v3.py            # 키 정규화 마이그레이션 (숫자 PK 전환, 데이터 보존)
 │   ├── DB/                           
 │   │   ├── database.py               # SQLAlchemy 커넥션 풀링 및 세션 팩토리
 │   │   └── models.py                 # 14개 테이블 DDL 및 ORM 정의
@@ -137,6 +138,7 @@ ManufacturingDB/
         ├── data_upload.py             # 가공 데이터 수동 업로드
         ├── db_explorer.py             # DB 테이블 ERD/조회/정렬·조건 필터/편집/CSV 내보내기
         ├── download_center.py         # 프로젝트 ▸ Part ▸ Job ▸ 세부 데이터 다운로드 내비게이션
+        ├── native_picker.py           # 파일 선택창의 형식 필터 이름 지정(File System Access API)
         └── recovery.py                # 시스템 백업/복구 (전체 복구 ZIP 생성)
 ```
 
@@ -220,6 +222,30 @@ XML/NC/CAD 원본이 저장 시점과 바이트 단위로 동일한지에 대한
 ---
 
 ## 🚀 릴리즈 노트 (Release Notes)
+
+### [V2.3.2] - 2026-09-09
+- **DB 키 정규화 (Schema Normalization)**: 사람이 읽는 이름을 PK로 쓰던 구조를 정리. `part.part_code`를
+  1부터 증가하는 숫자 PK로 바꾸고 이름은 `part_name` 속성으로 분리, `workplan.workplan_id`도 `"부품명_프로그램_해시"`
+  문자열(한글 포함) PK에서 숫자 PK로 전환하고 기존 조합은 `UNIQUE(part_code, program_code, nc_hash)` 제약으로
+  이관해 중복 차단 규칙 유지. `machine_log`는 가공 특성에 맞게 Job과 1:1(`job_id` 유일 제약)로 고정.
+  `tool`에서 미사용 컬럼(`is_mounted`, `photo_filename`, `photo_content`) 제거
+- **데이터 보존 마이그레이션 도구 신설** (`backend/migrate_keys_v3.py`): `--check` 상태 점검 / `--run` 적용.
+  자식 테이블(job, workingstep, 각종 아카이브) 참조를 새 키로 재작성하며, PK가 항상 첫 컬럼에 오도록 물리적
+  컬럼 순서까지 정리. 복제 DB 사전 검증 후 실 DB 적용
+- **Job 워크스페이스 화면 재구성**: 구글 클라우드 콘솔 방식의 3열 카드 그리드로 전환. 가로로 늘어놓던 지표를
+  '라벨 위 / 값 아래' 세로 목록으로 바꿔 값 잘림 제거, 같은 열의 카드는 위 카드가 짧으면 아래 카드가 올라붙고
+  열 끝단은 서로 맞춰지도록 구성. 파형 3종(TDMS · CNC 로그 · 조도 프로파일)은 `그래프` 패널로 묶어 동일 높이 배치
+- **Job 목록 표에서 행 클릭으로 상세 전환** 및 `모든 컬럼 보기` 토글 추가(기본은 핵심 8컬럼만 표시해 가로 스크롤 제거)
+- **Job 정보 항목 보강**: 그동안 조회되지 않았던 `end_time`(가공 종료), `cutting_moving_distance`(절삭 이동 거리),
+  부품 `material_code`(소재) 노출. CAD 모델이 등록된 부품은 `CAD 형상 보기` 버튼으로 3D 뷰어 팝업 제공
+- **DB 테이블 조회 시 PK 우선 표시**: 물리적 컬럼 순서와 무관하게 PK를 항상 첫 열에 배치(데이터·스키마 탭 공통)
+- **파일 선택창 형식 필터 이름 지정** (`frontend/components/native_picker.py`): Streamlit이 `accept`에 붙이는
+  가짜 MIME(`application/streamlit`) 때문에 Windows 파일 대화상자가 "사용자 지정 파일"로 표시되던 문제를,
+  File System Access API로 선택 단계만 가로채 `CAD File(.stl, .stp, .step)` 형태로 표시하도록 해결.
+  업로드/검증/저장은 기존 Streamlit 파이프라인이 그대로 처리하며 미지원 브라우저는 기본 동작으로 되돌아감
+- **UI 아이콘 통일**: 제목·버튼·탭·안내문의 이모지를 Streamlit 네이티브 Material 아이콘(`:material/...:`)으로 교체
+- **개발 편의**: `.streamlit/config.toml`에 `runOnSave = true` 추가(컴포넌트 수정이 재시작 없이 반영되지 않던 문제),
+  DB 백업 디렉터리(`backups/`) gitignore 처리, 문자열 PK 시절의 일회성 복구 스크립트 `backend/fix_db.py` 제거
 
 ### [V2.3.1] - 2026-09-08
 - **원본 복원 검증 백그라운드 전환** (`backend/integrity_monitor.py`): UI에서 복원 검증 화면을 완전히 제거하고,

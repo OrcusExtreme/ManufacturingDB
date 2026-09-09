@@ -7,6 +7,18 @@ from sqlalchemy import text, inspect, create_engine
 from erd_component import render_interactive_erd, TABLE_METADATA
 
 
+def order_pk_first(columns, pk_cols):
+    """PK 컬럼을 항상 맨 앞에 놓은 컬럼 순서를 돌려준다.
+
+    테이블의 물리적 컬럼 순서는 스키마 변경 이력에 따라 달라질 수 있어
+    (예: 키 컬럼을 재생성하면 MySQL이 그 컬럼을 맨 뒤에 붙인다) SELECT * 순서를
+    그대로 믿을 수 없다. 조회 화면에서는 물리적 순서와 무관하게 PK를 먼저 보여준다.
+    복합 PK는 제약에 정의된 순서를 그대로 유지한다.
+    """
+    head = [c for c in pk_cols if c in columns]
+    return head + [c for c in columns if c not in head]
+
+
 @st.cache_data(ttl=60)
 def get_table_statistics(_engine, all_db_tables):
     counts = {}
@@ -136,7 +148,7 @@ def render_db_explorer(engine):
             cols_info = inspector.get_columns(current_table)
             st.metric(label="컬럼 수", value=f"{len(cols_info)} 개")
 
-    tab_data, tab_schema = st.tabs(["📑 테이블 데이터 조회 및 편집", "📐 테이블 스키마 및 관계 정의"])
+    tab_data, tab_schema = st.tabs([":material/table: 테이블 데이터 조회 및 편집", ":material/schema: 테이블 스키마 및 관계 정의"])
 
     pk_info = inspector.get_pk_constraint(current_table)
     pk_cols = pk_info.get('constrained_columns', []) if pk_info else []
@@ -144,6 +156,9 @@ def render_db_explorer(engine):
     fk_cols = [c for fk in fks for c in fk['constrained_columns']]
 
     disabled_cols = list(set(pk_cols + fk_cols))
+
+    def pk_first(columns):
+        return order_pk_first(columns, pk_cols)
 
     with tab_data:
         try:
@@ -154,12 +169,13 @@ def render_db_explorer(engine):
                 with f2:
                     st.write("")
                     edit_mode = st.toggle(
-                        "✏️ 편집 모드", key=f"edit_mode_{current_table}",
+                        ":material/edit: 편집 모드", key=f"edit_mode_{current_table}",
                         help="켜면 표를 직접 수정·추가·삭제할 수 있습니다. 편집 중에는 Streamlit 제약으로 컬럼 정렬이 비활성화됩니다.",
                     )
 
                 limit_clause = f"LIMIT {row_limit}" if row_limit != "전체" else ""
                 df = pd.read_sql(text(f"SELECT * FROM `{current_table}` {limit_clause}"), conn)
+                df = df[pk_first(list(df.columns))]
                 st.session_state[f"original_df_{current_table}"] = df.copy()
 
                 st.caption(f"조회 결과: 총 **{len(df):,}** 행(Row) / **{len(df.columns)}** 열(Column)")
@@ -169,8 +185,8 @@ def render_db_explorer(engine):
                         st.warning("선택한 테이블에 데이터가 없습니다.")
                     else:
                         st.dataframe(df, width="stretch", height=420, hide_index=True)
-                        st.caption("💡 컬럼 이름을 클릭하면 **오름/내림차순 정렬**과 통계를 볼 수 있고, 표 오른쪽 위 아이콘으로 "
-                                   "**검색(🔍)** · **CSV 내보내기(⬇)** · 컬럼 표시/숨김을 사용할 수 있습니다.")
+                        st.caption(":material/lightbulb: 컬럼 이름을 클릭하면 **오름/내림차순 정렬**과 통계를 볼 수 있고, 표 오른쪽 위 아이콘으로 "
+                                   "**검색(:material/search:)** · **CSV 내보내기(:material/download:)** · 컬럼 표시/숨김을 사용할 수 있습니다.")
                 else:
                     st.data_editor(
                         df, width="stretch", height=420, num_rows="dynamic",
@@ -200,8 +216,12 @@ def render_db_explorer(engine):
                 for c, rc in zip(fk['constrained_columns'], fk['referred_columns']):
                     fk_map[c] = f"🔗 {fk['referred_table']}.{rc}"
 
+            # 스키마 탭도 같은 규칙으로 PK를 맨 위에 보여준다.
+            cols_by_name = {c['name']: c for c in cols_info}
+            ordered_cols = [cols_by_name[n] for n in pk_first(list(cols_by_name.keys()))]
+
             schema_data = []
-            for col in cols_info:
+            for col in ordered_cols:
                 c_name = col['name']
                 c_type = str(col['type'])
                 is_pk = "🔑 PK" if c_name in pk_cols else ""
@@ -220,7 +240,7 @@ def render_db_explorer(engine):
                     "설명(Comment)": comment,
                 })
 
-            st.dataframe(pd.DataFrame(schema_data), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(schema_data), width="stretch", hide_index=True)
             st.info("PK(기본키) 및 FK(외래키)는 무결성 보호를 위해 편집이 비활성화되어 있습니다.")
         except Exception as se:
             st.error(f"스키마 조회 중 오류: {se}")

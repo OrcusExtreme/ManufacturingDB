@@ -12,24 +12,29 @@ if BACKEND_DIR not in sys.path:
     sys.path.append(BACKEND_DIR)
 
 from DB.database import SessionLocal
-from DB.models import CadFileArchive
+from DB.models import CadFileArchive, Part
 from vault_manager import get_abs_vault_path, VAULT_ROOT
 
-def get_cad_file_data(part_code):
+def get_cad_file_data(part_name):
     """
-    특정 Part Code에 해당하는 CAD 파일명, 확장자 및 바이너리 데이터를 로드합니다.
+    특정 Part 이름에 해당하는 CAD 파일명, 확장자 및 바이너리 데이터를 로드합니다.
     (DB BLOB 우선, Vault/로컬 디스크 파일 경로 보조)
+
+    part_code는 숫자 키가 되었으므로 DB 조회는 이름으로 부품을 찾은 뒤 그 키로 수행하고,
+    Vault/원본 폴더 경로는 예전처럼 사람이 읽는 부품 이름을 그대로 사용한다.
     """
     with SessionLocal() as session:
-        cad_record = session.query(CadFileArchive).filter_by(part_code=part_code).first()
-        
+        part_row = session.query(Part).filter_by(part_name=part_name).first()
+        cad_record = (session.query(CadFileArchive).filter_by(part_code=part_row.part_code).first()
+                      if part_row else None)
+
         file_name = None
         file_bytes = None
         file_ext = None
         
         # 1. DB 레코드 확인
         if cad_record:
-            file_name = cad_record.file_name or f"{part_code}.step"
+            file_name = cad_record.file_name or f"{part_name}.step"
             file_ext = os.path.splitext(file_name)[1].lower()
             
             if cad_record.file_content:
@@ -42,7 +47,7 @@ def get_cad_file_data(part_code):
                         
         # 2. Vault 디렉토리 탐색
         if not file_bytes:
-            cad_vault_dir = os.path.join(VAULT_ROOT, "cad_models", f"Part_{part_code}")
+            cad_vault_dir = os.path.join(VAULT_ROOT, "cad_models", f"Part_{part_name}")
             if os.path.exists(cad_vault_dir):
                 for f in os.listdir(cad_vault_dir):
                     if f.lower().endswith(('.step', '.stp', '.stl')):
@@ -57,7 +62,7 @@ def get_cad_file_data(part_code):
             raw_dir = os.path.join(PROJECT_ROOT, "machining_raw_data")
             if os.path.exists(raw_dir):
                 for proj in os.listdir(raw_dir):
-                    p_path = os.path.join(raw_dir, proj, part_code, "CAD_Files")
+                    p_path = os.path.join(raw_dir, proj, part_name, "CAD_Files")
                     if os.path.exists(p_path):
                         for f in os.listdir(p_path):
                             if f.lower().endswith(('.step', '.stp', '.stl')):
@@ -70,6 +75,40 @@ def get_cad_file_data(part_code):
                         break
                         
         return file_name, file_ext, file_bytes
+
+
+CAD_EXTENSIONS = ('.step', '.stp', '.stl')
+
+
+def find_cad_file_name(part_name):
+    """해당 부품에 조회 가능한 CAD 모델이 있으면 파일명을, 없으면 None을 돌려준다.
+
+    get_cad_file_data와 같은 순서(DB -> Vault -> 원본 폴더)로 찾되 바이너리는 읽지 않아,
+    "형상 보기 버튼을 띄울지" 판단하는 용도로 가볍게 쓸 수 있다.
+    """
+    with SessionLocal() as session:
+        part_row = session.query(Part).filter_by(part_name=part_name).first()
+        if part_row:
+            cad_record = session.query(CadFileArchive).filter_by(part_code=part_row.part_code).first()
+            if cad_record and (cad_record.file_content is not None or cad_record.file_path):
+                return cad_record.file_name or f"{part_name}.step"
+
+    cad_vault_dir = os.path.join(VAULT_ROOT, "cad_models", f"Part_{part_name}")
+    if os.path.exists(cad_vault_dir):
+        for f in os.listdir(cad_vault_dir):
+            if f.lower().endswith(CAD_EXTENSIONS):
+                return f
+
+    raw_dir = os.path.join(PROJECT_ROOT, "machining_raw_data")
+    if os.path.exists(raw_dir):
+        for proj in os.listdir(raw_dir):
+            p_path = os.path.join(raw_dir, proj, part_name, "CAD_Files")
+            if os.path.exists(p_path):
+                for f in os.listdir(p_path):
+                    if f.lower().endswith(CAD_EXTENSIONS):
+                        return f
+    return None
+
 
 def generate_cad_viewer_html(file_name, file_ext, base64_content, height=520):
     """
@@ -713,14 +752,14 @@ def generate_cad_viewer_html(file_name, file_ext, base64_content, height=520):
     """
     return html_code
 
-def render_cad_viewer(part_code, height=520):
+def render_cad_viewer(part_name, height=520):
     """
     Streamlit 화면에 해당 Part의 3D 인터랙티브 CAD 뷰어(360도 회전/메시 모드)를 렌더링합니다.
     """
-    file_name, file_ext, file_bytes = get_cad_file_data(part_code)
+    file_name, file_ext, file_bytes = get_cad_file_data(part_name)
     
     if not file_bytes:
-        st.info(f"ℹ️ Part `{part_code}`에 등록된 CAD 모델(.step, .stp, .stl) 파일이 없습니다.")
+        st.info(f"Part `{part_name}`에 등록된 CAD 모델(.step, .stp, .stl) 파일이 없습니다.", icon=":material/info:")
         return False
         
     b64_content = base64.b64encode(file_bytes).decode('utf-8')

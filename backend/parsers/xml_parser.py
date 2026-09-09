@@ -67,13 +67,13 @@ def parse_xml(file_path, job_id):
         work_id = root.findtext('WorkID') or 'UNKNOWN_WORKID'
         project_code = project_code_from_path
         material_code = root.findtext('MaterialCode') or 'Unknown'
-        part_code = part_code_from_path
+        part_name = part_code_from_path
         program_code = root.findtext('ProgramCode') or 'Unknown'
-        
-        # 1. Part Upsert
-        part = db.query(Part).filter(Part.part_code == part_code).first()
+
+        # 1. Part Upsert (부품은 이름으로 식별하고, 키는 DB가 부여한 번호를 쓴다)
+        part = db.query(Part).filter(Part.part_name == part_name).first()
         if not part:
-            part = Part(part_code=part_code, project_code=project_code, material_code=material_code)
+            part = Part(part_name=part_name, project_code=project_code, material_code=material_code)
             db.add(part)
             db.flush()
         else:
@@ -81,26 +81,32 @@ def parse_xml(file_path, job_id):
                 part.project_code = project_code
             if part.material_code == "Unknown" and material_code != "Unknown":
                 part.material_code = material_code
-            
-        # 2. Workplan Upsert (Hash 기반 식별로 이름만 같고 내용이 다른 파일 완벽 차단)
-        workplan_id = f"{part_code}_{program_code}_{nc_hash}"
-        workplan = db.query(Workplan).filter(Workplan.workplan_id == workplan_id).first()
+        part_code = part.part_code
+
+        # 2. Workplan Upsert (부품 + 프로그램 + NC 해시 조합으로 동일성 판단.
+        #    이름만 같고 내용이 다른 NC 파일을 해시로 구분하는 기존 규칙은 그대로 유지된다.)
+        workplan = db.query(Workplan).filter(
+            Workplan.part_code == part_code,
+            Workplan.program_code == program_code,
+            Workplan.nc_hash == nc_hash,
+        ).first()
         is_new_workplan = False
         if not workplan:
             workplan = Workplan(
-                workplan_id=workplan_id,
                 part_code=part_code,
                 program_code=program_code,
+                nc_hash=nc_hash,
                 nc_file_path=nc_file_path
             )
             db.add(workplan)
-            db.flush()
-            
+            db.flush()   # 자동 증가 workplan_id 확보
+            workplan_id = workplan.workplan_id
+
             # Save NC file to Vault
             nc_vault_path = None
             nc_binary_data_to_save = None
             if nc_file_path:
-                nc_vault_path = save_to_vault(nc_file_path, "workplan_nc", f"{workplan_id}.nc")
+                nc_vault_path = save_to_vault(nc_file_path, "workplan_nc", f"WP{workplan_id}.nc")
                 if nc_binary_data and len(nc_binary_data) <= 15 * 1024 * 1024:
                     nc_binary_data_to_save = nc_binary_data
                 elif nc_binary_data:
@@ -115,7 +121,10 @@ def parse_xml(file_path, job_id):
             db.add(wp_archive)
             db.flush()
             is_new_workplan = True
-            
+
+        # 신규/기존 어느 경로로 왔든 이후 로직이 쓰는 workplan_id를 일치시킨다.
+        workplan_id = workplan.workplan_id
+
         # 공구 마스터 매핑 딕셔너리 구성
         tools = db.query(Tool).all()
         tool_mapping = {t.tool_code: t for t in tools if t.tool_code}

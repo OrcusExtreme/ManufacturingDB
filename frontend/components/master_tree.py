@@ -5,7 +5,7 @@ from .common import load_data
 from cad_viewer_component import render_cad_viewer
 
 
-@st.dialog("📐 3D CAD 모델 뷰어 (360° 회전 / 메시 모드)", width="large")
+@st.dialog("3D CAD 모델 뷰어 (360° 회전 / 메시 모드)", width="large", icon=":material/view_in_ar:")
 def open_cad_dialog(part_code, cad_file_name):
     st.markdown(f"**부품명(Part Code):** `{part_code}` &nbsp;|&nbsp; **CAD 파일명:** `{cad_file_name}`")
     render_cad_viewer(part_code, height=540)
@@ -15,7 +15,7 @@ def render_master_tree():
     st.subheader("계층형 구조 조회 (ISO 14649)")
 
     part_query = """
-        SELECT DISTINCT COALESCE(j.custom_part_name, p.part_code) AS display_part
+        SELECT DISTINCT COALESCE(j.custom_part_name, p.part_name) AS display_part
         FROM part p
         LEFT JOIN workplan w ON p.part_code = w.part_code
         LEFT JOIN job j ON w.workplan_id = j.workplan_id
@@ -38,10 +38,12 @@ def render_master_tree():
 
     for p_code in parts_to_show:
         with st.expander(f"Part: {p_code}", expanded=True):
+            # part_code는 숫자 키가 되었으므로 이름으로 부품을 찾은 뒤 그 키로 CAD를 조회한다.
             cad_query = f"""
-                SELECT file_name, file_type, LENGTH(file_content) as file_size, file_path
-                FROM cad_file_archive
-                WHERE part_code = '{p_code}'
+                SELECT c.file_name, c.file_type, LENGTH(c.file_content) as file_size, c.file_path
+                FROM cad_file_archive c
+                JOIN part p ON c.part_code = p.part_code
+                WHERE p.part_name = '{p_code}'
             """
             cad_df = load_data(cad_query)
             if not cad_df.empty:
@@ -50,12 +52,12 @@ def render_master_tree():
 
                 col_c1, col_c2 = st.columns([3, 1])
                 with col_c1:
-                    st.markdown(f"**📐 연관 CAD 모델:** `{c_fname}` ({c_ftype})")
+                    st.markdown(f":material/view_in_ar: **연관 CAD 모델:** `{c_fname}` ({c_ftype})")
                 with col_c2:
-                    if st.button("👁️ 3D 뷰어 / 메시 보기", key=f"btn_cad_modal_{p_code}", type="primary", use_container_width=True):
+                    if st.button("3D 뷰어 / 메시 보기", key=f"btn_cad_modal_{p_code}", type="primary", width="stretch", icon=":material/visibility:"):
                         open_cad_dialog(p_code, c_fname)
 
-                with st.expander("📄 CAD 파일 메타데이터 정보 보기", expanded=False):
+                with st.expander("CAD 파일 메타데이터 정보 보기", expanded=False, icon=":material/description:"):
                     st.dataframe(cad_df, width="stretch", hide_index=True)
                 st.divider()
 
@@ -64,7 +66,7 @@ def render_master_tree():
                 FROM workplan w
                 JOIN job j ON w.workplan_id = j.workplan_id
                 JOIN part p ON w.part_code = p.part_code
-                WHERE COALESCE(j.custom_part_name, p.part_code) = '{p_code}'
+                WHERE COALESCE(j.custom_part_name, p.part_name) = '{p_code}'
             """
             part_wps = load_data(wp_query)
 

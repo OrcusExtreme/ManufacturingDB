@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head><meta charset="utf-8"><title>native file picker</title></head>
+<body>
+<script>
+/*
+ * 파일 선택창의 파일 형식 필터 이름을 지정하기 위한 보조 컴포넌트.
+ *
+ * 배경: st.file_uploader는 <input type="file" accept="application/streamlit,.stl,..."> 를
+ * 렌더링하는데, HTML의 accept 속성에는 "필터 이름"을 넣을 방법이 없어서 Windows/Chrome이
+ * 임의로 "사용자 지정 파일"이라는 이름을 붙인다. 이름을 직접 지정할 수 있는 API는
+ * File System Access API(showOpenFilePicker)의 types[].description 뿐이다.
+ *
+ * 그래서 이 컴포넌트는 업로드 자체를 대신하지 않고 '파일 선택 단계'만 가로챈다.
+ *   1) 부모 문서의 업로드 영역 클릭을 캡처 단계에서 가로채고
+ *   2) 이름이 지정된 showOpenFilePicker로 파일을 고른 뒤
+ *   3) 고른 File을 원래 <input>에 주입하고 change 이벤트를 발생시킨다.
+ * 이후 업로드/검증/저장은 전부 Streamlit 기존 파이프라인이 그대로 처리한다.
+ *
+ * 컴포넌트 iframe은 부모와 동일 출처(http://localhost:8501)이므로 부모 창의 API를
+ * 직접 호출할 수 있고, 교차 출처 iframe에서 발생하는 SecurityError가 나지 않는다.
+ */
+(function () {
+  var filters = {};   // {"정렬된 확장자 키": {description, extensions}}
+  var wired = false;
+
+  function send(msg) {
+    window.parent.postMessage(Object.assign({isStreamlitMessage: true}, msg), "*");
+  }
+
+  // 확장자 목록을 정렬해 키로 만든다. 파이썬 쪽과 규칙이 같아야 서로 매칭된다.
+  function keyOf(extensions) {
+    return extensions
+      .map(function (e) { return e.trim().toLowerCase(); })
+      .filter(function (e) { return e.charAt(0) === "."; })
+      .sort()
+      .join(",");
+  }
+
+  function filterForInput(input) {
+    var accept = input.getAttribute("accept") || "";
+    var key = keyOf(accept.split(","));
+    return key ? filters[key] || null : null;
+  }
+
+  function injectFiles(input, files) {
+    // 부모 창의 DataTransfer를 써야 File 객체가 같은 realm에 속해 input.files에 들어간다.
+    var dt = new window.parent.DataTransfer();
+    files.forEach(function (f) { dt.items.add(f); });
+    input.files = dt.files;
+    input.dispatchEvent(new window.parent.Event("change", {bubbles: true}));
+  }
+
+  function onParentClick(ev) {
+    var parentWin = window.parent;
+    if (typeof parentWin.showOpenFilePicker !== "function") return;  // 미지원 브라우저는 기본 동작
+
+    var target = ev.target;
+    if (!target || !target.closest) return;
+    // 파일 목록의 삭제(X) 버튼 등은 건드리지 않도록 드롭존 안쪽 클릭만 가로챈다.
+    var dropzone = target.closest('[data-testid="stFileUploaderDropzone"]');
+    if (!dropzone) return;
+
+    var uploader = dropzone.closest('[data-testid="stFileUploader"]') || dropzone;
+    var input = uploader.querySelector('input[type="file"]');
+    if (!input) return;
+
+    var filter = filterForInput(input);
+    if (!filter) return;   // 매핑이 없는 업로더(예: 기타 참고용 파일)는 원래 동작 유지
+
+    ev.preventDefault();
+    ev.stopPropagation();
+
+    var accept = {};
+    accept["application/octet-stream"] = filter.extensions;
+
+    parentWin.showOpenFilePicker({
+      multiple: !!input.multiple,
+      excludeAcceptAllOption: false,
+      types: [{description: filter.description, accept: accept}]
+    }).then(function (handles) {
+      return Promise.all(handles.map(function (h) { return h.getFile(); }));
+    }).then(function (files) {
+      if (files.length) injectFiles(input, files);
+    }).catch(function (err) {
+      // 사용자가 취소하면 AbortError. 그 외 오류만 콘솔에 남긴다.
+      if (err && err.name !== "AbortError") {
+        console.warn("[native picker] 파일 선택 실패:", err);
+      }
+    });
+  }
+
+  window.addEventListener("message", function (event) {
+    var data = event.data || {};
+    if (data.type !== "streamlit:render") return;
+
+    var args = data.args || {};
+    filters = {};
+    (args.filters || []).forEach(function (f) {
+      filters[keyOf(f.extensions)] = f;
+    });
+
+    if (!wired) {
+      // 캡처 단계 + 문서 위임이라, Streamlit이 rerun으로 DOM을 새로 그려도 다시 붙일 필요가 없다.
+      window.parent.document.addEventListener("click", onParentClick, true);
+      wired = true;
+    }
+    send({type: "streamlit:setFrameHeight", height: 0});
+  });
+
+  send({type: "streamlit:componentReady", apiVersion: 1});
+  send({type: "streamlit:setFrameHeight", height: 0});
+})();
+</script>
+</body>
+</html>

@@ -13,7 +13,7 @@ import time
 from sqlalchemy.orm import Session
 
 from DB.database import engine
-from DB.models import CadFileArchive, JobFileArchive, WorkplanFileArchive
+from DB.models import CadFileArchive, JobFileArchive, Part, WorkplanFileArchive
 from integrity import verify_content
 
 VERIFY_INTERVAL_SECONDS = 30 * 60
@@ -27,7 +27,10 @@ def _collect_targets(session):
     for row in session.query(WorkplanFileArchive).all():
         targets.append((f"Workplan {row.workplan_id} NC", row.nc_file_content, row.nc_file_sha256))
     for row in session.query(CadFileArchive).all():
-        targets.append((f"Part {row.part_code} CAD ({row.file_name})", row.file_content, row.file_sha256))
+        # part_code는 숫자 키라 로그만 보고 어떤 부품인지 알기 어려우므로 이름을 함께 남긴다.
+        part_row = session.query(Part).filter_by(part_code=row.part_code).first()
+        part_label = part_row.part_name if part_row else row.part_code
+        targets.append((f"Part {part_label} CAD ({row.file_name})", row.file_content, row.file_sha256))
     return targets
 
 

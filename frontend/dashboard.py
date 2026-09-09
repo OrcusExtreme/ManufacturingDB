@@ -9,10 +9,15 @@ from components.db_explorer import render_db_explorer
 from components.download_center import render_download_center
 from components.recovery import render_recovery
 from components.tool_master import render_tool_master
+from components.native_picker import render_native_file_picker
 from erd_component import render_interactive_erd
 
 st.set_page_config(page_title="공작기계지능화실험실 통합 제조 DB 대시보드", layout="wide")
 st.title("공작기계지능화실험실 제조 DB 대시보드")
+
+# 파일 선택창의 형식 필터를 "사용자 지정 파일" 대신 한글 명칭으로 표시한다.
+# 문서 이벤트 위임 방식이라 여기서 한 번만 띄우면 모든 화면의 업로더에 적용된다.
+render_native_file_picker()
 
 if 'nav_menu' not in st.session_state:
     st.session_state.nav_menu = "Job 워크스페이스"
@@ -27,7 +32,7 @@ def show_erd_dialog():
 with st.sidebar:
     st.header("DB 스키마 구조")
 
-    if st.button("🗺️ DB 관계도(ERD) 보기", use_container_width=True, key="btn_show_erd"):
+    if st.button("DB 관계도(ERD) 보기", width="stretch", key="btn_show_erd", icon=":material/schema:"):
         show_erd_dialog()
 
     st.divider()

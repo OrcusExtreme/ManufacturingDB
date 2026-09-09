@@ -30,5 +30,8 @@ failed_data/
 # Logs
 *.log
 
+# DB 백업 덤프 (마이그레이션 전 스냅샷 등)
+backups/
+
 # macOS
 .DS_Store

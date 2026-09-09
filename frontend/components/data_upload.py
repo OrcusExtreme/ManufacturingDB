@@ -11,9 +11,12 @@ def render_data_upload():
     st.subheader("외부 데이터 삽입")
     st.markdown("로컬에 있는 가공 데이터를 직접 업로드하여 파이프라인에 삽입합니다.")
 
+    # Streamlit 기본 안내문("10GB per file • STL, STEP, STP")은 서버 설정값이라
+    # 화면에 적힌 '15MB 제한' 안내와 어긋나 혼동을 줘서 숨긴다.
+    # (testid가 stFileUploadDropzone -> stFileUploaderDropzone 으로 바뀌어 선택자를 갱신)
     st.markdown("""
         <style>
-        [data-testid="stFileUploadDropzone"] small {
+        [data-testid="stFileUploaderDropzoneInstructions"] {
             display: none !important;
         }
         </style>
@@ -53,13 +56,14 @@ def render_data_upload():
     target_ready = bool(project_name and project_name.strip() and part_name and part_name.strip())
 
     if not target_ready:
-        st.info("💡 Project와 Part를 선택하거나 입력하면 업로드 타겟 및 CAD 업로드 창이 자동으로 표시됩니다.")
+        st.info("Project와 Part를 선택하거나 입력하면 업로드 타겟 및 CAD 업로드 창이 자동으로 표시됩니다.", icon=":material/lightbulb:")
         return
 
     target_project_name = project_name.strip()
     target_part_name = part_name.strip()
 
-    st.success(f"🎯 **선택 대상:** 프로젝트: **`{target_project_name}`** / 부품(Part): **`{target_part_name}`**")
+    st.success(f"**선택 대상:** 프로젝트: **`{target_project_name}`** / 부품(Part): **`{target_part_name}`**",
+              icon=":material/target:")
 
     st.markdown("---")
     st.markdown("#### Step 2. 데이터 업로드 타겟 선택")
@@ -77,7 +81,7 @@ def render_data_upload():
     if upload_target is None:
         upload_target = "신규 Job 생성 및 데이터 업로드"
 
-    st.markdown("##### 📁 Part 레벨 CAD 파일")
+    st.markdown("##### :material/view_in_ar: Part 레벨 CAD 파일")
     st.caption("CAD 모델 파일(STL/STEP)은 Job 단위가 아닌 Part 단위에 귀속됩니다. (최대 15MB 제한)")
 
     cad_existing_name = None
@@ -92,17 +96,11 @@ def render_data_upload():
         st.markdown("**CAD 파일 업로드 (.stl, .step, .stp) (1개) - 15MB 제한**")
     with c_cad2:
         if cad_existing_name:
-            st.markdown(
-                f'<div style="display: flex; justify-content: flex-end; align-items: center;">'
-                f'<span style="background-color: #28a745; color: white; padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: bold; display: inline-flex; align-items: center; gap: 4px;" title="{cad_existing_name}">'
-                f'✅ 파일 삽입 완료'
-                f'</span></div>',
-                unsafe_allow_html=True,
-            )
+            st.badge("파일 삽입 완료", color="green", icon=":material/check_circle:")
     file_cad = st.file_uploader("CAD 파일 업로드", type=["stl", "step", "stp"], accept_multiple_files=False, key="uploader_cad", label_visibility="collapsed")
 
     if cad_existing_name:
-        with st.expander(f"👁️ 기존 CAD 모델 3D 뷰어 ({cad_existing_name}) - 360° 회전 / 메시 모드", expanded=False):
+        with st.expander(f"기존 CAD 모델 3D 뷰어 ({cad_existing_name}) - 360° 회전 / 메시 모드", expanded=False, icon=":material/visibility:"):
             render_cad_viewer(target_part_name, height=460)
 
     existing_job_folder = None
@@ -113,7 +111,7 @@ def render_data_upload():
         job_selected_ready = True
     elif upload_target == "신규 Job 생성 및 데이터 업로드":
         job_selected_ready = True
-        st.info("💡 DB의 고유 식별자 PK(job_id)와 일치하는 신규 가공 폴더가 자동으로 생성되어 아래 파일들이 등록됩니다.")
+        st.info("DB의 고유 식별자 PK(job_id)와 일치하는 신규 가공 폴더가 자동으로 생성되어 아래 파일들이 등록됩니다.", icon=":material/lightbulb:")
     elif upload_target == "기존 Job에 데이터 추가":
         job_query = f"""
             SELECT j.job_id, j.source_folder
@@ -121,7 +119,7 @@ def render_data_upload():
             LEFT JOIN workplan w ON j.workplan_id = w.workplan_id
             LEFT JOIN part p ON w.part_code = p.part_code
             WHERE j.research_project = '{target_project_name}'
-              AND COALESCE(j.custom_part_name, p.part_code) = '{target_part_name}'
+              AND COALESCE(j.custom_part_name, p.part_name) = '{target_part_name}'
         """
         job_df = load_data(job_query)
         if job_df.empty:
@@ -151,7 +149,7 @@ def render_data_upload():
                 else:
                     st.error("선택한 Job의 원본 폴더 경로(source_folder)가 DB에 기록되지 않아 추가할 수 없습니다.")
             else:
-                st.info("💡 위에서 데이터를 추가할 기존 Job ID를 선택하시면 나머지 가공 파일 업로드 창이 열립니다.")
+                st.info("위에서 데이터를 추가할 기존 Job ID를 선택하시면 나머지 가공 파일 업로드 창이 열립니다.", icon=":material/lightbulb:")
 
     file_xml = None
     file_tdms = None
@@ -173,13 +171,7 @@ def render_data_upload():
                     st.markdown("**XML 메타데이터 파일 (.xml) (1개) - 15MB 제한**")
                 with c_x2:
                     if 'xml' in existing_files_info:
-                        st.markdown(
-                            f'<div style="display: flex; justify-content: flex-end; align-items: center;">'
-                            f'<span style="background-color: #28a745; color: white; padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: bold; display: inline-flex; align-items: center; gap: 4px;" title="{existing_files_info["xml"]}">'
-                            f'✅ 파일 삽입 완료'
-                            f'</span></div>',
-                            unsafe_allow_html=True,
-                        )
+                        st.badge("파일 삽입 완료", color="green", icon=":material/check_circle:")
                 file_xml = st.file_uploader("XML 메타데이터 파일 업로드", type=["xml"], accept_multiple_files=False, key="uploader_xml", label_visibility="collapsed")
 
                 st.write("")
@@ -188,13 +180,7 @@ def render_data_upload():
                     st.markdown("**NC 가공코드 파일 (.nc) (1개) - 15MB 제한**")
                 with c_n2:
                     if 'nc' in existing_files_info:
-                        st.markdown(
-                            f'<div style="display: flex; justify-content: flex-end; align-items: center;">'
-                            f'<span style="background-color: #28a745; color: white; padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: bold; display: inline-flex; align-items: center; gap: 4px;" title="{existing_files_info["nc"]}">'
-                            f'✅ 파일 삽입 완료'
-                            f'</span></div>',
-                            unsafe_allow_html=True,
-                        )
+                        st.badge("파일 삽입 완료", color="green", icon=":material/check_circle:")
                 file_nc = st.file_uploader("NC 가공코드 파일 업로드", type=["nc"], accept_multiple_files=False, key="uploader_nc", label_visibility="collapsed")
 
                 st.write("")
@@ -207,13 +193,7 @@ def render_data_upload():
                     st.markdown("**TDMS 고주파 센서 파일 (.tdms) (1개)**")
                 with c_t2:
                     if 'tdms' in existing_files_info:
-                        st.markdown(
-                            f'<div style="display: flex; justify-content: flex-end; align-items: center;">'
-                            f'<span style="background-color: #28a745; color: white; padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: bold; display: inline-flex; align-items: center; gap: 4px;" title="{existing_files_info["tdms"]}">'
-                            f'✅ 파일 삽입 완료'
-                            f'</span></div>',
-                            unsafe_allow_html=True,
-                        )
+                        st.badge("파일 삽입 완료", color="green", icon=":material/check_circle:")
                 file_tdms = st.file_uploader("TDMS 고주파 센서 파일 업로드", type=["tdms"], accept_multiple_files=False, key="uploader_tdms", label_visibility="collapsed")
 
                 st.write("")
@@ -222,13 +202,7 @@ def render_data_upload():
                     st.markdown("**장비 로그(Log) 파일 (.log) (1개)**")
                 with c_l2:
                     if 'log' in existing_files_info:
-                        st.markdown(
-                            f'<div style="display: flex; justify-content: flex-end; align-items: center;">'
-                            f'<span style="background-color: #28a745; color: white; padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: bold; display: inline-flex; align-items: center; gap: 4px;" title="{existing_files_info["log"]}">'
-                            f'✅ 파일 삽입 완료'
-                            f'</span></div>',
-                            unsafe_allow_html=True,
-                        )
+                        st.badge("파일 삽입 완료", color="green", icon=":material/check_circle:")
                 file_log = st.file_uploader("장비 로그 파일 업로드", type=["log"], accept_multiple_files=False, key="uploader_log", label_visibility="collapsed")
 
                 st.write("")
