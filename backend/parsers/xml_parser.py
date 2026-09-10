@@ -2,8 +2,11 @@ import os
 import glob
 import hashlib
 import xml.etree.ElementTree as ET
+from sqlalchemy import text
 from DB.database import SessionLocal
-from DB.models import Part, Workplan, Workingstep, Job, Tool, WorkplanFileArchive, JobFileArchive
+# 공구 마스터(tool 테이블)는 공구 마스터 엑셀 업로드(tool_inserter.py)만이 생성/수정/삭제한다.
+# XML 파서가 실수로 공구 행을 만들거나 바꾸지 못하도록 Tool 모델 자체를 import하지 않는다.
+from DB.models import Part, Workplan, Workingstep, Job, WorkplanFileArchive, JobFileArchive
 from vault_manager import save_to_vault
 from integrity import sha256_bytes
 
@@ -125,9 +128,15 @@ def parse_xml(file_path, job_id):
         # 신규/기존 어느 경로로 왔든 이후 로직이 쓰는 workplan_id를 일치시킨다.
         workplan_id = workplan.workplan_id
 
-        # 공구 마스터 매핑 딕셔너리 구성
-        tools = db.query(Tool).all()
-        tool_mapping = {t.tool_code: t for t in tools if t.tool_code}
+        # 공구 마스터 매핑 딕셔너리 구성 (tool_code -> tool_id)
+        # 읽기 전용 조회만 수행한다. 엑셀에 없는 공구 번호가 XML에 나와도 마스터에 추가하지 않고,
+        # workingstep.tool_id를 비워둔 채 tool_number / xml_tool_code만 남긴다.
+        tool_mapping = {
+            code: tool_id
+            for code, tool_id in db.execute(
+                text("SELECT tool_code, tool_id FROM tool WHERE tool_code IS NOT NULL")
+            )
+        }
         
         # <Tools> 에서 개별 공구의 제원/속성 정보 추출
         tool_properties = {}
@@ -156,13 +165,13 @@ def parse_xml(file_path, job_id):
                 tool_num = safe_int(int_node.text)
                 target_tool_code = f"T{tool_num}" 
                 props = tool_properties.get(target_tool_code, {})
-                target_tool = tool_mapping.get(target_tool_code)
-                
+                target_tool_id = tool_mapping.get(target_tool_code)
+
                 # 새로운 Workplan일 경우에만 Workingstep을 생성(정적 계획이므로 1번만 생성)
                 if is_new_workplan:
                     step = Workingstep(
                         workplan_id=workplan_id,
-                        tool_id=target_tool.tool_id if target_tool else None,
+                        tool_id=target_tool_id,
                         operation_type=None,
                         step_order=idx,
                         tool_number=tool_num,

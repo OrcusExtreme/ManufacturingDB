@@ -41,7 +41,7 @@ class Tool(Base):
     __table_args__ = {'comment': '공구 마스터 정보 테이블 (Excel에서 불러오기)'}
 
     tool_id = Column(Integer, primary_key=True, autoincrement=True)
-    tool_code = Column(String(50), comment='공구 세트 번호 (예: T4, T29)')
+    tool_code = Column(String(50), nullable=False, comment='공구 세트 번호 (예: T4, T29)')
     company_name = Column(String(50), comment='제조사명')
     tool_type = Column(String(50), comment='공구 종류')
     cutter_diameter = Column(Double, comment='직경 (숫자값)')

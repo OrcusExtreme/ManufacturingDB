@@ -5,7 +5,7 @@
 [![ORM](https://img.shields.io/badge/SQLAlchemy-2.0%2B-red.svg)](https://www.sqlalchemy.org/)
 [![Frontend](https://img.shields.io/badge/Streamlit-1.61%2B-FF4B4B.svg)](https://streamlit.io/)
 [![Standard](https://img.shields.io/badge/Standard-ISO%2014649%20(STEP--NC)-green.svg)](https://www.iso.org/)
-[![Release](https://img.shields.io/badge/Release-V2.3.2-brightgreen.svg)](https://github.com/OrcusExtreme/ManufacturingDB)
+[![Release](https://img.shields.io/badge/Release-V2.3.3-brightgreen.svg)](https://github.com/OrcusExtreme/ManufacturingDB)
 
 공작기계지능화실험실(Machine Tool Intelligence Lab)의 **통합 스마트 제조 데이터베이스 및 실시간 분석 플랫폼**입니다.  
 공작기계(CNC)에서 생성되는 다양한 이기종 데이터(XML 메타데이터, NC 프로그램, 100kHz+ 고주파 NI TDMS 진동 센서, 1Hz CNC 상태 로그, 표면 조도 측정 CSV, 3D CAD 도면)를 **Watchdog 기반으로 자동 감시·수집·파싱**하여 **ISO 14649(STEP-NC) 표준 기반 RDBMS**에 정규화 적재하고, 연구원 및 관리자에게 고성능 웹 대시보드를 제공합니다.
@@ -48,7 +48,7 @@ DB 테이블 조회/편집, 재난 복구(ZIP)까지 하나의 화면 흐름에�
        │ (Queue & Stability Check: 파일 접근 권한 및 무변동 검사)
        ▼
 [Parsing Engine (parsers/)]
-  ├─ xml_parser.py       : 메타데이터 추출, Part/Workplan/Job 구조 매핑, 공구 런타임 상태 추출
+  ├─ xml_parser.py       : 메타데이터 추출, Part/Workplan/Job 구조 매핑, 공구 런타임 상태 추출 (공구 마스터는 읽기 전용)
   ├─ tdms_parser.py      : 초고속 메타데이터(nptdms) 추출 및 가공 시작 시간 보완
   ├─ log_parser.py       : CNC 1Hz 로그 통계(Max/Avg Load, RPM, Feed) 요약 및 알람 수집
   ├─ roughness_parser.py : 조도 측정 결과(Ra, Rq, Rz) 자동 계산 및 2D 단면 Parquet 변환
@@ -109,7 +109,7 @@ ManufacturingDB/
 │   ├── data_insert_recognization.py  # Watchdog 파일 감시 및 큐 분배기
 │   ├── job_manager.py                # Job 생성 및 중복 확인 유틸리티
 │   ├── recovery_engine.py            # Vault/DB 기반 재난 복구 ZIP 생성기
-│   ├── tool_inserter.py              # 공구 마스터 Excel 파서 (엑셀 업서트, UI에서도 실행 가능)
+│   ├── tool_inserter.py              # 공구 마스터 Excel 파서 (전체 교체 + 원본 보관, UI에서도 실행 가능)
 │   ├── tdms_visualizer.py            # 백그라운드 TDMS Parquet/FFT 변환 데몬
 │   ├── vault_manager.py              # 파일 SHA 해시 기반 Vault 아카이빙
 │   ├── integrity.py                  # SHA-256 원본 복원 검증 단일 로직 (3-상태 결과)
@@ -134,7 +134,7 @@ ManufacturingDB/
         ├── filters.py                 # 5단계 캐스케이딩 Job 검색 필터
         ├── job_workspace.py           # Job 검색·분석·수정·다운로드 통합 화면
         ├── master_tree.py             # 계층형 마스터 데이터(ISO 14649 트리) 조회
-        ├── tool_master.py             # 공구 마스터 엑셀(.xlsx) 업서트 및 목록 조회
+        ├── tool_master.py             # 공구 마스터 엑셀(.xlsx) 전체 교체, 보관 원본 조회 및 목록 조회
         ├── data_upload.py             # 가공 데이터 수동 업로드
         ├── db_explorer.py             # DB 테이블 ERD/조회/정렬·조건 필터/편집/CSV 내보내기
         ├── download_center.py         # 프로젝트 ▸ Part ▸ Job ▸ 세부 데이터 다운로드 내비게이션
@@ -192,7 +192,9 @@ python run_system.py
    - 하단 `영구 삭제`: 원자적 연쇄 삭제(`CASCADE`) 확인 모달 지원
    - 원본 파일 다운로드는 `데이터 다운로드` 메뉴로 일원화되어 있습니다
 2. **계층형 마스터 데이터**: ISO 14649 공정 트리(Part ➔ Workplan ➔ Workingstep ➔ Tool) 및 CAD 모델 조회
-3. **공구 마스터**: 엑셀(`.xlsx`) 업로드로 공구 마스터 일괄 upsert(`tool_code` 기준) 및 전체 공구 목록 조회
+3. **공구 마스터**: 엑셀(`.xlsx`) 업로드로 공구 마스터 전체 교체(기존 데이터 삭제 후 엑셀 내용만 등록,
+   `T1`~`T99` 형식 코드만 적재, 가공 이력의 공구 연결은 공구 코드 기준으로 자동 재연결) 및 전체 공구 목록 조회.
+   업로드한 원본은 `archive_vault/tool_master/tool_info.xlsx`로 보관되며 화면에서 바로 내려받을 수 있습니다
 4. **데이터 삽입**: CAD 도면(`.stl`/`.stp`/`.step`), XML, NC, TDMS, Log, 조도 CSV 웹 수동 업로드.
    사이드바의 `DB 스키마 구조` 바로 아래에 배치되어 가장 먼저 접근됩니다
 5. **DB 테이블**: 인터랙티브 ERD에서 테이블을 선택해 실시간 조회·검색, 속성별 정렬(오름/내림차순)과 속성 ▸
@@ -222,6 +224,27 @@ XML/NC/CAD 원본이 저장 시점과 바이트 단위로 동일한지에 대한
 ---
 
 ## 🚀 릴리즈 노트 (Release Notes)
+
+### [V2.3.3] - 2026-09-10
+- **공구 마스터의 단일 출처를 엑셀로 고정**: `tool` 테이블을 생성·수정·삭제할 수 있는 경로를 공구 마스터 엑셀
+  업로드(`backend/tool_inserter.py`)로 한정. `xml_parser.py`는 `Tool` 모델 import 자체를 제거해 공구 행을
+  만들 수단이 없도록 하고, Workingstep에 붙일 `tool_id` 조회만 읽기 전용 SELECT로 수행. 엑셀에 없는 공구
+  번호가 XML에 나오면 마스터에 추가하지 않고 `tool_number`/`xml_tool_code`만 남긴 뒤, 이후 그 공구가 엑셀에
+  들어오면 자동으로 다시 연결
+- **엑셀 업로드 방식을 업서트 → 전체 교체로 변경**: 기존 공구 마스터를 모두 삭제하고 업로드된 엑셀 내용만 등록.
+  전체 교체로 `tool_id`가 새로 부여되므로 `relink_workingsteps()`가 `xml_tool_code`(없으면 `T{tool_number}`)
+  기준으로 가공 이력의 공구 연결을 다시 맺음. 이번 엑셀에 없는 공구를 호출한 Workingstep은 `tool_id`만 비워지고
+  호출 번호는 보존. 같은 코드가 여러 행에 나오면 마지막 행 기준으로 병합
+- **잘못된 파일로 마스터가 비워지는 사고 방지**: 열 이름 불일치·파일 손상 등으로 유효 공구가 0건이면 교체를
+  취소하고 기존 마스터를 그대로 유지(UI에서도 교체 전 경고 + 동의 체크박스 통과 필요)
+- **공구 코드 형식 검증** (`^T\d{1,2}$`): `T1`~`T99` 형태만 DB에 적재하고 `t4`/`T 4`는 `T4`로 정규화.
+  `T19-TIP`·설명 문구·빈 값처럼 XML 런타임 공구 호출과 매핑할 수 없는 행은 제외 건수로 보고
+- **`tool.tool_code` NOT NULL 제약 추가**: 공구 번호 없는 유령 공구 행이 생기지 않도록 스키마 레벨에서 차단
+- **`tool_id` 번호 재정렬** (`resequence_tool_ids()`): 삽입/삭제 이력 때문에 4번부터 시작하거나 중간이 비던 번호를
+  1번부터 연속으로 재부여. `workingstep.tool_id` 참조를 같은 트랜잭션에서 함께 옮기고 `AUTO_INCREMENT`도 `N+1`로 정렬
+- **원본 엑셀 보관** (`archive_vault/tool_master/tool_info.xlsx`): 업로드/투입 파일명과 무관하게 고정 파일명으로
+  최신본 1개만 유지하며, 새로 올릴 때 이전 원본은 삭제. 공구 마스터 화면에서 보관 파일 크기·갱신 시각 확인 및
+  원본 내려받기 제공(자동 복구 대상이 아닌 단순 보관용)
 
 ### [V2.3.2] - 2026-09-09
 - **DB 키 정규화 (Schema Normalization)**: 사람이 읽는 이름을 PK로 쓰던 구조를 정리. `part.part_code`를
