@@ -30,6 +30,9 @@ failed_data/
 # Logs
 *.log
 
+# 장비에서 받아온 원시 가공 데이터 세트 (machining_raw_data 와 같은 성격, 용량이 커 추적하지 않음)
+가공데이터_*/
+
 # DB 백업 덤프 (마이그레이션 전 스냅샷 등)
 backups/
 

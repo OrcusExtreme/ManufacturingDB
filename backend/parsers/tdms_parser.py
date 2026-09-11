@@ -4,7 +4,7 @@ import datetime
 import pandas as pd
 from DB.database import SessionLocal
 from DB.models import Job, Workplan
-from nptdms import TdmsFile
+from tdms_alignment import open_tdms
 
 from job_manager import get_or_create_job
 
@@ -38,8 +38,10 @@ def parse_tdms(file_path, job_id):
                 pass
 
         # 2. 메타데이터 초고속 추출 로직
+        #    (수집 중 비정상 종료로 파일 끝이 깨졌거나 *.tdms_index 가 손상된 경우에도
+        #     읽히도록 tdms_alignment.open_tdms 를 사용한다)
         try:
-            with TdmsFile.read_metadata(file_path) as tdms_file:
+            with open_tdms(file_path, metadata_only=True) as tdms_file:
                 if len(tdms_file.groups()) > 0:
                     cnc_group = tdms_file.groups()[0]
                     target_ch = cnc_group['CNC-ProgramName'] if 'CNC-ProgramName' in cnc_group else (cnc_group.channels()[0] if len(cnc_group.channels()) > 0 else None)

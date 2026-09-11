@@ -377,13 +377,27 @@ def generate_cad_viewer_html(file_name, file_ext, base64_content, height=520):
             let loadedMeshes = []; // array of {{ solidMesh, edgeLines, wireframeLines, mat, defaultColor, geometry }}
             let modelCenter = new THREE.Vector3();
             let modelRadius = 100;
+            let gridHelper = null;
+            let gizmoScene = null;
+            let gizmoCamera = null;
+            const rendererSize = new THREE.Vector2();
             let currentRenderMode = 'solid';
             let currentColor = '#38bdf8';
+
+            const GIZMO_SIZE = 132;
+            const AXIS_DEFS = [
+                {{ dir: new THREE.Vector3(1, 0, 0), color: 0xff5a5a, css: '#ff5a5a', label: 'X' }},
+                {{ dir: new THREE.Vector3(0, 1, 0), color: 0x4ade80, css: '#4ade80', label: 'Y' }},
+                {{ dir: new THREE.Vector3(0, 0, 1), color: 0x38bdf8, css: '#38bdf8', label: 'Z' }}
+            ];
 
             const isStep = {'true' if is_step else 'false'};
             const base64Data = "{base64_content}";
 
             function init() {{
+                // CAD 표준 좌표계: Z축을 '위'로 사용 (바닥 그리드 = XY 평면)
+                THREE.Object3D.DefaultUp.set(0, 0, 1);
+
                 const container = document.getElementById('canvas-container');
                 const width = container.clientWidth || window.innerWidth;
                 const height = container.clientHeight || {height};
@@ -397,24 +411,23 @@ def generate_cad_viewer_html(file_name, file_ext, base64_content, height=520):
                 scene.add(ambientLight);
 
                 const dirLight1 = new THREE.DirectionalLight(0xffffff, 0.9);
-                dirLight1.position.set(200, 300, 200);
+                dirLight1.position.set(200, -300, 250);
                 scene.add(dirLight1);
 
                 const dirLight2 = new THREE.DirectionalLight(0x38bdf8, 0.5);
-                dirLight2.position.set(-200, -150, -200);
+                dirLight2.position.set(-200, 250, -150);
                 scene.add(dirLight2);
 
                 const dirLight3 = new THREE.DirectionalLight(0xffffff, 0.4);
-                dirLight3.position.set(0, 250, -250);
+                dirLight3.position.set(0, -250, -250);
                 scene.add(dirLight3);
 
-                // Technical Floor Grid
-                const grid = new THREE.GridHelper(400, 40, 0x334155, 0x1e293b);
-                grid.position.y = -0.1;
-                scene.add(grid);
+                // Technical Floor Grid (XY 평면)
+                buildFloorGrid(400, new THREE.Vector3(0, 0, 0), 0);
 
                 // Camera & Renderer
                 camera = new THREE.PerspectiveCamera(40, width / height, 0.1, 10000);
+                camera.up.set(0, 0, 1); // OrbitControls 생성 전에 Z-up 확정
 
                 renderer = new THREE.WebGLRenderer({{ antialias: true, alpha: true, preserveDrawingBuffer: true }});
                 renderer.setSize(width, height);
@@ -430,6 +443,9 @@ def generate_cad_viewer_html(file_name, file_ext, base64_content, height=520):
                 controls.autoRotate = false;
                 controls.autoRotateSpeed = 2.5;
                 controls.maxPolarAngle = Math.PI; // Full 360-degree vertical & horizontal freedom
+
+                // 화면 좌측 하단 방향 표시 gizmo (항상 보이는 X/Y/Z)
+                initAxisGizmo();
 
                 window.addEventListener('resize', onWindowResize);
 
@@ -448,6 +464,109 @@ def generate_cad_viewer_html(file_name, file_ext, base64_content, height=520):
                 requestAnimationFrame(animate);
                 if (controls) controls.update();
                 renderer.render(scene, camera);
+                renderAxisGizmo();
+            }}
+
+            // 메인 씬 위에 작은 뷰포트로 축 방향 gizmo를 겹쳐 그린다
+            function renderAxisGizmo() {{
+                if (!gizmoScene || !gizmoCamera || !controls) return;
+
+                const size = GIZMO_SIZE;
+                const margin = 14;
+                renderer.getSize(rendererSize);
+
+                gizmoCamera.position.copy(camera.position).sub(controls.target).normalize().multiplyScalar(4.0);
+                gizmoCamera.up.copy(camera.up);
+                gizmoCamera.lookAt(0, 0, 0);
+
+                renderer.autoClear = false;
+                renderer.clearDepth();
+                renderer.setViewport(margin, margin, size, size);
+                renderer.setScissor(margin, margin, size, size);
+                renderer.setScissorTest(true);
+                renderer.render(gizmoScene, gizmoCamera);
+                renderer.setScissorTest(false);
+                renderer.setViewport(0, 0, rendererSize.x, rendererSize.y);
+                renderer.autoClear = true;
+            }}
+
+            // XY 평면 바닥 그리드를 모델 크기에 맞춰 생성
+            function buildFloorGrid(span, center, floorZ) {{
+                if (gridHelper) {{
+                    scene.remove(gridHelper);
+                    gridHelper.geometry.dispose();
+                    gridHelper.material.dispose();
+                    gridHelper = null;
+                }}
+
+                // 한 칸 간격을 1/2/5 x 10^n 으로 정규화
+                const rawStep = Math.max(span, 1) / 20;
+                const pow = Math.pow(10, Math.floor(Math.log10(rawStep)));
+                const norm = rawStep / pow;
+                const step = (norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10) * pow;
+                const divisions = Math.max(10, Math.ceil(span / step));
+                const gridSize = step * divisions;
+
+                // GridHelper는 기본이 XZ 평면 -> X축 기준 90도 회전으로 XY 평면화
+                gridHelper = new THREE.GridHelper(gridSize, divisions, 0x334155, 0x1e293b);
+                gridHelper.rotation.x = Math.PI / 2;
+                gridHelper.position.set(center.x, center.y, floorZ);
+                scene.add(gridHelper);
+            }}
+
+            // X(적)/Y(녹)/Z(청) 축 화살표 + 라벨 (좌측 하단 gizmo 전용)
+            function makeAxisTriad(origin, len, labelSize) {{
+                const group = new THREE.Group();
+
+                AXIS_DEFS.forEach(def => {{
+                    const arrow = new THREE.ArrowHelper(
+                        def.dir, origin, len, def.color, len * 0.18, len * 0.09
+                    );
+                    arrow.line.material.depthTest = false;
+                    arrow.line.material.transparent = true;
+                    arrow.cone.material.depthTest = false;
+                    arrow.cone.material.transparent = true;
+                    arrow.renderOrder = 998;
+                    group.add(arrow);
+
+                    const label = makeAxisLabel(def.label, def.css, labelSize);
+                    label.position.copy(origin).addScaledVector(def.dir, len + labelSize * 0.7);
+                    group.add(label);
+                }});
+
+                return group;
+            }}
+
+            // 카메라 방향만 따라 도는 좌측 하단 축 gizmo
+            function initAxisGizmo() {{
+                gizmoScene = new THREE.Scene();
+                gizmoScene.add(makeAxisTriad(new THREE.Vector3(0, 0, 0), 1, 0.6));
+                gizmoCamera = new THREE.PerspectiveCamera(50, 1, 0.1, 100);
+                gizmoCamera.up.set(0, 0, 1);
+            }}
+
+            function makeAxisLabel(text, cssColor, size) {{
+                const canvas = document.createElement('canvas');
+                canvas.width = 128;
+                canvas.height = 128;
+                const ctx = canvas.getContext('2d');
+                ctx.font = 'bold 92px Segoe UI, Arial, sans-serif';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.lineWidth = 10;
+                ctx.strokeStyle = 'rgba(10, 12, 18, 0.9)';
+                ctx.strokeText(text, 64, 70);
+                ctx.fillStyle = cssColor;
+                ctx.fillText(text, 64, 70);
+
+                const sprite = new THREE.Sprite(new THREE.SpriteMaterial({{
+                    map: new THREE.CanvasTexture(canvas),
+                    transparent: true,
+                    depthTest: false
+                }}));
+                sprite.scale.set(size, size, 1);
+                sprite.renderOrder = 999;
+                return sprite;
             }}
 
             function onWindowResize() {{
@@ -499,6 +618,10 @@ def generate_cad_viewer_html(file_name, file_ext, base64_content, height=520):
                 document.getElementById('hud-triangles').innerText = Math.round(totalTriangles).toLocaleString();
                 document.getElementById('hud-vertices').innerText = Math.round(totalVertices).toLocaleString();
 
+                // 모델 크기에 맞춰 XY 바닥 그리드 재구성 (바닥면 = 모델 최하단 Z)
+                const maxDim = Math.max(size.x, size.y, size.z, 1);
+                buildFloorGrid(maxDim * 1.8, modelCenter, box.min.z);
+
                 // Create Bounding Box Helper
                 boxHelper = new THREE.BoxHelper(modelGroup, 0x00e5ff);
                 boxHelper.visible = false;
@@ -512,20 +635,25 @@ def generate_cad_viewer_html(file_name, file_ext, base64_content, height=520):
                 if (!controls || !camera) return;
                 const dist = modelRadius * 2.3;
 
+                // Z-up (XY 평면이 바닥) 기준 시점 프리셋
                 if (view === 'iso') {{
                     camera.position.set(
-                        modelCenter.x + dist * 0.75, 
-                        modelCenter.y + dist * 0.65, 
-                        modelCenter.z + dist * 0.75
+                        modelCenter.x + dist * 0.75,
+                        modelCenter.y - dist * 0.75,
+                        modelCenter.z + dist * 0.65
                     );
                 }} else if (view === 'top') {{
-                    camera.position.set(modelCenter.x, modelCenter.y + dist * 1.3, modelCenter.z + 0.0001);
+                    // XY 평면 조망 (Z축 위에서 내려다보기)
+                    camera.position.set(modelCenter.x, modelCenter.y - dist * 0.001, modelCenter.z + dist * 1.3);
                 }} else if (view === 'front') {{
-                    camera.position.set(modelCenter.x, modelCenter.y, modelCenter.z + dist * 1.3);
+                    // XZ 평면 조망 (-Y 방향에서 보기)
+                    camera.position.set(modelCenter.x, modelCenter.y - dist * 1.3, modelCenter.z);
                 }} else if (view === 'side') {{
+                    // YZ 평면 조망 (+X 방향에서 보기)
                     camera.position.set(modelCenter.x + dist * 1.3, modelCenter.y, modelCenter.z);
                 }}
 
+                camera.up.set(0, 0, 1);
                 controls.target.copy(modelCenter);
                 camera.lookAt(modelCenter);
                 camera.updateProjectionMatrix();

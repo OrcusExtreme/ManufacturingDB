@@ -100,6 +100,7 @@ class Job(Base):
     log_file_path = Column(String(500), nullable=True)  # 매핑된 Log 파일 절대 경로
     tdms_parquet_path = Column(String(500), nullable=True) # TDMS Time-domain Parquet 절대 경로
     tdms_fft_parquet_path = Column(String(500), nullable=True) # TDMS Frequency-domain(FFT) Parquet 절대 경로
+    machining_window = Column(JSON, comment='TDMS 실가공 구간 판별 결과 (구간/근거/DAQ 시계 보정값)')
     
     tool_conditions = Column(JSON, comment='런타임 공구 상태 (사용횟수, 오프셋, 마모도 등)')
 

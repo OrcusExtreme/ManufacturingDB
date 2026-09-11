@@ -5,7 +5,7 @@
 [![ORM](https://img.shields.io/badge/SQLAlchemy-2.0%2B-red.svg)](https://www.sqlalchemy.org/)
 [![Frontend](https://img.shields.io/badge/Streamlit-1.61%2B-FF4B4B.svg)](https://streamlit.io/)
 [![Standard](https://img.shields.io/badge/Standard-ISO%2014649%20(STEP--NC)-green.svg)](https://www.iso.org/)
-[![Release](https://img.shields.io/badge/Release-V2.3.3-brightgreen.svg)](https://github.com/OrcusExtreme/ManufacturingDB)
+[![Release](https://img.shields.io/badge/Release-V2.3.4-brightgreen.svg)](https://github.com/OrcusExtreme/ManufacturingDB)
 
 공작기계지능화실험실(Machine Tool Intelligence Lab)의 **통합 스마트 제조 데이터베이스 및 실시간 분석 플랫폼**입니다.  
 공작기계(CNC)에서 생성되는 다양한 이기종 데이터(XML 메타데이터, NC 프로그램, 100kHz+ 고주파 NI TDMS 진동 센서, 1Hz CNC 상태 로그, 표면 조도 측정 CSV, 3D CAD 도면)를 **Watchdog 기반으로 자동 감시·수집·파싱**하여 **ISO 14649(STEP-NC) 표준 기반 RDBMS**에 정규화 적재하고, 연구원 및 관리자에게 고성능 웹 대시보드를 제공합니다.
@@ -111,13 +111,17 @@ ManufacturingDB/
 │   ├── recovery_engine.py            # Vault/DB 기반 재난 복구 ZIP 생성기
 │   ├── tool_inserter.py              # 공구 마스터 Excel 파서 (전체 교체 + 원본 보관, UI에서도 실행 가능)
 │   ├── tdms_visualizer.py            # 백그라운드 TDMS Parquet/FFT 변환 데몬
+│   ├── tdms_alignment.py             # NC 코드 대조 실가공 구간 판별 + CNC/DAQ 시간축 정렬 (단독 CLI 제공)
 │   ├── vault_manager.py              # 파일 SHA 해시 기반 Vault 아카이빙
 │   ├── integrity.py                  # SHA-256 원본 복원 검증 단일 로직 (3-상태 결과)
 │   ├── integrity_monitor.py          # 원본 복원 검증 백그라운드 감시자 (주기 실행 + 로그 경고)
 │   ├── migrate_keys_v3.py            # 키 정규화 마이그레이션 (숫자 PK 전환, 데이터 보존)
 │   ├── DB/                           
 │   │   ├── database.py               # SQLAlchemy 커넥션 풀링 및 세션 팩토리
-│   │   └── models.py                 # 14개 테이블 DDL 및 ORM 정의
+│   │   ├── models.py                 # 14개 테이블 DDL 및 ORM 정의
+│   │   └── schema_patch.py           # 기동 시 누락 컬럼만 채우는 경량 스키마 보정
+│   ├── tests/
+│   │   └── test_tdms_alignment.py    # 합성 TDMS 기반 구간 판별/시간축 정렬 회귀 테스트
 │   └── parsers/                      # 확장자별 전용 파싱 엔진
 │       ├── xml_parser.py             # XML 메타데이터 및 공구 상태 파서
 │       ├── tdms_parser.py            # NI TDMS 고속 헤더 파서
@@ -224,6 +228,46 @@ XML/NC/CAD 원본이 저장 시점과 바이트 단위로 동일한지에 대한
 ---
 
 ## 🚀 릴리즈 노트 (Release Notes)
+
+### [V2.3.4] - 2026-09-11
+- **NC 코드 대조 기반 실가공 구간 자동 판별** (`backend/tdms_alignment.py` 신규): TDMS는 가공 한 건이 아니라
+  장비 모니터링이 켜져 있던 구간 전체(예: 12분)를 담고 있고, 파일명의 프로그램명이 실제 가공한 NC와 다를 수도
+  있다. 업로드된 NC 원본을 `CNC-CurrentBlock`과 대조해 프로그램이 순서대로 진행된 구간(run)을 찾고, 한 파일에
+  중단된 시도와 완주한 시도가 같이 들어있을 때는 **실행된 블록 종류 수(커버리지)** 로 점수를 매겨 완주한 쪽을
+  고른다. 같은 블록이 프로그램에 여러 번 나오면(`G1Y-15` 2회 등) 진행 위치를 단조 증가로 매핑해 한 번의 실행이
+  여러 개로 쪼개지지 않게 한다. 고른 구간 앞뒤에 붙은 대기 시간은 스핀들/이송 상태와 블록 전환 간격으로 잘라냄
+- **CNC ↔ DAQ 공통 시간축**: 27Hz 폴링 CNC(수천 행)와 12.8kHz DAQ(수백만 행)를 각자의 행 번호로 그리던 것을,
+  가공 시작을 0초로 하는 경과시간 열(`time_s` / `daq_time_s`)로 통일. DAQ 구간은 비율 스케일이 아니라 파형
+  속성(`wf_start_time` + `wf_start_offset` + `wf_increment`)으로 절대 시각을 복원해 잘라내고, 파형 속성이 없는
+  장비 데이터만 "두 그룹의 전체 기록 구간이 같다"는 가정으로 비율 환산(fallback)
+- **DAQ 시계 지연 자동 실측/보정**: CNC와 DAQ는 수집 경로가 달라 선언된 시작 시각이 같아도 실제로는 몇 초씩
+  어긋나 있다. 같은 물리량을 보는 두 채널(`CNC-Z-SpindleLoad` ↔ DAQ 스핀들 3상 전류)의 정규화 상호상관으로
+  지연을 측정해 보정(실측 데이터에서 상관 0.963, 지연 0일 때 −0.141 → +3.05초 보정). 상관이 충분하지 않으면
+  보정하지 않고 진단값만 남김
+- **판별 근거 저장 및 표시**: `job.machining_window`(JSON) + `processed_data/job_{id}_window.json` 사이드카에
+  구간·판별 방법·NC 커버리지·DAQ 보정값·판단 메모를 기록하고, Job 워크스페이스 TDMS 그래프 카드 상단에 요약 표시
+- **손상된 TDMS 내성**: 수집 프로그램이 비정상 종료되면 파일 끝과 `*.tdms_index`에 0으로 채워진 조각이 남아
+  nptdms가 `ValueError`로 실패한다(실측 파일에서 발생). 세그먼트 lead-in을 따라가 유효 지점까지만 읽도록 우회해
+  기존에 변환 자체가 실패하던 TDMS도 처리
+- **XML/TDMS 시간대 자동 정렬**: XML `StartTime`은 로컬시간(+09:00), TDMS 파형 시각은 UTC라 그대로 비교하면
+  9시간 어긋난다. 정수 시간 단위로 기준을 맞춘 뒤 힌트로 사용하고, 보정해도 겹치지 않으면(다른 세션의 XML 등)
+  힌트를 버림
+- **변환 배치 안정화**: `run_visualizer_batch()`의 `get_abs_raw_data_path` 미import(NameError로 배치 전체가
+  5초마다 실패)를 수정하고, NC 참조 없이 만든 구간만 NC 확보 시 1회 재판별하도록 조건을 좁혀 무한 재처리를 차단.
+  변환 실패 Job은 1분 → 최대 30분으로 재시도 간격을 늘려 로그 폭주 방지
+- **단독 CLI 및 회귀 테스트**: DB 없이 `python backend/tdms_alignment.py --tdms <f> --nc <f> [--xml <f>] --out <dir>`
+  로 판별 결과와 Parquet을 바로 확인 가능. `backend/tests/test_tdms_alignment.py`가 합성 TDMS로 구간 판별,
+  중복 블록 매핑, 시계 지연 복원, 비율 스케일 fallback, NC/DAQ 부재, 손상 꼬리, 시간대 정렬을 검증(31개 검사)
+- **표면조도 평가곡선 인식을 파일명 → 내용 기반으로 변경** (`backend/parsers/roughness_parser.py`): 기존에는
+  `*평가곡선*.CSV` 패턴에 걸리는 파일만 읽어, 측정 담당자·장비 설정에 따라 이름이 달라진 파일
+  (예: `260911_1.CSV`)은 업로드해도 조도 값이 하나도 들어오지 않았다. 이제 헤더의 `DATANUM:` +
+  `DATAAXIS:`/`XPITCH:`/`PROFILENO:` 표식으로 평가곡선 파일을 판별하므로 이름과 무관하게 적재된다.
+  찾은 파일 목록(또는 찾지 못했다는 사실)을 로그로 남겨 원인 파악이 가능하도록 함
+- **3D 형상 뷰어 좌표계를 CAD 표준(Z-up)으로 정렬** (`frontend/cad_viewer_component.py`): 바닥 그리드를
+  XZ 평면에서 **XY 평면**으로 바꾸고 카메라 up 벡터를 Z축으로 고정(OrbitControls 생성 전에 적용).
+  등각/상면/정면/측면 시점 프리셋도 Z-up 기준으로 재정의하고, 그리드는 모델 크기에 맞춰 한 칸 간격을
+  1/2/5×10ⁿ로 정규화해 모델 최하단 Z에 배치. 화면 좌측 하단에 카메라 방향을 따라 도는 **X(적)/Y(녹)/Z(청)
+  축 gizmo**를 별도 뷰포트로 겹쳐 그려, 확대하거나 모델이 화면 밖으로 나가도 방향을 확인할 수 있게 함
 
 ### [V2.3.3] - 2026-09-10
 - **공구 마스터의 단일 출처를 엑셀로 고정**: `tool` 테이블을 생성·수정·삭제할 수 있는 경로를 공구 마스터 엑셀

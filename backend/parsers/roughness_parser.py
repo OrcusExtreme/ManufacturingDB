@@ -1,5 +1,4 @@
 import os
-import glob
 import csv
 import pandas as pd
 from sqlalchemy import text
@@ -14,6 +13,51 @@ BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROJECT_ROOT = os.path.dirname(BACKEND_DIR)
 PROCESSED_DIR = os.path.join(PROJECT_ROOT, "processed_data")
 os.makedirs(PROCESSED_DIR, exist_ok=True)
+
+
+# 측정기에서 내보낸 평가곡선 CSV 를 알아보는 표식.
+# 파일명은 측정 담당자/장비 설정에 따라 제각각이라("0715표면조도평가곡선파일_S2500_F950.CSV",
+# "260911_1.CSV" 등) 이름이 아니라 헤더 내용으로 판별한다.
+CURVE_MARKERS = ("DATAAXIS:", "XPITCH:", "PROFILENO:")
+
+
+def _is_curve_csv(path, max_head_lines=80):
+    """Mitutoyo 계열 평가곡선 CSV 인지 헤더를 보고 판단한다."""
+    try:
+        with open(path, "r", encoding="euc-kr", errors="ignore") as f:
+            head = [next(f, "") for _ in range(max_head_lines)]
+    except Exception:
+        return False
+    text = "".join(head).upper()
+    # DATANUM 은 데이터 시작 위치를 알려주는 필수 표식이고,
+    # 나머지 중 하나만 더 있으면 평가곡선 파일로 본다.
+    if "DATANUM:" not in text:
+        return False
+    return any(m in text for m in CURVE_MARKERS)
+
+
+def _find_curve_files(target_dir):
+    """Surface_Roughness 폴더의 CSV 중 평가곡선 파일만 골라 이름순으로 돌려준다."""
+    files = []
+    try:
+        names = sorted(os.listdir(target_dir))
+    except OSError:
+        return files
+    for name in names:
+        full = os.path.join(target_dir, name)
+        if os.path.isfile(full) and os.path.splitext(name)[1].lower() == ".csv" and _is_curve_csv(full):
+            files.append(full)
+    return files
+
+
+def _measure_name_from(path):
+    """파일명에서 측정 조건 이름을 뽑는다 (예: ..._S2800_F1050 -> S2800_F1050)."""
+    base = os.path.splitext(os.path.basename(path))[0]
+    parts = base.split('_')
+    if len(parts) >= 3:
+        return f"{parts[-2]}_{parts[-1]}"
+    return base
+
 
 def parse_roughness(job_folder_path, job_id=None):
     """
@@ -36,17 +80,19 @@ def parse_roughness(job_folder_path, job_id=None):
         # 1. 통계 파일 파싱 의존성 제거 (직접 계산으로 대체됨)
                 
         # 2. 곡선 파일 파싱 및 Parquet 저장
-        curve_files = glob.glob(os.path.join(target_dir, "*평가곡선*.CSV"))
+        curve_files = _find_curve_files(target_dir)
+        if not curve_files:
+            csv_count = len([f for f in os.listdir(target_dir)
+                             if os.path.splitext(f)[1].lower() == ".csv"])
+            print(f"[Roughness Parser] {target_dir} 에서 평가곡선 CSV 를 찾지 못했습니다 "
+                  f"(CSV {csv_count}개 확인)")
+        else:
+            print(f"[Roughness Parser] 평가곡선 CSV {len(curve_files)}개 확인: "
+                  + ", ".join(os.path.basename(c) for c in curve_files))
         
         for cf in curve_files:
             try:
-                base_name = os.path.basename(cf).replace('.CSV', '')
-                # S2800_F1050 형태의 이름을 추출하기 위해 뒤에서부터 분리
-                parts = base_name.split('_')
-                if len(parts) >= 3:
-                    measure_name = f"{parts[-2]}_{parts[-1]}"
-                else:
-                    measure_name = base_name
+                measure_name = _measure_name_from(cf)
                     
                 parquet_path = os.path.join(PROCESSED_DIR, f"roughness_job_{job_pk}_{measure_name}.parquet")
                 

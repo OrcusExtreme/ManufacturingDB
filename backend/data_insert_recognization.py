@@ -6,6 +6,7 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 from collections import OrderedDict
 
+from DB.schema_patch import ensure_schema
 from parsers.xml_parser import parse_xml
 from parsers.tdms_parser import parse_tdms
 from parsers.log_parser import parse_log
@@ -295,6 +296,9 @@ class MachiningDataHandler(FileSystemEventHandler):
         parse_nc(file_path, job_id)
 
 def start_pipeline(watch_dir):
+    # 새 기능으로 늘어난 컬럼이 빠져 있으면 채운 뒤 시작한다 (이미 있으면 아무 것도 하지 않음)
+    ensure_schema()
+
     try:
         from recovery_engine import backfill_missing_job_metadata
         backfill_missing_job_metadata()

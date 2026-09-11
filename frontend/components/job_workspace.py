@@ -1,4 +1,5 @@
 import html
+import json
 import os
 import re
 
@@ -42,6 +43,64 @@ def _kv_list(items):
             "</div>"
         )
     st.markdown("".join(rows), unsafe_allow_html=True)
+
+
+def _load_machining_window(job_info, job_id):
+    """가공 구간 판별 결과를 읽는다. DB 값이 없으면 processed_data 사이드카를 본다."""
+    raw = job_info.get('machining_window') if hasattr(job_info, 'get') else None
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            raw = None
+    if isinstance(raw, dict) and raw:
+        return raw
+
+    side = os.path.join(PROJECT_ROOT, "processed_data", f"job_{job_id}_window.json")
+    if os.path.exists(side):
+        try:
+            with open(side, encoding="utf-8") as f:
+                data = json.load(f)
+            win = data.get("window", {})
+            if win:
+                win.setdefault("daq_sync", data.get("daq_sync", {}))
+                return win
+        except Exception:
+            pass
+    return {}
+
+
+_WINDOW_METHOD_LABEL = {
+    "nc_block": "NC 블록 대조",
+    "activity": "스핀들/이송 활동",
+    "hint": "XML 가공시간",
+    "full": "기록 전체",
+}
+
+
+def _machining_window_caption(window):
+    """그래프 위에 한 줄로 붙일 구간 판별 요약."""
+    if not window:
+        return None
+    parts = []
+    dur = window.get("duration_seconds")
+    if dur:
+        parts.append(f"가공 구간 {dur:,.1f}초")
+    method = _WINDOW_METHOD_LABEL.get(window.get("method"), window.get("method") or "-")
+    parts.append(f"판별: {method}")
+    if window.get("program_blocks"):
+        if window.get("method") == "nc_block":
+            parts.append(f"NC 블록 {window.get('matched_blocks', 0)}/{window['program_blocks']}종 실행"
+                         f" ({window.get('nc_coverage', 0) * 100:.0f}%)")
+        else:
+            # NC 원본은 찾았지만 실행 블록과 맞지 않은 경우 (예: 프로브 매크로만 보관된 Job)
+            parts.append(f"NC 대조 불일치 ({window.get('matched_blocks', 0)}/{window['program_blocks']}종)")
+    if window.get("total_rows"):
+        parts.append(f"CNC {window.get('rows', 0):,}/{window['total_rows']:,}행")
+    sync = window.get("daq_sync") or {}
+    if sync.get("applied"):
+        parts.append(f"DAQ 시계 보정 {sync.get('lag_seconds', 0):+.2f}초")
+    return " · ".join(parts)
 
 
 def _style_chart(fig, **layout):
@@ -359,31 +418,54 @@ def _render_analysis_tab(target_job_id, job_info, sr_df):
         if parquet_path:
             try:
                 tdms_data = pd.read_parquet(parquet_path)
-                st.caption(f"{len(tdms_data):,} 행 · {os.path.basename(parquet_path)}")
+                machining_window = _load_machining_window(job_info, target_job_id)
+                n_cnc = int(tdms_data['time_s'].notna().sum()) if 'time_s' in tdms_data.columns else len(tdms_data)
+                n_daq = int(tdms_data['daq_time_s'].notna().sum()) if 'daq_time_s' in tdms_data.columns else 0
+                st.caption(f"CNC {n_cnc:,} 행 · DAQ {n_daq:,} 행 · {os.path.basename(parquet_path)}")
+
+                window_caption = _machining_window_caption(machining_window)
+                if window_caption:
+                    st.caption(window_caption)
 
                 tab1, tab2, tab3 = st.tabs(["CNC", "DAQ", "FFT"])
+
+                # CNC 와 DAQ 는 행 수가 수백 배 차이나므로 각자의 경과시간 열을 x 축으로 쓴다.
+                # 두 축의 0초는 같은 시점(가공 시작)이라 탭을 오가며 같은 구간을 비교할 수 있다.
+                x_cnc = 'time_s' if 'time_s' in tdms_data.columns else None
+                x_daq = 'daq_time_s' if 'daq_time_s' in tdms_data.columns else None
+                axis_title = "가공 경과시간 (초)"
 
                 with tab1:
                     cnc_cols = [c for c in tdms_data.columns if c.startswith('CNC-')]
                     if cnc_cols:
                         selected_cnc = st.multiselect("CNC 채널", cnc_cols, default=cnc_cols[:2] if len(cnc_cols) >= 2 else cnc_cols, key="ws_cnc_sel")
                         if selected_cnc:
-                            fig_cnc = px.line(tdms_data, y=selected_cnc)
-                            _style_chart(fig_cnc)
+                            if x_cnc:
+                                frame = tdms_data[[x_cnc] + selected_cnc].dropna(subset=[x_cnc])
+                                fig_cnc = px.line(frame, x=x_cnc, y=selected_cnc)
+                                _style_chart(fig_cnc, xaxis_title=axis_title)
+                            else:
+                                fig_cnc = px.line(tdms_data, y=selected_cnc)
+                                _style_chart(fig_cnc, xaxis_title="샘플 인덱스")
                             st.plotly_chart(fig_cnc, width="stretch")
                     else:
                         _empty_note("CNC 데이터 없음")
 
                 with tab2:
-                    daq_base_cols = list(set([c.replace('_max', '').replace('_min', '') for c in tdms_data.columns if ('DAQ-' in c or 'SOUND' in c) and ('_max' in c or '_min' in c)]))
+                    daq_base_cols = sorted(set([c.replace('_max', '').replace('_min', '') for c in tdms_data.columns if ('DAQ-' in c or 'SOUND' in c) and ('_max' in c or '_min' in c)]))
                     if daq_base_cols:
                         selected_daq = st.multiselect("DAQ 채널", daq_base_cols, default=daq_base_cols[:1] if len(daq_base_cols) >= 1 else daq_base_cols, key="ws_daq_sel")
                         if selected_daq:
                             plot_cols = []
                             for c in selected_daq:
                                 plot_cols.extend([f"{c}_max", f"{c}_min"])
-                            fig_daq = px.line(tdms_data, y=plot_cols)
-                            _style_chart(fig_daq)
+                            if x_daq:
+                                frame = tdms_data[[x_daq] + plot_cols].dropna(subset=[x_daq])
+                                fig_daq = px.line(frame, x=x_daq, y=plot_cols)
+                                _style_chart(fig_daq, xaxis_title=axis_title)
+                            else:
+                                fig_daq = px.line(tdms_data, y=plot_cols)
+                                _style_chart(fig_daq, xaxis_title="샘플 인덱스")
                             st.plotly_chart(fig_daq, width="stretch")
                     else:
                         _empty_note("DAQ 데이터 없음")
@@ -607,7 +689,8 @@ def render_job_workspace():
                p.part_name AS registry_part_name, p.material_code,
                j.workplan_id, j.machine_code, j.start_time, j.end_time, j.is_finish, j.is_error,
                j.tdms_file_path, j.log_file_path, j.tdms_parquet_path, j.tdms_fft_parquet_path,
-               j.cutting_seconds, j.moving_distance, j.cutting_moving_distance, w.program_code,
+               j.cutting_seconds, j.moving_distance, j.cutting_moving_distance,
+               j.machining_window, w.program_code,
                m.max_spindle_load, m.avg_spindle_rpm, m.alarm_count
         FROM job j
         LEFT JOIN machine_log m ON j.job_id = m.job_id
