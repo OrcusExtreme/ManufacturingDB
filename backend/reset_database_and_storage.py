@@ -26,7 +26,9 @@ if backend_dir not in sys.path:
 
 from sqlalchemy import text, inspect
 from DB.database import engine, Base
-from DB import models  # 모든 모델 로드
+# 이름을 직접 쓰지는 않지만 반드시 필요하다. 이 import 가 있어야 모든 모델이 Base.metadata 에
+# 등록되고, 아래 create_all 이 14개 테이블을 전부 다시 만든다. 지우면 빈 DB 가 된다.
+from DB import models  # noqa: F401
 from DB.schema_patch import ensure_schema
 
 

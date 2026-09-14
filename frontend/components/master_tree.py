@@ -39,13 +39,13 @@ def render_master_tree():
     for p_code in parts_to_show:
         with st.expander(f"Part: {p_code}", expanded=True):
             # part_code는 숫자 키가 되었으므로 이름으로 부품을 찾은 뒤 그 키로 CAD를 조회한다.
-            cad_query = f"""
+            cad_query = """
                 SELECT c.file_name, c.file_type, LENGTH(c.file_content) as file_size, c.file_path
                 FROM cad_file_archive c
                 JOIN part p ON c.part_code = p.part_code
-                WHERE p.part_name = '{p_code}'
+                WHERE p.part_name = :part
             """
-            cad_df = load_data(cad_query)
+            cad_df = load_data(cad_query, params={"part": p_code})
             if not cad_df.empty:
                 c_fname = cad_df.iloc[0]['file_name']
                 c_ftype = str(cad_df.iloc[0]['file_type']).upper()
@@ -61,14 +61,14 @@ def render_master_tree():
                     st.dataframe(cad_df, width="stretch", hide_index=True)
                 st.divider()
 
-            wp_query = f"""
+            wp_query = """
                 SELECT DISTINCT w.workplan_id, w.program_code, w.nc_file_path
                 FROM workplan w
                 JOIN job j ON w.workplan_id = j.workplan_id
                 JOIN part p ON w.part_code = p.part_code
-                WHERE COALESCE(j.custom_part_name, p.part_name) = '{p_code}'
+                WHERE COALESCE(j.custom_part_name, p.part_name) = :part
             """
-            part_wps = load_data(wp_query)
+            part_wps = load_data(wp_query, params={"part": p_code})
 
             if part_wps.empty:
                 st.info("해당 조건에 맞는 Workplan이 없습니다.")
@@ -79,7 +79,7 @@ def render_master_tree():
                 with st.expander(f"Workplan: {p_code} - {wp_row['program_code']} (ID: {wp_id})", expanded=False):
                     st.write(f"**NC File Path:** `{wp_row['nc_file_path']}`")
 
-                    ws_query = f"""
+                    ws_query = """
                         SELECT ws.step_order AS '순서', ws.operation_type AS '작업(Op)',
                                ws.xml_tool_code AS '사용 공구',
                                ws.spindle_speed AS '주축회전수 (RPM)',
@@ -90,10 +90,10 @@ def render_master_tree():
                                t.tool_teeth AS '날수'
                         FROM workingstep ws
                         LEFT JOIN tool t ON ws.tool_id = t.tool_id
-                        WHERE ws.workplan_id = '{wp_id}'
+                        WHERE ws.workplan_id = :wp
                         ORDER BY ws.step_order
                     """
-                    ws_df = load_data(ws_query)
+                    ws_df = load_data(ws_query, params={"wp": wp_id})
 
                     if not ws_df.empty:
                         st.markdown("##### 하위 가공 스텝 (Workingsteps)")

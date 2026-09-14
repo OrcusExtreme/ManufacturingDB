@@ -16,7 +16,6 @@ import time
 from contextlib import contextmanager
 
 import numpy as np
-import pandas as pd
 
 import job_layout
 from DB.database import SessionLocal
@@ -30,8 +29,7 @@ from tdms_alignment import (TARGET_DATAPOINTS, build_aligned_frames,
                             summarize_window)
 
 # Root processed_data directory (independent from machining_raw_data)
-BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(BACKEND_DIR)
+from vault_manager import PROJECT_ROOT   # 경로 기준은 vault_manager 한 곳
 PROCESSED_DIR = os.path.join(PROJECT_ROOT, "processed_data")
 os.makedirs(PROCESSED_DIR, exist_ok=True)
 

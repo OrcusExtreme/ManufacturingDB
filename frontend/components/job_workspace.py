@@ -160,8 +160,8 @@ def resolve_parquet_file(file_path, default_filename=None):
 
 @st.dialog("NC 데이터 원본 조회", width="large", icon=":material/terminal:")
 def show_nc_dialog(wp_id):
-    query = f"SELECT nc_file_content FROM workplan_file_archive WHERE workplan_id = '{wp_id}'"
-    df = load_data(query)
+    query = "SELECT nc_file_content FROM workplan_file_archive WHERE workplan_id = :wp"
+    df = load_data(query, params={"wp": wp_id})
     if not df.empty and pd.notnull(df.iloc[0]['nc_file_content']):
         try:
             content = df.iloc[0]['nc_file_content'].decode('utf-8', errors='replace')
@@ -174,8 +174,8 @@ def show_nc_dialog(wp_id):
 
 @st.dialog("XML 메타데이터 조회", width="large", icon=":material/data_object:")
 def show_xml_dialog(job_id):
-    query = f"SELECT xml_file_content FROM job_file_archive WHERE job_id = {job_id}"
-    df = load_data(query)
+    query = "SELECT xml_file_content FROM job_file_archive WHERE job_id = :jid"
+    df = load_data(query, params={"jid": job_id})
     if not df.empty and pd.notnull(df.iloc[0]['xml_file_content']):
         try:
             content = df.iloc[0]['xml_file_content'].decode('utf-8', errors='replace')

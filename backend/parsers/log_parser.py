@@ -3,7 +3,7 @@ import csv
 import re
 import datetime
 from DB.database import SessionLocal
-from DB.models import Job, MachineLog, LogFileArchive
+from DB.models import MachineLog, LogFileArchive
 from vault_manager import save_to_vault
 
 # CNC 1Hz 로그를 구분하기 위한 헤더 표식.
@@ -134,9 +134,6 @@ def parse_log(file_path, job_id):
                             cutting_dist_3d += d_step
                     prev_x, prev_y, prev_z = px, py, pz
 
-                # 전류 데이터가 있을 경우 추출 (컬럼명이 curr 또는 current 인 경우)
-                current = safe_float(row.get('curr', row.get('current', 0)))
-                
                 alarm = row.get('alarm_msg', '').strip()
                 
                 if load > max_load:

@@ -5,7 +5,6 @@ import pandas as pd
 from DB.database import SessionLocal, engine
 from DB.models import Tool
 from sqlalchemy import text
-import time
 from vault_manager import get_vault_path
 
 # 공구 마스터 원본 엑셀 보관 위치: archive_vault/tool_master/tool_info.xlsx

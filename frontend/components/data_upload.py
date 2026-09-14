@@ -115,15 +115,18 @@ def render_data_upload():
         job_selected_ready = True
         st.info("DB의 고유 식별자 PK(job_id)와 일치하는 신규 가공 폴더가 자동으로 생성되어 아래 파일들이 등록됩니다.", icon=":material/lightbulb:")
     elif upload_target == "기존 Job에 데이터 추가":
-        job_query = f"""
+        # 프로젝트·부품 이름은 사용자가 직접 입력하는 값이라 SQL 에 그대로 끼워 넣지 않는다.
+        # 이름에 작은따옴표가 하나만 들어가도 쿼리가 깨지고, 의도적으로 조작할 여지도 생긴다.
+        job_query = """
             SELECT j.job_id, j.source_folder
             FROM job j
             LEFT JOIN workplan w ON j.workplan_id = w.workplan_id
             LEFT JOIN part p ON w.part_code = p.part_code
-            WHERE j.research_project = '{target_project_name}'
-              AND COALESCE(j.custom_part_name, p.part_name) = '{target_part_name}'
+            WHERE j.research_project = :project
+              AND COALESCE(j.custom_part_name, p.part_name) = :part
         """
-        job_df = load_data(job_query)
+        job_df = load_data(job_query, params={"project": target_project_name,
+                                              "part": target_part_name})
         if job_df.empty:
             st.warning("해당 Part에 등록된 DB Job 레코드가 없습니다. 먼저 '신규 Job 생성'으로 데이터를 추가하세요.")
         else:

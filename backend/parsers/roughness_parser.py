@@ -1,17 +1,14 @@
 import os
-import csv
 import pandas as pd
-from sqlalchemy import text
-from sqlalchemy.orm import Session
 import job_layout
-from DB.database import engine, SessionLocal
-from DB.models import SurfaceRoughness, Job, SurfaceRoughnessArchive, Inspection
+from DB.database import SessionLocal
+from DB.models import SurfaceRoughness, SurfaceRoughnessArchive, Inspection
 from vault_manager import save_to_vault
 
 from job_manager import get_or_create_job
 
 BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PROJECT_ROOT = os.path.dirname(BACKEND_DIR)
+from vault_manager import PROJECT_ROOT   # 경로 기준은 vault_manager 한 곳
 PROCESSED_DIR = os.path.join(PROJECT_ROOT, "processed_data")
 os.makedirs(PROCESSED_DIR, exist_ok=True)
 

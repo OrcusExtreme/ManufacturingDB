@@ -1,14 +1,20 @@
-# 공작기계지능화실험실 통합 제조 데이터베이스 시스템 (ManufacturingDB)
+<p align="center">
+  <img src="logo_card.png" width="140" alt="Orcus ManufacturingDB Logo" />
+</p>
 
-[![Python Version](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
-[![Database](https://img.shields.io/badge/MySQL-8.0%2B-orange.svg)](https://www.mysql.com/)
-[![ORM](https://img.shields.io/badge/SQLAlchemy-2.0%2B-red.svg)](https://www.sqlalchemy.org/)
-[![Frontend](https://img.shields.io/badge/Streamlit-1.61%2B-FF4B4B.svg)](https://streamlit.io/)
-[![Standard](https://img.shields.io/badge/Standard-ISO%2014649%20(STEP--NC)-green.svg)](https://www.iso.org/)
-[![Release](https://img.shields.io/badge/Release-V2.3.5-brightgreen.svg)](https://github.com/OrcusExtreme/ManufacturingDB)
+<h1 align="center">공작기계지능화실험실 통합 제조 데이터베이스 시스템 (ManufacturingDB)</h1>
+
+<p align="center">
+  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3.10%2B-blue.svg" alt="Python Version" /></a>
+  <a href="https://www.mysql.com/"><img src="https://img.shields.io/badge/MySQL-8.0%2B-orange.svg" alt="Database" /></a>
+  <a href="https://www.sqlalchemy.org/"><img src="https://img.shields.io/badge/SQLAlchemy-2.0%2B-red.svg" alt="ORM" /></a>
+  <a href="https://streamlit.io/"><img src="https://img.shields.io/badge/Streamlit-1.61%2B-FF4B4B.svg" alt="Frontend" /></a>
+  <a href="https://www.iso.org/"><img src="https://img.shields.io/badge/Standard-ISO%2014649%20(STEP--NC)-green.svg" alt="Standard" /></a>
+  <a href="https://github.com/OrcusExtreme/ManufacturingDB"><img src="https://img.shields.io/badge/Release-V3.0-brightgreen.svg" alt="Release" /></a>
+</p>
 
 공작기계지능화실험실(Machine Tool Intelligence Lab)의 **통합 스마트 제조 데이터베이스 및 실시간 분석 플랫폼**입니다.  
-공작기계(CNC)에서 생성되는 다양한 이기종 데이터(XML 메타데이터, NC 프로그램, 100kHz+ 고주파 NI TDMS 진동 센서, 1Hz CNC 상태 로그, 표면 조도 측정 CSV, 3D CAD 도면)를 **Watchdog 기반으로 자동 감시·수집·파싱**하여 **ISO 14649(STEP-NC) 표준 기반 RDBMS**에 정규화 적재하고, 연구원 및 관리자에게 고성능 웹 대시보드를 제공합니다.
+공작기계(CNC)에서 생성되는 다양한 이기종 데이터(XML 메타데이터, NC 프로그램, 고주파 NI TDMS 센서(실측 12.8kHz · 스핀들 전류/진동/음향), 1Hz CNC 상태 로그, 표면 조도 측정 CSV, 3D CAD 도면)를 **Watchdog 기반으로 자동 감시·수집·파싱**하여 **ISO 14649(STEP-NC) 표준 기반 RDBMS**에 정규화 적재하고, 연구원 및 관리자에게 고성능 웹 대시보드를 제공합니다.
 
 ---
 
@@ -21,16 +27,24 @@
 
 ### 2. 하이브리드 4계층 스토리지 & 재난 복구(DR) 체계
 - **MySQL RDBMS**: B-Tree 인덱스 기반의 초고속 조건 필터링, 정렬, 다차원 조인 및 통계 쿼리
-- **Apache Parquet**: 100kHz+ 초고주파 센서 시계열 및 마이크로미터($\mu m$) 단면 조도 곡선을 Snappy 컬럼형 압축 포맷으로 초고속 렌더링
+- **Apache Parquet**: 수백만 행 고주파 센서 시계열(12.8kHz)과 마이크로미터($\mu m$) 단면 조도 곡선을 Snappy 컬럼형 압축 포맷으로 초고속 렌더링
 - **File Vault**: SHA 해시 기반의 불변 원본 파일 안전 보관 디렉터리
 - **LONGBLOB 백업 미러링**: MySQL 덤프 파일 단독으로도 `recovery_engine.py`를 통해 모든 원본 파일과 디렉터리 트리를 100% 원복 가능
 
 ### 3. 무중단 실시간 자동 파이프라인 (Automated Pipeline)
 - `machining_raw_data/` 모니터링 디렉터리에 폴더째 파일 투입 시 자동 감지(Watchdog)
-- 파일 전송 완료(Lock 해제) 감지 후 확장자별 병렬 파서 자동 구동 (`xml`, `tdms`, `nc`, `log`, `csv`, `step`/`stl`)
+- 파일 전송 완료(Lock 해제) 감지 후 자료 종류별 파서 자동 구동 (`xml`, `tdms`, `nc`, `log`, `csv`, `step`/`stl`)
+- **Job 폴더 자동 정리**: 파일이 Job 폴더에 섞여 들어와도 확장자를 보고
+  `XML/` · `Log/` · `TDMS/` · `NC/` 하위 폴더로 옮긴 뒤 처리 (규칙은 `backend/job_layout.py` 단일 출처)
 - 비동기 백그라운드 데몬(`tdms_visualizer.py`)을 통한 시간 도메인 & FFT 주파수 스펙트럼 Parquet 자동 생성
 
-### 4. 단일 통합 Streamlit 웹 대시보드 (Port 8501)
+### 4. 제조 DB Controller (C++ 네이티브 GUI)
+`system_controller.exe` 하나로 Streamlit UI · Watchdog 수집기 · TDMS 변환기를 개별 제어하고,
+세 프로세스의 로그를 한 창에서 실시간으로 봅니다. 파서 6종과 파이프라인 일시정지를 **재시작 없이** 토글할 수
+있으며(`backend/pipeline_config.json` 공유), Job Object 로 묶어 제어기가 비정상 종료해도 자식 프로세스가
+남지 않습니다. 파이썬 코드를 품지 않고 디스크의 `.py` 를 그대로 실행하므로 **파이썬을 고쳐도 재빌드가 필요 없습니다.**
+
+### 5. 단일 통합 Streamlit 웹 대시보드 (Port 8501)
 Job 검색부터 ISO 14649 트리뷰, 센서/조도 분석(Plotly Envelope & FFT), 메타데이터·환경·품질 수정, 데이터 삽입,
 DB 테이블 조회/편집, 재난 복구(ZIP)까지 하나의 화면 흐름에서 처리합니다. 별도의 관리자/사용자 계정 구분 없이
 모든 기능에 접근할 수 있으며, Job 삭제나 DB 테이블 직접 편집처럼 파괴적인 작업에는 확인 절차(삭제 확인
@@ -41,11 +55,17 @@ DB 테이블 조회/편집, 재난 복구(ZIP)까지 하나의 화면 흐름에�
 ## 🏗️ 시스템 아키텍처 (System Architecture)
 
 ```text
+[제조 DB Controller (system_controller.exe)]
+       │  세 프로세스를 켜고 끄고, 로그를 모아 보여주고, 파서를 토글한다
+       │  ├─ pipeline_config.json ─▶ 파서 6종 On/Off · 파이프라인 일시정지
+       │  └─ Job Object 로 묶어 비정상 종료 시 자식까지 회수
+       ▼
 [Raw Data / Network Drive]
        │ (File Drop: XML, NC, TDMS, LOG, CAD, CSV)
        ▼
 [Watchdog Observer (data_insert_recognization.py)]
        │ (Queue & Stability Check: 파일 접근 권한 및 무변동 검사)
+       │ (Job 폴더에 섞여 들어온 파일은 job_layout 규칙에 따라 하위 폴더로 자동 정리)
        ▼
 [Parsing Engine (parsers/)]
   ├─ xml_parser.py       : 메타데이터 추출, Part/Workplan/Job 구조 매핑, 공구 런타임 상태 추출 (공구 마스터는 읽기 전용)
@@ -111,6 +131,15 @@ ManufacturingDB/
 │           ├── Surface_Roughness/    # 조도 측정 결과
 │           ├── etc/                  # 참고용 기타 파일
 │           └── processed_parquet/    # 변환 산출물 (시스템 생성)
+├── system_controller.exe             # 제조 DB Controller (모듈/파서 제어 + 실시간 로그)
+├── compile_controller.bat            # 컨트롤러 빌드 (g++ + windres)
+├── run_controller.bat                # 컨트롤러 원클릭 실행 (없으면 자동 빌드)
+├── logo_card.png / logo.png / logo.ico  # 브랜드 로고 (컨트롤러 헤더 · 대시보드 · 앱 아이콘)
+├── src/                              # 컨트롤러 C++ 소스
+│   ├── system_controller.cpp         # Win32 오너드로우 UI + 프로세스 감독
+│   ├── theme.h                       # 대시보드와 맞춘 팔레트 및 그리기 도우미
+│   ├── app_config.h                  # 설정 JSON 읽기/쓰기 + 파이썬 인터프리터 탐색
+│   └── system_controller.rc          # 실행 파일 아이콘 및 버전 정보
 ├── archive_vault/                    # SHA 해시 기반 원본 파일 안전 보관소
 ├── processed_data/                   # 변환된 시계열 및 FFT Parquet 저장소
 ├── failed_data/                      # 파싱 실패 격리 보관소 (DLQ)
@@ -168,6 +197,9 @@ ManufacturingDB/
 ### 1. 사전 요구사항 (Prerequisites)
 - **Python**: 3.10 이상
 - **MySQL**: 8.0 이상 (인스턴스 구동 필요)
+- **OS**: Windows 10/11 — 제조 DB Controller 가 Win32 API 를 직접 사용합니다.
+  다른 OS 에서는 CLI 실행(`run_system.py`)을 쓰세요
+- **g++ (MinGW-w64 / w64devkit)**: 컨트롤러를 **수정해 다시 빌드할 때만** 필요합니다
 
 ### 2. 저장소 복제 (Clone Repository)
 ```bash
@@ -186,7 +218,35 @@ DB_NAME=orcus
 PYTHONPATH=backend
 ```
 
-### 4. 원클릭 시스템 실행 (Run System)
+### 4. 시스템 실행 (Run System)
+
+#### 방법 1: 제조 DB Controller (권장 - 실시간 로그 모니터 & 모듈/파서 토글 지원)
+C++ Win32 네이티브 컨트롤러로 Streamlit UI, Watchdog 파일 감시, TDMS 변환기를 개별 제어하고,
+실시간 로그 스트리밍과 파서별 On/Off 토글을 수행합니다. Google Cloud 콘솔풍의 밝은 화면을
+오너드로우로 직접 그렸고, 강조색은 대시보드와 같은 `#1A73E8` 입니다.
+```bash
+system_controller.exe          # 실행 파일 직접 실행
+run_controller.bat             # 없으면 자동 빌드 후 실행
+```
+
+**동작 방식** — 컨트롤러는 파이썬 코드를 품고 있지 않고 디스크의 `.py` 를 그대로 실행하는 감독자입니다.
+따라서 `backend/`, `frontend/` 를 수정하면 **컨트롤러를 다시 빌드하지 않아도** 다음 실행부터 반영됩니다.
+
+**파이썬 인터프리터 탐색 순서** (`src/app_config.h`)
+1. `runtime\python.exe` — 프로젝트에 동봉한 임베디드 런타임 (파이썬 미설치 PC 대응)
+2. `py -3` → 실제 `sys.executable` 경로를 조회해 사용
+3. PATH 의 `python` → 마찬가지로 실제 경로를 조회해 사용
+
+> PATH 의 `python.exe` / `py.exe` 는 Microsoft Store 파이썬에서 0바이트 **앱 실행 별칭**인 경우가 많고,
+> 표준 출력을 파이프로 받는 실행에서는 `ERROR_CANT_ACCESS_FILE(1920)` 로 실패합니다.
+> 그래서 별칭을 한 번 실행해 실제 exe 경로를 받아낸 뒤, 이후에는 그 절대 경로만 씁니다.
+
+**컨트롤러 빌드** (수정했을 때만 필요, MinGW-w64 / w64devkit 의 g++ 사용)
+```bash
+compile_controller.bat
+```
+
+#### 방법 2: CLI 터미널 일괄 실행
 `run_system.py`를 실행하면 필수 패키지 설치 확인, DB 스키마 자동 초기화, 파이프라인 및 통합 대시보드가 서브프로세스로 동시 기동됩니다.
 ```bash
 python run_system.py
@@ -194,6 +254,7 @@ python run_system.py
 
 ### 5. 서비스 접속
 - **통합 대시보드**: [http://localhost:8501](http://localhost:8501)
+- **컨트롤러 모니터**: `system_controller.exe` 창에서 Watchdog 및 대시보드 실시간 로그 확인 가능
 
 ---
 
@@ -202,30 +263,37 @@ python run_system.py
 로그인·역할 구분 없이 하나의 화면에서 모든 기능에 접근합니다. Job 삭제, DB 테이블 직접 편집처럼 되돌릴 수
 없는 작업에는 확인 다이얼로그 또는 Root 계정 재인증이 남아 있습니다.
 
-1. **Job 워크스페이스**: 연구 프로젝트명·Part명·가공차수·실험일자 범위 기반 5단계 동적 필터로 Job을 검색한
-   뒤, 하나의 화면에서 탭으로 전환하며 처리합니다.
-   - `분석 보기`: CNC 1Hz 통계(`cls`, `crpm`, `cfr`), 고주파 TDMS 센서 Line 차트, DAQ 진동 Envelope 밴드 차트,
-     FFT PSD 로그 스펙트럼, 마이크로미터 표면조도 단면 곡선 시각화
+1. **홈**: 로고 헤더와 Quick Access 카드 8개. 자주 쓰는 화면으로 한 번에 이동합니다
+2. **Job 워크스페이스**: 연구 프로젝트명·Part명·가공차수·실험일자·장비 기반 5단계 캐스케이딩 필터로 Job을
+   검색한 뒤, 하나의 화면에서 탭으로 전환하며 처리합니다. 가공시간·조도 Ra·평균 RPM 범위로도 좁힐 수 있습니다.
+   - `분석 보기`: Job 정보/품질/조도통계/CNC로그/환경 카드 + CNC·DAQ·FFT 탭 차트, CNC 로그 추이,
+     마이크로미터 표면조도 단면 곡선. TDMS 카드 상단에 가공 구간 판별 근거를 한 줄로 표시합니다
    - `메타데이터 · 환경 · 품질 수정`(편집 모드): Job 메타데이터, 온습도/작업자/칩형태 환경메모,
      치수공차/형상/PASS·FAIL 품질점검 통합 편집
    - 하단 `영구 삭제`: 원자적 연쇄 삭제(`CASCADE`) 확인 모달 지원
    - 원본 파일 다운로드는 `데이터 다운로드` 메뉴로 일원화되어 있습니다
-2. **계층형 마스터 데이터**: ISO 14649 공정 트리(Part ➔ Workplan ➔ Workingstep ➔ Tool) 및 CAD 모델 조회
-3. **공구 마스터**: 엑셀(`.xlsx`) 업로드로 공구 마스터 전체 교체(기존 데이터 삭제 후 엑셀 내용만 등록,
+3. **계층형 마스터 데이터**: ISO 14649 공정 트리(Part ➔ Workplan ➔ Workingstep ➔ Tool) 조회.
+   Workingstep 표에 NC에서 파싱한 `주축회전수 (RPM)`·`이송속도 (mm/min)`가 함께 나오며,
+   단위는 열 이름에만 표기하고 칸에는 숫자만 둡니다. Part별 3D CAD 모델 뷰어(Z-up, 축 gizmo) 제공
+4. **공구 마스터**: 엑셀(`.xlsx`) 업로드로 공구 마스터 전체 교체(기존 데이터 삭제 후 엑셀 내용만 등록,
    `T1`~`T99` 형식 코드만 적재, 가공 이력의 공구 연결은 공구 코드 기준으로 자동 재연결) 및 전체 공구 목록 조회.
+   유효 공구가 0건이면 교체를 취소해 잘못된 파일로 마스터가 비워지는 사고를 막습니다.
    업로드한 원본은 `archive_vault/tool_master/tool_info.xlsx`로 보관되며 화면에서 바로 내려받을 수 있습니다
-4. **데이터 삽입**: CAD 도면(`.stl`/`.stp`/`.step`), XML, NC, TDMS, Log, 조도 CSV 웹 수동 업로드.
-   사이드바의 `DB 스키마 구조` 바로 아래에 배치되어 가장 먼저 접근됩니다
-5. **DB 테이블**: 인터랙티브 ERD에서 테이블을 선택해 실시간 조회·검색, 속성별 정렬(오름/내림차순)과 속성 ▸
+5. **데이터 삽입**: CAD 도면(`.stl`/`.stp`/`.step`), XML, NC, TDMS, Log, 조도 CSV 웹 수동 업로드.
+   업로드한 파일은 처음부터 자료 종류별 하위 폴더에 저장됩니다
+6. **DB 테이블**: 인터랙티브 ERD에서 테이블을 선택해 실시간 조회·검색, 속성별 정렬(오름/내림차순)과 속성 ▸
    비교 조건 ▸ 값 드롭다운 필터링, CSV 내보내기 지원. 표를 직접 편집한 뒤 저장하면 Root 인증을 거쳐 반영
-6. **데이터 다운로드**: 프로젝트 ▸ Part ▸ Job 순으로 좁혀가며 선택 범위를 ZIP으로 내려받습니다. 가공
-   이력(Job)까지 선택하면 그 Job에 **실제로 존재하는 데이터 유형만** 버튼으로 나타나고(파일 개수 표시),
-   버튼 클릭 시 해당 유형만 즉시 내려받거나 개별 파일 단위로 받을 수 있습니다. 원본 폴더가 삭제된 Job은
-   Vault/DB 아카이브에서 자동 조달되며, 필요하면 로컬 디스크로 원본 복원도 가능합니다
-7. **시스템 백업/복구**: Vault/DB에서 원본 파일들을 역추적하여 폴더 구조 그대로 압축(ZIP) 다운로드
+7. **데이터 다운로드**: 프로젝트 ▸ Part ▸ Job 순으로 좁혀가며 선택 범위를 ZIP으로 내려받습니다.
+   - **부품까지 선택**하면 `CAD 파일` 버튼이 나타납니다. 도면은 가공차수가 아니라 부품에 딸린 자료라
+     따로 받으며, 원본 폴더 ▸ Vault ▸ DB BLOB 순으로 조달합니다
+   - **Job까지 선택**하면 그 Job에 **실제로 존재하는 데이터 유형만** 버튼으로 나타나고(파일 개수 표시),
+     유형별로 즉시 받거나 개별 파일 단위로 받을 수 있습니다
+   - 원본 폴더가 삭제된 Job은 Vault/DB 아카이브에서 자동 조달되며, 로컬 디스크로 원본 복원도 가능합니다
+8. **시스템 백업/복구**: Vault/DB에서 원본 파일들을 역추적하여 폴더 구조 그대로 압축(ZIP) 다운로드.
+   단일 Job 복원과 **같은 코드**를 쓰므로 XML·NC·TDMS·로그·조도·etc·CAD·Parquet이 모두 포함됩니다
 
-사이드바는 `DB 관계도(ERD) 보기` 버튼(전체 테이블 관계도 팝업) 아래에 데이터 입출력 메뉴(`데이터 삽입`,
-`데이터 다운로드`)를 두고, 구분선 아래에 나머지 조회·관리 메뉴를 배치합니다.
+사이드바는 로고와 `DB 관계도(ERD) 보기` 버튼(전체 테이블 관계도 팝업) 아래에 데이터 입출력 메뉴
+(`데이터 삽입`, `데이터 다운로드`)를 두고, 구분선 아래에 나머지 조회·관리 메뉴를 배치합니다.
 
 ### 🔒 원본 복원 검증은 백그라운드에서만 수행됩니다
 
@@ -244,169 +312,64 @@ XML/NC/CAD 원본이 저장 시점과 바이트 단위로 동일한지에 대한
 
 ## 🚀 릴리즈 노트 (Release Notes)
 
+각 버전의 핵심만 적습니다. 세부 동작과 판단 근거는 [`gemini.md`](gemini.md)를 참고하세요.
+
+### [V3.0] - 2026-09-14
+- **제조 DB 전용 브랜드 로고 & 멀티 포맷 에셋 체계 구축**:
+  - 절삭 가공 엔드밀 공구, 클라우드 회로 루프 및 황금빛 스파크를 형상화한 전용 브랜드 심볼 디자인
+  - 사각형 내부 엠블럼 형태만 추출한 고해상도 JPG (`frontend/assets/logo.jpg`, `logo.jpg`)
+  - 256×256 규격을 최우선 프레임으로 내장한 멀티 해상도 파비콘 ICO (`logo.ico`, `frontend/assets/logo.ico`)
+  - 다크모드 가시성 강화를 위한 소프트 화이트 컨투어 투명 PNG (`frontend/assets/logo.png`, `logo.png`)
+  - 모던 앱 아이콘 스타일의 둥근 모서리 화이트 박스 카드 로고 (`frontend/assets/logo_card.png`, `logo_card.png`)
+- **Streamlit 웹 대시보드 UI 홈 화면 개편 & 브랜드 통합**:
+  - 홈 화면(Home)에 네이티브 컨테이너(`st.container(border=True)`) 기반 **Quick Access 8개 카드 그리드** 신설
+  - 좌측 사이드바 상단 브랜드 영역에 라운드 박스 로고 카드를 텍스트 상단에 수직 배치
+  - 브라우저 탭 아이콘(파비콘)에 256×256 고해상도 `logo.ico` 연동
+- **제조 DB Controller (`system_controller.exe`) GUI 고도화**:
+  - 256×256 고해상도 앱 아이콘 PE 임베딩 (`src/system_controller.rc`, `src/system_controller.cpp`)
+  - 윈도우 타이틀바, 작업표시줄 및 Alt+Tab 쉘 아이콘 일체화 적용
+
 ### [V2.3.5] - 2026-09-14
-- **Workingstep 가공 조건 (Feed Rate & Spindle Speed) NC 자동 파싱 및 DB 연동**:
-  - **스키마 확장**: `workingstep` 테이블에 `feed_rate` (Float, mm/min, 가공 이송속도) 및 `spindle_speed` (Float, RPM, 주축 회전수) 컬럼 추가 (`backend/DB/models.py`).
-  - **NC 절삭 조건 파서 엔진 탑재** (`backend/parsers/nc_parser.py`):
-    - `parse_nc_cutting_conditions(nc_input)` 신설: 공구 호출(`M6`/`T`), 주축 회전수(`S`), 선형/원호 절삭 이송속도(`F`) 블록을 정규식 및 토큰 분석기로 정밀 파싱. 공백 생략 컴팩트 코드(`S3800M3`, `G1Z-2F710`, `M6T6`), 표준 공백 분리형, 블록 번호(`Nxx`), 소수점 표기(`F710.0`) 등 다양한 NC 코드 스타일을 100% 포괄.
-    - `sync_workplan_nc_cutting_conditions()` 구현: Workplan 하위 Workingstep의 공구 번호/순서와 매핑하여 DB 레코드에 절삭 조건 자동 동기화 (UPDATE/INSERT).
-  - **수집 파이프라인 연계 및 안전성 개선** (`backend/parsers/xml_parser.py`):
-    - XML 수집 시 연관 NC 파일이 존재하면 즉시 F/S 절삭 조건 연동 파싱.
-    - 파일 투입 순서 차이로 NC 파일 미도착 시 발생할 수 있던 `nc_binary_data` UnboundLocalError를 방지하도록 기본 바인딩(`nc_binary_data = None`) 사전 정의.
-  - **소급 동기화 백필 도구 신설** (`backend/backfill_workingstep_conditions.py`): 기등록된 Workplan들의 NC 파일을 재탐색하여 누락된 절삭 가공 조건을 일괄 보정하는 CLI 스크립트 제공.
-  - **검증 체계 구축**: `backend/tests/test_nc_parser.py` (단위 테스트 4종 전원 통과) 및 `backend/tests/verify_e2e_cutting_conditions.py` (실제 `O0911.nc` 실가공 원본 파일 기반 E2E 파싱 및 DB 적재 검증 통과 - F: 710 mm/min, S: 3800 RPM).
-- **계층형 마스터 데이터 UI 가공조건 시각화** (`frontend/components/master_tree.py`):
-  - **Workingsteps 테이블 컬럼 확장**: `주축회전수 (RPM)` 및 `이송속도 (mm/min)` 컬럼 추가 및 결측치 예외 처리(`-`).
-  - **순서별 가공 조건 요약 뱃지(Chips)**: 상단에 공구 호출 단계별 적용 공구 및 가공 조건을 직관적인 칩 형태로 시각화 (`Step 1 (T6): ⚡ 3,800 RPM | ⏩ 710 mm/min`)하여 한눈에 절삭 조건 파악 가능.
-- **무중단 스키마 자동 보정(`schema_patch.py`) 강화**:
-  - `part.part_name`, `workplan.nc_hash`, `job_file_archive.xml_file_sha256`, `cad_file_archive.file_sha256`, `workingstep.feed_rate`, `workingstep.spindle_speed` 등 누락되기 쉬운 컬럼을 `PENDING_COLUMNS`에 전면 등록.
-  - 시스템 기동 시 누락 컬럼 자동 추가 및 `part.part_name` NULL 값 자동 채움(`UPDATE part SET part_name = part_code WHERE part_name IS NULL`)을 무중단 지원.
-- **더미 데이터 및 고아 Workplan 자동 청소 고도화** (`backend/clean_dummy_data.py`):
-  - `workplan_id`의 `INT AUTO_INCREMENT` 정수 키 전환에 맞춰 dummy workplan 쿼리 로직을 `program_code.like("UNKNOWN_WORKPLAN_%")` 및 `program_code == "Unknown"`으로 고도화.
-  - 파일 유입 타이밍 차이로 발생할 수 있는 참조 없는 고아 Workplan을 안전하게 자동 정리.
-- **백그라운드 파이프라인 프로세스 생존 감시 및 복원력 강화** (`run_system.py`):
-  - `run_system.py` 메인 루프에서 백엔드 파이프라인(Watchdog), Streamlit 대시보드(8501), TDMS 변환기의 프로세스 상태(`p.poll()`)를 실시간 주기 감시하고 비정상 종료 시 경고 로그 출력.
-  - 예외 발생 시 상세 `traceback` 포맷팅 로깅 제공.
-- **데이터베이스 & 파일 스토리지 완전 초기화(Reset) 도구 제공** (`backend/reset_database_and_storage.py`):
-  - Windows 환경 파일/폴더의 읽기 전용 속성 해제 및 재시도 핸들러(`_remove_readonly`) 구현.
-  - MySQL 외래키 제약조건(`SET FOREIGN_KEY_CHECKS = 0`)을 고려하여 기존 16개 테이블 일괄 안전 삭제 및 최신 `models.py` 기반 14개 테이블 원클릭 클린 재생성(`Base.metadata.create_all`).
-  - `machining_raw_data/`, `archive_vault/`, `processed_data/`, `failed_data/`의 루트 및 기본 디렉터리 구조를 보존하면서 내부 잔여 파일 완전 초기화 지원.
+- **Workingstep 절삭조건 자동 파싱**: NC 코드에서 공구별 `Feed Rate`/`Spindle Speed`를 추출해
+  `workingstep`에 반영. 컴팩트 표기(`S3800M3`, `G1Z-2F710`)와 공백 분리형을 모두 지원
+- **Job 폴더 구조 개편**: 원본을 `XML/`·`Log/`·`TDMS/`·`NC/` 하위 폴더로 분리.
+  규칙은 `backend/job_layout.py` 단일 출처이며, Job 루트에 떨어진 파일은 자동으로 옮겨 처리
+- **제조 DB Controller 신설**: C++ Win32 네이티브 GUI로 모듈 제어·실시간 로그·파서 토글 제공.
+  Google Cloud 콘솔풍 라이트 테마, 브랜드 로고, 파이썬 인터프리터 자동 탐색(동봉 런타임 지원)
+- **전체 복구 ZIP 누락 수정**: 전체 복구가 단일 Job 복원과 다른 코드를 써서 TDMS·Parquet·etc·CAD가
+  빠져 있던 문제를 공용 함수로 통합해 해결. 복원이 멱등해져 반복 실행해도 파일이 중복되지 않음
+- **데이터 정합성 보강**: Workingstep 중복 생성(세션 flush 누락), CNC 로그가 아닌 `.log`가 통계를
+  0으로 덮어쓰던 문제, 해시 미확보로 생기던 고아 Workplan, 사용자 입력의 SQL 직접 보간 수정
+- **정리**: 중복·미사용 모듈(`reset_db.py`, `restore_utility.py`) 삭제, 경로 기준을
+  `vault_manager.PROJECT_ROOT` 단일 출처로 통합
 
 ### [V2.3.4] - 2026-09-11
-- **NC 코드 대조 기반 실가공 구간 자동 판별** (`backend/tdms_alignment.py` 신규): TDMS는 가공 한 건이 아니라
-  장비 모니터링이 켜져 있던 구간 전체(예: 12분)를 담고 있고, 파일명의 프로그램명이 실제 가공한 NC와 다를 수도
-  있다. 업로드된 NC 원본을 `CNC-CurrentBlock`과 대조해 프로그램이 순서대로 진행된 구간(run)을 찾고, 한 파일에
-  중단된 시도와 완주한 시도가 같이 들어있을 때는 **실행된 블록 종류 수(커버리지)** 로 점수를 매겨 완주한 쪽을
-  고른다. 같은 블록이 프로그램에 여러 번 나오면(`G1Y-15` 2회 등) 진행 위치를 단조 증가로 매핑해 한 번의 실행이
-  여러 개로 쪼개지지 않게 한다. 고른 구간 앞뒤에 붙은 대기 시간은 스핀들/이송 상태와 블록 전환 간격으로 잘라냄
-- **CNC ↔ DAQ 공통 시간축**: 27Hz 폴링 CNC(수천 행)와 12.8kHz DAQ(수백만 행)를 각자의 행 번호로 그리던 것을,
-  가공 시작을 0초로 하는 경과시간 열(`time_s` / `daq_time_s`)로 통일. DAQ 구간은 비율 스케일이 아니라 파형
-  속성(`wf_start_time` + `wf_start_offset` + `wf_increment`)으로 절대 시각을 복원해 잘라내고, 파형 속성이 없는
-  장비 데이터만 "두 그룹의 전체 기록 구간이 같다"는 가정으로 비율 환산(fallback)
-- **DAQ 시계 지연 자동 실측/보정**: CNC와 DAQ는 수집 경로가 달라 선언된 시작 시각이 같아도 실제로는 몇 초씩
-  어긋나 있다. 같은 물리량을 보는 두 채널(`CNC-Z-SpindleLoad` ↔ DAQ 스핀들 3상 전류)의 정규화 상호상관으로
-  지연을 측정해 보정(실측 데이터에서 상관 0.963, 지연 0일 때 −0.141 → +3.05초 보정). 상관이 충분하지 않으면
-  보정하지 않고 진단값만 남김
-- **판별 근거 저장 및 표시**: `job.machining_window`(JSON) + `processed_data/job_{id}_window.json` 사이드카에
-  구간·판별 방법·NC 커버리지·DAQ 보정값·판단 메모를 기록하고, Job 워크스페이스 TDMS 그래프 카드 상단에 요약 표시
-- **손상된 TDMS 내성**: 수집 프로그램이 비정상 종료되면 파일 끝과 `*.tdms_index`에 0으로 채워진 조각이 남아
-  nptdms가 `ValueError`로 실패한다(실측 파일에서 발생). 세그먼트 lead-in을 따라가 유효 지점까지만 읽도록 우회해
-  기존에 변환 자체가 실패하던 TDMS도 처리
-- **XML/TDMS 시간대 자동 정렬**: XML `StartTime`은 로컬시간(+09:00), TDMS 파형 시각은 UTC라 그대로 비교하면
-  9시간 어긋난다. 정수 시간 단위로 기준을 맞춘 뒤 힌트로 사용하고, 보정해도 겹치지 않으면(다른 세션의 XML 등)
-  힌트를 버림
-- **변환 배치 안정화**: `run_visualizer_batch()`의 `get_abs_raw_data_path` 미import(NameError로 배치 전체가
-  5초마다 실패)를 수정하고, NC 참조 없이 만든 구간만 NC 확보 시 1회 재판별하도록 조건을 좁혀 무한 재처리를 차단.
-  변환 실패 Job은 1분 → 최대 30분으로 재시도 간격을 늘려 로그 폭주 방지
-- **단독 CLI 및 회귀 테스트**: DB 없이 `python backend/tdms_alignment.py --tdms <f> --nc <f> [--xml <f>] --out <dir>`
-  로 판별 결과와 Parquet을 바로 확인 가능. `backend/tests/test_tdms_alignment.py`가 합성 TDMS로 구간 판별,
-  중복 블록 매핑, 시계 지연 복원, 비율 스케일 fallback, NC/DAQ 부재, 손상 꼬리, 시간대 정렬을 검증(31개 검사)
-- **표면조도 평가곡선 인식을 파일명 → 내용 기반으로 변경** (`backend/parsers/roughness_parser.py`): 기존에는
-  `*평가곡선*.CSV` 패턴에 걸리는 파일만 읽어, 측정 담당자·장비 설정에 따라 이름이 달라진 파일
-  (예: `260911_1.CSV`)은 업로드해도 조도 값이 하나도 들어오지 않았다. 이제 헤더의 `DATANUM:` +
-  `DATAAXIS:`/`XPITCH:`/`PROFILENO:` 표식으로 평가곡선 파일을 판별하므로 이름과 무관하게 적재된다.
-  찾은 파일 목록(또는 찾지 못했다는 사실)을 로그로 남겨 원인 파악이 가능하도록 함
-- **3D 형상 뷰어 좌표계를 CAD 표준(Z-up)으로 정렬** (`frontend/cad_viewer_component.py`): 바닥 그리드를
-  XZ 평면에서 **XY 평면**으로 바꾸고 카메라 up 벡터를 Z축으로 고정(OrbitControls 생성 전에 적용).
-  등각/상면/정면/측면 시점 프리셋도 Z-up 기준으로 재정의하고, 그리드는 모델 크기에 맞춰 한 칸 간격을
-  1/2/5×10ⁿ로 정규화해 모델 최하단 Z에 배치. 화면 좌측 하단에 카메라 방향을 따라 도는 **X(적)/Y(녹)/Z(청)
-  축 gizmo**를 별도 뷰포트로 겹쳐 그려, 확대하거나 모델이 화면 밖으로 나가도 방향을 확인할 수 있게 함
+- NC 코드와 `CNC-CurrentBlock`을 대조해 **실가공 구간만 자동 판별** (`backend/tdms_alignment.py` 신규)
+- CNC(27Hz)와 DAQ(12.8kHz)를 **공통 경과시간 축**으로 통일하고, 상호상관으로 시계 지연 실측·보정
+- 손상된 TDMS(비정상 종료로 꼬리가 깨진 파일)도 유효 지점까지만 읽어 처리
+- 표면조도 평가곡선 인식을 파일명 → **내용 기반**으로 변경해 이름이 달라도 적재
+- 3D 형상 뷰어를 CAD 표준 **Z-up**으로 정렬하고 축 gizmo 추가
 
 ### [V2.3.3] - 2026-09-10
-- **공구 마스터의 단일 출처를 엑셀로 고정**: `tool` 테이블을 생성·수정·삭제할 수 있는 경로를 공구 마스터 엑셀
-  업로드(`backend/tool_inserter.py`)로 한정. `xml_parser.py`는 `Tool` 모델 import 자체를 제거해 공구 행을
-  만들 수단이 없도록 하고, Workingstep에 붙일 `tool_id` 조회만 읽기 전용 SELECT로 수행. 엑셀에 없는 공구
-  번호가 XML에 나오면 마스터에 추가하지 않고 `tool_number`/`xml_tool_code`만 남긴 뒤, 이후 그 공구가 엑셀에
-  들어오면 자동으로 다시 연결
-- **엑셀 업로드 방식을 업서트 → 전체 교체로 변경**: 기존 공구 마스터를 모두 삭제하고 업로드된 엑셀 내용만 등록.
-  전체 교체로 `tool_id`가 새로 부여되므로 `relink_workingsteps()`가 `xml_tool_code`(없으면 `T{tool_number}`)
-  기준으로 가공 이력의 공구 연결을 다시 맺음. 이번 엑셀에 없는 공구를 호출한 Workingstep은 `tool_id`만 비워지고
-  호출 번호는 보존. 같은 코드가 여러 행에 나오면 마지막 행 기준으로 병합
-- **잘못된 파일로 마스터가 비워지는 사고 방지**: 열 이름 불일치·파일 손상 등으로 유효 공구가 0건이면 교체를
-  취소하고 기존 마스터를 그대로 유지(UI에서도 교체 전 경고 + 동의 체크박스 통과 필요)
-- **공구 코드 형식 검증** (`^T\d{1,2}$`): `T1`~`T99` 형태만 DB에 적재하고 `t4`/`T 4`는 `T4`로 정규화.
-  `T19-TIP`·설명 문구·빈 값처럼 XML 런타임 공구 호출과 매핑할 수 없는 행은 제외 건수로 보고
-- **`tool.tool_code` NOT NULL 제약 추가**: 공구 번호 없는 유령 공구 행이 생기지 않도록 스키마 레벨에서 차단
-- **`tool_id` 번호 재정렬** (`resequence_tool_ids()`): 삽입/삭제 이력 때문에 4번부터 시작하거나 중간이 비던 번호를
-  1번부터 연속으로 재부여. `workingstep.tool_id` 참조를 같은 트랜잭션에서 함께 옮기고 `AUTO_INCREMENT`도 `N+1`로 정렬
-- **원본 엑셀 보관** (`archive_vault/tool_master/tool_info.xlsx`): 업로드/투입 파일명과 무관하게 고정 파일명으로
-  최신본 1개만 유지하며, 새로 올릴 때 이전 원본은 삭제. 공구 마스터 화면에서 보관 파일 크기·갱신 시각 확인 및
-  원본 내려받기 제공(자동 복구 대상이 아닌 단순 보관용)
+- 공구 마스터의 단일 출처를 **엑셀로 고정**. `xml_parser`는 공구 행을 만들 수 없도록 차단
+- 업로드 방식을 업서트 → **전체 교체**로 변경하고, 유효 공구 0건이면 취소해 사고 방지
+- 공구 코드 형식 검증(`^T\d{1,2}$`), `tool_id` 연속 재부여, 원본 엑셀 보관
 
 ### [V2.3.2] - 2026-09-09
-- **DB 키 정규화 (Schema Normalization)**: 사람이 읽는 이름을 PK로 쓰던 구조를 정리. `part.part_code`를
-  1부터 증가하는 숫자 PK로 바꾸고 이름은 `part_name` 속성으로 분리, `workplan.workplan_id`도 `"부품명_프로그램_해시"`
-  문자열(한글 포함) PK에서 숫자 PK로 전환하고 기존 조합은 `UNIQUE(part_code, program_code, nc_hash)` 제약으로
-  이관해 중복 차단 규칙 유지. `machine_log`는 가공 특성에 맞게 Job과 1:1(`job_id` 유일 제약)로 고정.
-  `tool`에서 미사용 컬럼(`is_mounted`, `photo_filename`, `photo_content`) 제거
-- **데이터 보존 마이그레이션 도구 신설** (`backend/migrate_keys_v3.py`): `--check` 상태 점검 / `--run` 적용.
-  자식 테이블(job, workingstep, 각종 아카이브) 참조를 새 키로 재작성하며, PK가 항상 첫 컬럼에 오도록 물리적
-  컬럼 순서까지 정리. 복제 DB 사전 검증 후 실 DB 적용
-- **Job 워크스페이스 화면 재구성**: 구글 클라우드 콘솔 방식의 3열 카드 그리드로 전환. 가로로 늘어놓던 지표를
-  '라벨 위 / 값 아래' 세로 목록으로 바꿔 값 잘림 제거, 같은 열의 카드는 위 카드가 짧으면 아래 카드가 올라붙고
-  열 끝단은 서로 맞춰지도록 구성. 파형 3종(TDMS · CNC 로그 · 조도 프로파일)은 `그래프` 패널로 묶어 동일 높이 배치
-- **Job 목록 표에서 행 클릭으로 상세 전환** 및 `모든 컬럼 보기` 토글 추가(기본은 핵심 8컬럼만 표시해 가로 스크롤 제거)
-- **Job 정보 항목 보강**: 그동안 조회되지 않았던 `end_time`(가공 종료), `cutting_moving_distance`(절삭 이동 거리),
-  부품 `material_code`(소재) 노출. CAD 모델이 등록된 부품은 `CAD 형상 보기` 버튼으로 3D 뷰어 팝업 제공
-- **DB 테이블 조회 시 PK 우선 표시**: 물리적 컬럼 순서와 무관하게 PK를 항상 첫 열에 배치(데이터·스키마 탭 공통)
-- **파일 선택창 형식 필터 이름 지정** (`frontend/components/native_picker.py`): Streamlit이 `accept`에 붙이는
-  가짜 MIME(`application/streamlit`) 때문에 Windows 파일 대화상자가 "사용자 지정 파일"로 표시되던 문제를,
-  File System Access API로 선택 단계만 가로채 `CAD File(.stl, .stp, .step)` 형태로 표시하도록 해결.
-  업로드/검증/저장은 기존 Streamlit 파이프라인이 그대로 처리하며 미지원 브라우저는 기본 동작으로 되돌아감
-- **UI 아이콘 통일**: 제목·버튼·탭·안내문의 이모지를 Streamlit 네이티브 Material 아이콘(`:material/...:`)으로 교체
-- **개발 편의**: `.streamlit/config.toml`에 `runOnSave = true` 추가(컴포넌트 수정이 재시작 없이 반영되지 않던 문제),
-  DB 백업 디렉터리(`backups/`) gitignore 처리, 문자열 PK 시절의 일회성 복구 스크립트 `backend/fix_db.py` 제거
+- **DB 키 정규화**: 사람이 읽는 이름을 PK로 쓰던 구조를 숫자 대리키로 전환.
+  `part_name` 분리, `UNIQUE(part_code, program_code, nc_hash)` 제약으로 중복 차단 규칙 이관
+- 데이터 보존 마이그레이션 도구 신설 (`backend/migrate_keys_v3.py`, `--check` / `--run`)
 
 ### [V2.3.1] - 2026-09-08
-- **원본 복원 검증 백그라운드 전환** (`backend/integrity_monitor.py`): UI에서 복원 검증 화면을 완전히 제거하고,
-  파이프라인이 기동 시 1회 + 30분 주기로 전체 아카이브(XML/NC/CAD)를 자동 재검증하여 결과를 로그로 남기도록 변경.
-  불일치 감지 시 기준/재계산 해시를 함께 경고 출력. 서브프로세스를 `-u`로 띄워 파이프라인 로그가 즉시 보이도록 수정
-- **사이드바 재구성**: `핵심 테이블 구조 안내` 안내문을 제거하고, `DB 관계도(ERD) 보기` 버튼 아래에
-  `데이터 삽입`·`데이터 다운로드`를 별도 그룹으로 배치한 뒤 구분선 아래에 나머지 내비게이션 메뉴 배치
-- **데이터 다운로드 내비게이션 신설** (`components/download_center.py`): 프로젝트 ▸ Part ▸ Job 순으로 범위를 좁혀
-  ZIP 일괄 다운로드. Job까지 선택하면 그 Job에 실제 존재하는 데이터 유형만 버튼(파일 개수 포함)으로 노출되어
-  유형별·개별 파일 단위 다운로드 가능. 원본 폴더 유실 시 Vault/DB 아카이브에서 자동 조달 및 로컬 복원 지원
-- **다운로드 경로 일원화**: Job 워크스페이스의 `다운로드` 탭을 제거하고 모든 원본 파일 다운로드를
-  `데이터 다운로드` 메뉴로 통합
-- **DB 테이블 정렬·조건 필터**: 속성별 오름/내림차순 정렬과 `속성 ▸ 비교 조건 ▸ 값` 드롭다운 필터(값 목록은
-  해당 컬럼의 실제 DISTINCT 값에서 제공, 직접 입력도 가능)를 SQL 레벨에서 적용
-- **사이드바 개편**: `DB 관계도(ERD) 보기` 팝업 버튼 추가, `데이터 삽입` 메뉴를 DB 스키마 구조 버튼 바로 아래로 이동
-- **업로드 형식 제한 명확화**: CAD는 `.stl`/`.stp`/`.step`, 공구 마스터 엑셀은 `.xlsx`만 허용
-- **공구 사진·실장착 표시 기능 제거**: 공구 마스터 화면에서 실물 사진 등록/조회 및 실제 장착 공구 표시 UI 삭제
+- 관리자/사용자 대시보드를 **단일 대시보드**로 통합 (Port 8501)
+- 백그라운드 무결성 검증 도입, 다운로드 센터 신설
 
-### [V2.2.0] - 2026-09-07
-- **원본 복원 검증 (Restore & Verify) 신설**: XML/NC/CAD LONGBLOB 저장 시점에 SHA-256을 함께 기록(`backend/integrity.py`)
-  하고, "원본 복원 검증" 화면에서 지금 DB에서 꺼낸 원본을 재계산해 비교. 결과는 항상 `✅ 일치 / ❌ 불일치 /
-  ⚪ 검증 불가` 3가지 상태로 노출되어 "검증 불가"가 실패로 오인되지 않도록 함
-- **공구 마스터 화면 신설**: 기존 백엔드 전용이던 `tool_inserter.py` 엑셀 업서트를 UI에서 직접 실행 가능하도록
-  연결. 공구별로 현재 실제 기계 장착 여부(`is_mounted`)와 실물 사진(`photo_content`)을 등록·조회 가능
-
-### [V2.1.0] - 2026-09-07
-- **관리자/사용자 대시보드 단일 통합 (Unified Dashboard)**: 별도 포트로 분리돼 있던 관리자 대시보드(8501)와
-  사용자 대시보드(8502)를 로그인·역할 구분 없는 하나의 대시보드(Port 8501)로 통합. "가공 검색"에 중복돼
-  있던 필터 로직을 `components/filters.py`로 추출하고, Job 검색·분석·수정·다운로드를 "Job 워크스페이스"
-  탭 하나로 합쳐 화면 이동 뎁스를 줄임. `frontend/components/` 아래로 화면별 렌더링 로직을 모듈화
-
-### [V2.0.4] - 2026-09-03
-- **프로젝트 디렉터리 클린업 (Directory Cleanup)**: 과거 파싱 작업에 사용되었던 1회성 추출 스크립트(`extract_xml.py` 등), 디버깅용 임시 스크립트, 실행 로그 파일(`st_err.log` 등), 사용하지 않는 찌꺼기 폴더(`TESTSET`, `temp_pyrefly` 등)를 일괄 삭제하여 프로젝트 루트 환경 최적화
-
-### [V2.0.3] - 2026-09-02
-- **관리자 DB 데이터 편집 모듈 탑재**: Admin Dashboard(Port 8501)에 "DB 테이블 관리" 메뉴를 신설하고, Root 계정 인증을 통해 PK/FK를 보호하며 나머지 데이터를 안전하게 편집(UPDATE/INSERT/DELETE)할 수 있는 모달형 실시간 에디터 추가
-- **파일 Vault 복구 엔진 안정화**: Vault 원본 아카이브와 `machining_raw_data` 간의 복구 매핑 경로를 절대경로에서 유연한 상대경로(Relative Path) 체계로 전면 리팩토링 및 데이터 무결성 검증 완료
-- **Job 선택 UI 직관성 개선**: User Dashboard(Port 8502)의 Job ID 선택 드롭다운에 "Job ID - Part 명 가공종류" 포맷(예: Job 2 - Computer 1차 가공)을 적용하여 사용자 편의성 극대화
-
-### [V2.0.2] - 2026-09-01
-- **포트 이원화 배포**: 관리자(8501), 사용자(8502) 대시보드 포트 분리 및 Python UI 안정화
-- **STP 시각화 모듈**: 관리자 대시보드 및 사용자 대시보드에서 STP 파일의 3D 모델을 시각화하는 기능 추가
-- **백그라운드 처리 최적화**: 파싱 및 데이터 삽입 과정의 백그라운드 데몬 및 프로세스 처리 개선
-
-### [V2.0.1] - 2026-08-31
-- **DB 스키마 명세 고도화**: ISO 14649 표준 준수 14개 테이블의 완벽한 컬럼 정의 및 제약조건/CASCADE 정책 문서화
-- **인코딩 & 서브프로세스 안정화**: Windows 환경 UTF-8 인코딩(`-X utf8`, `PYTHONUTF8=1`) 전면 적용
-- **에디터 편의성 개선**: 웹 코드 작성란 Tab 키 들여쓰기(4 spaces) 및 Shift+Tab 내어쓰기 지원
-- **데이터베이스 이중화 강화**: LONGBLOB 원본 미러링 및 재난 복구(DR) 엔진 안정화
+### [V2.0.x ~ V2.2.0] - 2026-08-31 ~ 09-07
+- ISO 14649 기반 스키마 확립, Watchdog 수집 파이프라인, Vault + LONGBLOB 이중화
+- TDMS Parquet 변환, 표면조도 파서, 3D CAD 뷰어, 재난 복구 ZIP
 
 ---
+
 
 ## 👥 기여 및 문의 (Contact)
 - **개발 및 관리**: 공작기계지능화실험실 (Machine Tool Intelligence Lab)

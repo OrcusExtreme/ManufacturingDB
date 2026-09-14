@@ -1,0 +1,9 @@
+{
+  "enable_xml": true,
+  "enable_nc": true,
+  "enable_tdms": true,
+  "enable_log": true,
+  "enable_roughness": true,
+  "enable_cad": true,
+  "paused": false
+}

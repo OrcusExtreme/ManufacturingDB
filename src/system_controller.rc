@@ -1,0 +1,34 @@
+// 실행 파일 자체의 아이콘(탐색기에서 보이는 아이콘)과 버전 정보.
+// 창/작업표시줄 아이콘은 실행 시 logo.ico 를 읽어 따로 지정한다(system_controller.cpp).
+#include <windows.h>
+
+// 리소스 ID 가 가장 낮은 아이콘이 탐색기 아이콘으로 쓰인다.
+1 ICON "..\\logo.ico"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION     3, 0, 0, 0
+PRODUCTVERSION  3, 0, 0, 0
+FILEFLAGSMASK   0x3fL
+FILEFLAGS       0x0L
+FILEOS          VOS_NT_WINDOWS32
+FILETYPE        VFT_APP
+FILESUBTYPE     VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "041204b0"
+        BEGIN
+            VALUE "CompanyName",      "Machine Tool Intelligence Lab"
+            VALUE "FileDescription",  "Manufacturing DB Controller"
+            VALUE "FileVersion",      "3.0.0.0"
+            VALUE "InternalName",     "system_controller"
+            VALUE "OriginalFilename", "system_controller.exe"
+            VALUE "ProductName",      "Manufacturing DB Controller"
+            VALUE "ProductVersion",   "3.0.0.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x412, 1200
+    END
+END

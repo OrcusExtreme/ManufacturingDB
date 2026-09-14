@@ -11,7 +11,7 @@ if backend_dir not in sys.path:
 
 from sqlalchemy import text
 from DB.database import SessionLocal
-from DB.models import Workplan, Workingstep, WorkplanFileArchive
+from DB.models import Workingstep
 from parsers.nc_parser import sync_workplan_nc_cutting_conditions
 
 

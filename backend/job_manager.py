@@ -1,4 +1,3 @@
-import os
 from DB.models import Job, Part, Workplan
 
 def get_or_create_job(db, job_identifier):

@@ -1,10 +1,15 @@
 import os
 import shutil
 
+# 프로젝트 최상위 경로. 여러 모듈이 각자 dirname 을 몇 번 거슬러 올라가는지 세어가며
+# 같은 값을 다시 계산하고 있었는데, 폴더가 한 단계라도 바뀌면 전부 손봐야 해서
+# 경로 기준은 여기 한 곳에서만 정한다.
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 # Vault root directory
-VAULT_ROOT = os.path.join(os.path.dirname(os.path.dirname(__file__)), "archive_vault")
+VAULT_ROOT = os.path.join(PROJECT_ROOT, "archive_vault")
 # Raw data root directory
-RAW_DATA_ROOT = os.path.join(os.path.dirname(os.path.dirname(__file__)), "machining_raw_data")
+RAW_DATA_ROOT = os.path.join(PROJECT_ROOT, "machining_raw_data")
 
 def get_rel_raw_data_path(abs_path):
     """

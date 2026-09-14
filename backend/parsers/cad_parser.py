@@ -4,7 +4,6 @@ from DB.models import Part, CadFileArchive
 from vault_manager import save_to_vault
 from integrity import sha256_bytes
 
-from job_manager import get_or_create_job
 
 def parse_cad(file_path, project_name, part_name):
     """

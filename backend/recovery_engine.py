@@ -1,21 +1,19 @@
 import os
 import json
 import zipfile
-import io
 import shutil
 import tempfile
 from sqlalchemy.orm import Session
-from DB.database import SessionLocal, engine
+from DB.database import engine
 from DB.models import (
-    Job, JobFileArchive, WorkplanFileArchive, 
+    Job, JobFileArchive, WorkplanFileArchive,
     LogFileArchive, SurfaceRoughness, SurfaceRoughnessArchive,
-    EnvMemo, Inspection, CadFileArchive, Part, Workplan
+    CadFileArchive, Workplan
 )
 import job_layout
 from vault_manager import get_abs_vault_path, VAULT_ROOT, get_abs_raw_data_path, get_rel_raw_data_path
 
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-RAW_DATA_DIR = os.path.join(PROJECT_ROOT, "machining_raw_data")
+from vault_manager import PROJECT_ROOT, RAW_DATA_ROOT as RAW_DATA_DIR  # noqa: E402  경로 기준은 vault_manager 한 곳
 
 def _copy_from_vault_or_blob(vault_path, blob_content, destination_path):
     """
@@ -133,6 +131,149 @@ def get_job_archive_files(job_id):
                 
         return file_map
 
+def _already_has(dest_dir, kind, extensions):
+    """해당 분류 폴더에 그 종류의 파일이 이미 있으면 True.
+
+    Vault 는 XML 을 항상 'metadata.xml' 이라는 표준 이름으로 보관하므로, 원본이 멀쩡히
+    있는 폴더에 복원을 한 번 더 돌리면 원래 파일 옆에 metadata.xml 이 하나 더 생겼다.
+    NC 도 program_code 로 이름을 만들어 원본 파일명과 다를 수 있다. 파일 이름이 아니라
+    '그 종류가 이미 있는지'로 판단해야 복원이 몇 번을 돌아도 같은 결과가 된다.
+    """
+    folder = os.path.join(dest_dir, kind)
+    if not os.path.isdir(folder):
+        return False
+    suffixes = tuple(e.lower() for e in extensions)
+    return any(n.lower().endswith(suffixes) for n in os.listdir(folder)
+               if os.path.isfile(os.path.join(folder, n)))
+
+
+def _restore_job_files(session, job, dest_dir, raw_root, folder_name):
+    """Job 1건의 원본 파일을 dest_dir 아래 새 폴더 구조로 복원하고 복원 개수를 돌려준다.
+
+    단일 Job 복원(raw_data 원상 복구)과 전체 복구 ZIP 이 같은 코드를 쓰도록 떼어낸 함수다.
+    예전에는 recover_all_jobs 가 XML/NC/로그/조도만 따로 구현하고 있어서, 전체 복구 ZIP 에는
+    TDMS·Parquet·etc·CAD 가 통째로 빠져 있었다.
+
+    raw_root: Part 레벨 CAD_Files 를 놓을 기준 폴더 (원상 복구는 machining_raw_data,
+              복구 ZIP 은 임시 출력 폴더).
+    """
+    restored_files = 0
+    # 1. XML 복원
+    job_archive = session.query(JobFileArchive).filter_by(job_id=job.job_id).first()
+    if job_archive and not _already_has(dest_dir, job_layout.XML_DIR, ('.xml',)):
+        xml_dest = os.path.join(job_layout.subdir_path(dest_dir, job_layout.XML_DIR, create=True),
+                                "metadata.xml")
+        if _copy_from_vault_or_blob(job_archive.xml_file_path, job_archive.xml_file_content, xml_dest):
+            restored_files += 1
+            
+    # 2. NC 복원
+    if job.workplan_id:
+        wp_archive = session.query(WorkplanFileArchive).filter_by(workplan_id=job.workplan_id).first()
+        if wp_archive and not _already_has(dest_dir, job_layout.NC_DIR, ('.nc',)):
+            nc_name = os.path.basename(wp_archive.nc_file_path) if wp_archive.nc_file_path else f"{job.workplan_id}.nc"
+            nc_dest = os.path.join(job_layout.subdir_path(dest_dir, job_layout.NC_DIR, create=True),
+                                   nc_name)
+            if _copy_from_vault_or_blob(wp_archive.nc_file_path, wp_archive.nc_file_content, nc_dest):
+                restored_files += 1
+                
+    # 3. TDMS 복원
+    tdms_vault_dir = os.path.join(VAULT_ROOT, "tdms_files", f"Job_{job.job_id}")
+    if os.path.exists(tdms_vault_dir):
+        tdms_dest_dir = job_layout.subdir_path(dest_dir, job_layout.TDMS_DIR, create=True)
+        for f in os.listdir(tdms_vault_dir):
+            src = os.path.join(tdms_vault_dir, f)
+            dest = os.path.join(tdms_dest_dir, f)
+            if not os.path.exists(dest):
+                shutil.copy2(src, dest)
+                restored_files += 1
+            
+    # 4. Logs 복원 (Job과 1:1)
+    if job.machine_log:
+        log_archive = session.query(LogFileArchive).filter_by(log_id=job.machine_log.log_id).first()
+        if log_archive and log_archive.log_file_path:
+            src = get_abs_vault_path(log_archive.log_file_path)
+            if src and os.path.exists(src):
+                log_dest_dir = job_layout.subdir_path(dest_dir, job_layout.LOG_DIR, create=True)
+                dest = os.path.join(log_dest_dir, os.path.basename(src))
+                if not os.path.exists(dest):
+                    shutil.copy2(src, dest)
+                    restored_files += 1
+                
+    # 5. Surface Roughness 복원 (DB 아카이브 + Vault 폴더 전체)
+    sr_dir = os.path.join(dest_dir, job_layout.ROUGHNESS_DIR)
+    roughness_records = session.query(SurfaceRoughness).filter_by(job_id=job.job_id).all()
+    if roughness_records:
+        os.makedirs(sr_dir, exist_ok=True)
+        for rr in roughness_records:
+            sr_archive = session.query(SurfaceRoughnessArchive).filter_by(roughness_id=rr.roughness_id).first()
+            if sr_archive:
+                for vp in [sr_archive.stat_csv_file_path, sr_archive.curve_csv_file_path]:
+                    if vp:
+                        src = get_abs_vault_path(vp)
+                        if src and os.path.exists(src):
+                            dest = os.path.join(sr_dir, os.path.basename(src))
+                            if not os.path.exists(dest):
+                                shutil.copy2(src, dest)
+                                restored_files += 1
+                                
+    sr_vault_dir = os.path.join(VAULT_ROOT, "surface_roughness", f"Job_{job.job_id}")
+    if os.path.exists(sr_vault_dir):
+        os.makedirs(sr_dir, exist_ok=True)
+        for f in os.listdir(sr_vault_dir):
+            if f.lower().endswith(('.csv', '.fpk', '.txt')):
+                src = os.path.join(sr_vault_dir, f)
+                dest = os.path.join(sr_dir, f)
+                if not os.path.exists(dest):
+                    shutil.copy2(src, dest)
+                    restored_files += 1
+                    
+    # 6. etc (기타 참고용 파일) 복원
+    etc_vault_dir = os.path.join(VAULT_ROOT, "etc_files", f"Job_{job.job_id}")
+    etc_job_dir = os.path.join(VAULT_ROOT, "jobs", folder_name, job_layout.ETC_DIR)
+    etc_dest_dir = os.path.join(dest_dir, job_layout.ETC_DIR)
+    
+    for v_etc in [etc_vault_dir, etc_job_dir]:
+        if os.path.exists(v_etc):
+            for f in os.listdir(v_etc):
+                src = os.path.join(v_etc, f)
+                if os.path.isfile(src):
+                    os.makedirs(etc_dest_dir, exist_ok=True)
+                    dest = os.path.join(etc_dest_dir, f)
+                    if not os.path.exists(dest):
+                        shutil.copy2(src, dest)
+                        restored_files += 1
+
+    # 7. Part 레벨 CAD 파일 복원 (CAD_Files가 유실된 경우)
+    if job.workplan_id:
+        wp = session.query(Workplan).filter_by(workplan_id=job.workplan_id).first()
+        if wp and wp.part_code:
+            cad_archive = session.query(CadFileArchive).filter_by(part_code=wp.part_code).first()
+            if cad_archive:
+                part_folder_parts = folder_name.split('/')[:2]
+                if len(part_folder_parts) == 2:
+                    cad_dest_dir = os.path.join(raw_root, part_folder_parts[0], part_folder_parts[1], job_layout.CAD_DIR)
+                    cad_fname = cad_archive.file_name or f"Part{wp.part_code}.step"
+                    cad_dest = os.path.join(cad_dest_dir, cad_fname)
+                    if not os.path.exists(cad_dest):
+                        if _copy_from_vault_or_blob(cad_archive.file_path, cad_archive.file_content, cad_dest):
+                            restored_files += 1
+
+    # 8. Parquet 시각화 데이터 복원 (processed_parquet)
+    parquet_dir = os.path.join(dest_dir, job_layout.PARQUET_DIR)
+    for p_name in [f"job_{job.job_id}_viz.parquet", f"job_{job.job_id}_fft.parquet"]:
+        v_p = os.path.join(VAULT_ROOT, "processed_parquet", p_name)
+        p_p = os.path.join(PROJECT_ROOT, "processed_data", p_name)
+        src_p = v_p if os.path.exists(v_p) else (p_p if os.path.exists(p_p) else None)
+        if src_p:
+            os.makedirs(parquet_dir, exist_ok=True)
+            dest_p = os.path.join(parquet_dir, p_name)
+            if not os.path.exists(dest_p):
+                shutil.copy2(src_p, dest_p)
+                restored_files += 1
+                            
+    return restored_files
+
+
 def restore_single_job_to_raw_data(job_id_or_source_folder):
     """
     삭제된 단일 Job 폴더를 machining_raw_data 디렉터리에 자동으로 원상 복구합니다.
@@ -143,136 +284,23 @@ def restore_single_job_to_raw_data(job_id_or_source_folder):
             job = session.query(Job).filter_by(job_id=int(job_id_or_source_folder)).first()
         else:
             job = session.query(Job).filter_by(source_folder=str(job_id_or_source_folder)).first()
-            
+
         if not job:
             return None, 0
-            
+
         folder_name = job.source_folder
         if not folder_name:
             proj = job.research_project or "Unknown"
             part = job.custom_part_name or "Unknown"
             folder_name = f"{proj}/{part}/{job.job_id}"
-            
+
         dest_dir = os.path.join(RAW_DATA_DIR, *folder_name.split('/'))
         os.makedirs(dest_dir, exist_ok=True)
-        
-        restored_files = 0
-        
-        # 1. XML 복원
-        job_archive = session.query(JobFileArchive).filter_by(job_id=job.job_id).first()
-        if job_archive:
-            xml_dest = os.path.join(job_layout.subdir_path(dest_dir, job_layout.XML_DIR, create=True),
-                                    "metadata.xml")
-            if _copy_from_vault_or_blob(job_archive.xml_file_path, job_archive.xml_file_content, xml_dest):
-                restored_files += 1
-                
-        # 2. NC 복원
-        if job.workplan_id:
-            wp_archive = session.query(WorkplanFileArchive).filter_by(workplan_id=job.workplan_id).first()
-            if wp_archive:
-                nc_name = os.path.basename(wp_archive.nc_file_path) if wp_archive.nc_file_path else f"{job.workplan_id}.nc"
-                nc_dest = os.path.join(job_layout.subdir_path(dest_dir, job_layout.NC_DIR, create=True),
-                                       nc_name)
-                if _copy_from_vault_or_blob(wp_archive.nc_file_path, wp_archive.nc_file_content, nc_dest):
-                    restored_files += 1
-                    
-        # 3. TDMS 복원
-        tdms_vault_dir = os.path.join(VAULT_ROOT, "tdms_files", f"Job_{job.job_id}")
-        if os.path.exists(tdms_vault_dir):
-            tdms_dest_dir = job_layout.subdir_path(dest_dir, job_layout.TDMS_DIR, create=True)
-            for f in os.listdir(tdms_vault_dir):
-                src = os.path.join(tdms_vault_dir, f)
-                dest = os.path.join(tdms_dest_dir, f)
-                if not os.path.exists(dest):
-                    shutil.copy2(src, dest)
-                    restored_files += 1
-                
-        # 4. Logs 복원 (Job과 1:1)
-        if job.machine_log:
-            log_archive = session.query(LogFileArchive).filter_by(log_id=job.machine_log.log_id).first()
-            if log_archive and log_archive.log_file_path:
-                src = get_abs_vault_path(log_archive.log_file_path)
-                if src and os.path.exists(src):
-                    log_dest_dir = job_layout.subdir_path(dest_dir, job_layout.LOG_DIR, create=True)
-                    dest = os.path.join(log_dest_dir, os.path.basename(src))
-                    if not os.path.exists(dest):
-                        shutil.copy2(src, dest)
-                        restored_files += 1
-                    
-        # 5. Surface Roughness 복원 (DB 아카이브 + Vault 폴더 전체)
-        sr_dir = os.path.join(dest_dir, job_layout.ROUGHNESS_DIR)
-        roughness_records = session.query(SurfaceRoughness).filter_by(job_id=job.job_id).all()
-        if roughness_records:
-            os.makedirs(sr_dir, exist_ok=True)
-            for rr in roughness_records:
-                sr_archive = session.query(SurfaceRoughnessArchive).filter_by(roughness_id=rr.roughness_id).first()
-                if sr_archive:
-                    for vp in [sr_archive.stat_csv_file_path, sr_archive.curve_csv_file_path]:
-                        if vp:
-                            src = get_abs_vault_path(vp)
-                            if src and os.path.exists(src):
-                                dest = os.path.join(sr_dir, os.path.basename(src))
-                                if not os.path.exists(dest):
-                                    shutil.copy2(src, dest)
-                                    restored_files += 1
-                                    
-        sr_vault_dir = os.path.join(VAULT_ROOT, "surface_roughness", f"Job_{job.job_id}")
-        if os.path.exists(sr_vault_dir):
-            os.makedirs(sr_dir, exist_ok=True)
-            for f in os.listdir(sr_vault_dir):
-                if f.lower().endswith(('.csv', '.fpk', '.txt')):
-                    src = os.path.join(sr_vault_dir, f)
-                    dest = os.path.join(sr_dir, f)
-                    if not os.path.exists(dest):
-                        shutil.copy2(src, dest)
-                        restored_files += 1
-                        
-        # 6. etc (기타 참고용 파일) 복원
-        etc_vault_dir = os.path.join(VAULT_ROOT, "etc_files", f"Job_{job.job_id}")
-        etc_job_dir = os.path.join(VAULT_ROOT, "jobs", folder_name, job_layout.ETC_DIR)
-        etc_dest_dir = os.path.join(dest_dir, job_layout.ETC_DIR)
-        
-        for v_etc in [etc_vault_dir, etc_job_dir]:
-            if os.path.exists(v_etc):
-                for f in os.listdir(v_etc):
-                    src = os.path.join(v_etc, f)
-                    if os.path.isfile(src):
-                        os.makedirs(etc_dest_dir, exist_ok=True)
-                        dest = os.path.join(etc_dest_dir, f)
-                        if not os.path.exists(dest):
-                            shutil.copy2(src, dest)
-                            restored_files += 1
 
-        # 7. Part 레벨 CAD 파일 복원 (CAD_Files가 유실된 경우)
-        if job.workplan_id:
-            wp = session.query(Workplan).filter_by(workplan_id=job.workplan_id).first()
-            if wp and wp.part_code:
-                cad_archive = session.query(CadFileArchive).filter_by(part_code=wp.part_code).first()
-                if cad_archive:
-                    part_folder_parts = folder_name.split('/')[:2]
-                    if len(part_folder_parts) == 2:
-                        cad_dest_dir = os.path.join(RAW_DATA_DIR, part_folder_parts[0], part_folder_parts[1], job_layout.CAD_DIR)
-                        cad_fname = cad_archive.file_name or f"Part{wp.part_code}.step"
-                        cad_dest = os.path.join(cad_dest_dir, cad_fname)
-                        if not os.path.exists(cad_dest):
-                            if _copy_from_vault_or_blob(cad_archive.file_path, cad_archive.file_content, cad_dest):
-                                restored_files += 1
-
-        # 8. Parquet 시각화 데이터 복원 (processed_parquet)
-        parquet_dir = os.path.join(dest_dir, job_layout.PARQUET_DIR)
-        for p_name in [f"job_{job.job_id}_viz.parquet", f"job_{job.job_id}_fft.parquet"]:
-            v_p = os.path.join(VAULT_ROOT, "processed_parquet", p_name)
-            p_p = os.path.join(PROJECT_ROOT, "processed_data", p_name)
-            src_p = v_p if os.path.exists(v_p) else (p_p if os.path.exists(p_p) else None)
-            if src_p:
-                os.makedirs(parquet_dir, exist_ok=True)
-                dest_p = os.path.join(parquet_dir, p_name)
-                if not os.path.exists(dest_p):
-                    shutil.copy2(src_p, dest_p)
-                    restored_files += 1
-                                
+        restored_files = _restore_job_files(session, job, dest_dir, RAW_DATA_DIR, folder_name)
         print(f"[Recovery Engine] Job {job.job_id} ({dest_dir})에 총 {restored_files}개 파일 자동 복원 완료.")
         return dest_dir, restored_files
+
 
 def recover_all_jobs(base_output_dir="recovered_data"):
     """
@@ -321,38 +349,11 @@ def recover_all_jobs(base_output_dir="recovered_data"):
             with open(os.path.join(job_dir, "metadata_export.json"), "w", encoding="utf-8") as f:
                 json.dump(metadata, f, ensure_ascii=False, indent=4)
                 
-            # Files
-            job_archive = session.query(JobFileArchive).filter_by(job_id=job.job_id).first()
-            if job_archive:
-                _copy_from_vault_or_blob(job_archive.xml_file_path, job_archive.xml_file_content,
-                                         os.path.join(job_layout.subdir_path(job_dir, job_layout.XML_DIR, create=True), "metadata.xml"))
-            if job.workplan_id:
-                wp_archive = session.query(WorkplanFileArchive).filter_by(workplan_id=job.workplan_id).first()
-                if wp_archive:
-                    # workplan_id는 숫자 키이므로 복원 파일명은 NC 프로그램 코드를 우선 사용한다.
-                    wp_row = session.query(Workplan).filter_by(workplan_id=job.workplan_id).first()
-                    nc_name = (wp_row.program_code if wp_row and wp_row.program_code else f"WP{job.workplan_id}")
-                    if not nc_name.lower().endswith(".nc"):
-                        nc_name = f"{nc_name}.nc"
-                    _copy_from_vault_or_blob(wp_archive.nc_file_path, wp_archive.nc_file_content,
-                                             os.path.join(job_layout.subdir_path(job_dir, job_layout.NC_DIR, create=True), nc_name))
-            if job.machine_log:
-                log_archive = session.query(LogFileArchive).filter_by(log_id=job.machine_log.log_id).first()
-                if log_archive and log_archive.log_file_path:
-                    src = get_abs_vault_path(log_archive.log_file_path)
-                    if src and os.path.exists(src):
-                        shutil.copy2(src, os.path.join(
-                            job_layout.subdir_path(job_dir, job_layout.LOG_DIR, create=True), os.path.basename(src)))
-            for rr in job.surface_roughnesses:
-                sr_archive = session.query(SurfaceRoughnessArchive).filter_by(roughness_id=rr.roughness_id).first()
-                if sr_archive:
-                    sr_dir = os.path.join(job_dir, job_layout.ROUGHNESS_DIR)
-                    os.makedirs(sr_dir, exist_ok=True)
-                    for vp in [sr_archive.stat_csv_file_path, sr_archive.curve_csv_file_path]:
-                        if vp:
-                            src = get_abs_vault_path(vp)
-                            if src and os.path.exists(src):
-                                shutil.copy2(src, os.path.join(sr_dir, os.path.basename(src)))
+            # 파일 복원은 단일 Job 복원과 같은 함수를 쓴다.
+            # (예전에는 여기서 XML/NC/로그/조도만 따로 구현해, 전체 복구 ZIP 에 TDMS·Parquet·
+            #  etc·CAD 가 빠져 있었다)
+            _restore_job_files(session, job, job_dir, base_output_dir, folder_name)
+
             recovered_count += 1
             
     return recovered_count

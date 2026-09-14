@@ -11,7 +11,7 @@ if backend_dir not in sys.path:
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from DB.database import get_db
-from DB.models import Workingstep, WorkplanFileArchive, Tool
+from DB.models import Workingstep, WorkplanFileArchive
 from job_manager import get_or_create_job
 
 
@@ -208,12 +208,16 @@ def parse_nc(file_path, job_id_str=None):
     if not job_id_str:
         return False
         
+    # 경로가 machining_raw_data/{프로젝트}/{부품}/... 형태인지만 확인한다.
+    # (프로젝트·부품 이름 자체는 job_id_str 로 이미 넘어오므로 여기서 쓰지 않는다.
+    #  예전에는 parts[raw_idx+2] 를 꺼내 쓰면서 경로가 짧으면 IndexError 로 터졌다.)
     parts = file_path.split(os.sep)
     try:
         raw_idx = parts.index("machining_raw_data")
-        project_name = parts[raw_idx + 1]
-        part_name = parts[raw_idx + 2]
     except ValueError:
+        print(f"[NC Parser] machining_raw_data 아래의 파일이 아닙니다: {file_path}")
+        return False
+    if len(parts) - raw_idx < 4:
         print(f"[NC Parser] 파일 경로에서 프로젝트/부품 정보를 찾을 수 없습니다: {file_path}")
         return False
 

@@ -15,6 +15,7 @@ from parsers.roughness_parser import parse_roughness
 from parsers.cad_parser import parse_cad
 from parsers.nc_parser import parse_nc
 from tool_inserter import parse_and_insert_tools
+from pipeline_control import is_parser_enabled, get_config
 
 class MachiningDataHandler(FileSystemEventHandler):
     def __init__(self, max_cache_size=10000):
@@ -260,34 +261,46 @@ class MachiningDataHandler(FileSystemEventHandler):
 
         # 어느 하위 폴더에 있느냐로 자료 종류를 정하고, 확장자는 그 안에서 다시 확인한다.
         # (예전처럼 Job 루트에 남아 있는 파일은 sub_kind 가 없으므로 확장자만으로 판단한다)
+        if get_config().get("paused", False):
+            print(f"  -> [파이프라인 일시중지] 수집이 중지된 상태이므로 처리를 건너뜁니다: {file_name}")
+            return
+
         try:
             if is_cad:
                 if file_extension in ['.step', '.stp', '.stl']:
+                    if not is_parser_enabled('cad'):
+                        print(f"  -> [파서 비활성화] CAD 파서가 꺼져 있어 처리를 건너뜁니다: {file_name}")
+                        return
                     self.process_cad(file_path_norm, project_name, part_name)
             elif is_roughness:
                 if file_extension in ['.txt', '.csv', '.fpk']:
+                    if not is_parser_enabled('roughness'):
+                        print(f"  -> [파서 비활성화] 표면 조도 파서가 꺼져 있어 처리를 건너뜁니다: {file_name}")
+                        return
                     self.process_roughness(file_path_norm, current_job_id)
-            elif sub_kind == job_layout.XML_DIR:
+            elif sub_kind == job_layout.XML_DIR or (sub_kind is None and file_extension == '.xml'):
                 if file_extension == '.xml':
+                    if not is_parser_enabled('xml'):
+                        print(f"  -> [파서 비활성화] XML 파서가 꺼져 있어 처리를 건너뜁니다: {file_name}")
+                        return
                     self.process_xml(file_path_norm, current_job_id)
-            elif sub_kind == job_layout.TDMS_DIR:
+            elif sub_kind == job_layout.TDMS_DIR or (sub_kind is None and file_extension == '.tdms'):
                 if file_extension == '.tdms':
+                    if not is_parser_enabled('tdms'):
+                        print(f"  -> [파서 비활성화] TDMS 파서가 꺼져 있어 처리를 건너뜁니다: {file_name}")
+                        return
                     self.process_tdms(file_path_norm, current_job_id)
-            elif sub_kind == job_layout.NC_DIR:
+            elif sub_kind == job_layout.NC_DIR or (sub_kind is None and file_extension == '.nc'):
                 if file_extension == '.nc':
+                    if not is_parser_enabled('nc'):
+                        print(f"  -> [파서 비활성화] NC 파서가 꺼져 있어 처리를 건너뜁니다: {file_name}")
+                        return
                     self.process_nc(file_path_norm, current_job_id)
-            elif sub_kind == job_layout.LOG_DIR:
+            elif sub_kind == job_layout.LOG_DIR or (sub_kind is None and file_extension in ['.csv', '.log']):
                 if file_extension in ['.csv', '.log']:
-                    self.process_log(file_path_norm, current_job_id)
-            elif sub_kind is None:
-                # Job 루트에 남아 있는 예전 구조 (이동 규칙이 없는 확장자 등)
-                if file_extension == '.xml':
-                    self.process_xml(file_path_norm, current_job_id)
-                elif file_extension == '.tdms':
-                    self.process_tdms(file_path_norm, current_job_id)
-                elif file_extension == '.nc':
-                    self.process_nc(file_path_norm, current_job_id)
-                elif file_extension in ['.csv', '.log']:
+                    if not is_parser_enabled('log'):
+                        print(f"  -> [파서 비활성화] CNC 로그 파서가 꺼져 있어 처리를 건너뜁니다: {file_name}")
+                        return
                     self.process_log(file_path_norm, current_job_id)
         except Exception as e:
             print(f"[오류] 파일 처리 중 에러 발생 ({file_path}): {e}")
