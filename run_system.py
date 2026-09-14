@@ -7,7 +7,8 @@ import os
 if sys.stdout.encoding.lower() != 'utf-8':
     sys.stdout.reconfigure(encoding='utf-8')
 
-# 실행할 서브프로세스 목록을 저장할 리스트
+# 실행할 서브프로세스 목록. 종료 시점뿐 아니라 감시 로그에도 쓰이므로
+# (Popen, 화면에 찍을 이름) 쌍으로 담는다.
 processes = []
 
 def install_requirements():
@@ -34,7 +35,7 @@ def start_services():
     parser_path = os.path.join(base_dir, "backend", "data_insert_recognization.py")
     # -u: 파이프라인 로그(자동 복원 알림, 원본 복원 검증 결과 등)가 버퍼에 갇히지 않고 즉시 출력되도록.
     p1 = subprocess.Popen([sys.executable, "-u", parser_path])
-    processes.append(p1)
+    processes.append((p1, "Backend 파이프라인"))
     
     # 파서가 초기화될 시간을 잠깐 줍니다.
     time.sleep(2)
@@ -42,12 +43,12 @@ def start_services():
     print("🚀 [3/4] 통합 대시보드를 시작합니다 (Port 8501)...")
     dashboard_path = os.path.join(base_dir, "frontend", "dashboard.py")
     p2 = subprocess.Popen([sys.executable, "-m", "streamlit", "run", dashboard_path, "--server.port", "8501"])
-    processes.append(p2)
+    processes.append((p2, "Streamlit 대시보드"))
 
     print("🚀 [4/4] TDMS 파켓 변환 백그라운드 서비스를 시작합니다...")
     tdms_viz_path = os.path.join(base_dir, "backend", "tdms_visualizer.py")
     p4 = subprocess.Popen([sys.executable, "-u", tdms_viz_path])
-    processes.append(p4)
+    processes.append((p4, "TDMS 변환기"))
 
 def stop_services():
     print("\n[알림] 모든 시스템 구성 요소 및 백그라운드 프로세스 트리를 종료합니다...")
@@ -55,11 +56,11 @@ def stop_services():
         import psutil
     except ImportError:
         print("[경고] psutil 모듈이 설치되어 있지 않아 서브프로세스 기본 종료 방식을 사용합니다.")
-        for p in processes:
+        for p, _name in processes:
             p.terminate()
         return
 
-    for p in processes:
+    for p, _name in processes:
         try:
             parent = psutil.Process(p.pid)
             children = parent.children(recursive=True)
@@ -88,13 +89,23 @@ if __name__ == "__main__":
         print("\n🟢 모든 시스템이 정상적으로 백그라운드에서 구동 중입니다.")
         print("🟢 시스템을 완전히 종료하려면 창을 닫거나 [Ctrl + C]를 누르세요.\n")
         
-        # 메인 스크립트가 종료되지 않도록 무한 대기
+        # 메인 스크립트가 종료되지 않도록 자식 프로세스 상태를 주기적으로 감시.
+        # 한 번 죽은 프로세스는 계속 죽은 상태이므로, 2초마다 같은 줄을 반복해서
+        # 찍지 않도록 이미 알린 것은 기억해 두고 처음 한 번만 알린다.
+        reported = set()
         while True:
-            time.sleep(1)
-            
+            time.sleep(2)
+            for p, name in processes:
+                ret = p.poll()
+                if ret is not None and p.pid not in reported:
+                    reported.add(p.pid)
+                    print(f"⚠️ [프로세스 감시] {name} (PID {p.pid})가 예기치 않게 종료되었습니다 (종료 코드: {ret}).")
+
     except KeyboardInterrupt:
         # 사용자가 Ctrl+C를 누르면 실행
+        print("\n[알림] 사용자에 의한 종료 신호(KeyboardInterrupt) 수신.")
         stop_services()
     except Exception as e:
-        print(f"\n❌ 예기치 않은 오류 발생: {e}")
+        import traceback
+        print(f"\n❌ 예기치 않은 오류 발생: {e}\n{traceback.format_exc()}")
         stop_services()

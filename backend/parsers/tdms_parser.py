@@ -3,7 +3,7 @@ import re
 import datetime
 import pandas as pd
 from DB.database import SessionLocal
-from DB.models import Job, Workplan
+from DB.models import Workplan
 from tdms_alignment import open_tdms
 
 from job_manager import get_or_create_job
@@ -88,18 +88,14 @@ def parse_tdms(file_path, job_id):
         db.commit()
         print(f"    - TDMS 메타데이터 파싱, Vault 백업({tdms_vault_rel}) 및 파일 참조 매핑 완료 (내부 PK: {job.job_id})")
         
-        # Parquet 시각화 데이터 즉시 연동 생성
-        try:
-            from tdms_visualizer import process_tdms_file
-            res = process_tdms_file(job)
-            if res and res[0]:
-                job.tdms_parquet_path = res[0]
-                job.tdms_fft_parquet_path = res[1]
-                db.commit()
-                print(f"    - TDMS 시각화 Parquet 즉시 생성 완료: {res[0]}")
-        except Exception as v_err:
-            print(f"    - [Visualizer 즉시 연동 경고]: {v_err}")
-            
+        # Parquet 변환은 여기서 직접 돌리지 않는다.
+        #
+        # 예전에는 이 자리에서 process_tdms_file() 을 바로 호출했는데, tdms_visualizer 데몬도
+        # 5초마다 tdms_parquet_path 가 비어 있는 Job 을 집어가기 때문에 같은 파일을 두 프로세스가
+        # 동시에 변환했다(464MB 파일 기준 76초 -> 110초로 늘어남). 게다가 이쪽은 processed_data
+        # 절대경로를, 데몬은 raw_data 상대경로를 저장해서 Job 마다 경로 형식까지 달라졌다.
+        # 변환 주체를 데몬 하나로 모아 중복과 경로 불일치를 함께 없앤다.
+        # (데몬은 tdms_file_path 가 채워진 Job 을 폴링하므로, 위 commit 시점에 이미 대상이 된다.)
         return True
 
     except Exception as e:

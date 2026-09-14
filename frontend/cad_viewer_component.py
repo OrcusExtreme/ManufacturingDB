@@ -11,6 +11,7 @@ BACKEND_DIR = os.path.join(PROJECT_ROOT, "backend")
 if BACKEND_DIR not in sys.path:
     sys.path.append(BACKEND_DIR)
 
+import job_layout
 from DB.database import SessionLocal
 from DB.models import CadFileArchive, Part
 from vault_manager import get_abs_vault_path, VAULT_ROOT
@@ -62,7 +63,7 @@ def get_cad_file_data(part_name):
             raw_dir = os.path.join(PROJECT_ROOT, "machining_raw_data")
             if os.path.exists(raw_dir):
                 for proj in os.listdir(raw_dir):
-                    p_path = os.path.join(raw_dir, proj, part_name, "CAD_Files")
+                    p_path = os.path.join(raw_dir, proj, part_name, job_layout.CAD_DIR)
                     if os.path.exists(p_path):
                         for f in os.listdir(p_path):
                             if f.lower().endswith(('.step', '.stp', '.stl')):
@@ -102,7 +103,7 @@ def find_cad_file_name(part_name):
     raw_dir = os.path.join(PROJECT_ROOT, "machining_raw_data")
     if os.path.exists(raw_dir):
         for proj in os.listdir(raw_dir):
-            p_path = os.path.join(raw_dir, proj, part_name, "CAD_Files")
+            p_path = os.path.join(raw_dir, proj, part_name, job_layout.CAD_DIR)
             if os.path.exists(p_path):
                 for f in os.listdir(p_path):
                     if f.lower().endswith(CAD_EXTENSIONS):

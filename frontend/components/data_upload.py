@@ -3,6 +3,8 @@ import os
 
 import streamlit as st
 
+import job_layout
+
 from .common import PROJECT_ROOT, load_data
 from cad_viewer_component import render_cad_viewer
 
@@ -85,7 +87,7 @@ def render_data_upload():
     st.caption("CAD 모델 파일(STL/STEP)은 Job 단위가 아닌 Part 단위에 귀속됩니다. (최대 15MB 제한)")
 
     cad_existing_name = None
-    cad_dir_check = os.path.join(base_raw_dir, target_project_name, target_part_name, "CAD_Files")
+    cad_dir_check = os.path.join(base_raw_dir, target_project_name, target_part_name, job_layout.CAD_DIR)
     if os.path.exists(cad_dir_check):
         cad_existing_files = [f for f in os.listdir(cad_dir_check) if f.lower().endswith(('.stl', '.step', '.stp'))]
         if cad_existing_files:
@@ -135,17 +137,16 @@ def render_data_upload():
                     job_selected_ready = True
 
                     cur_job_dir = os.path.join(base_raw_dir, target_project_name, target_part_name, existing_job_folder)
-                    if os.path.exists(cur_job_dir):
-                        for fname in os.listdir(cur_job_dir):
-                            f_lower = fname.lower()
-                            if f_lower.endswith('.xml'):
-                                existing_files_info['xml'] = fname
-                            elif f_lower.endswith('.tdms'):
-                                existing_files_info['tdms'] = fname
-                            elif f_lower.endswith('.nc'):
-                                existing_files_info['nc'] = fname
-                            elif f_lower.endswith('.log'):
-                                existing_files_info['log'] = fname
+                    # 자료 종류별 하위 폴더를 먼저 보고, 예전 구조로 남아 있으면 Job 루트도 본다.
+                    for key, kind, suffixes in (
+                        ('xml', job_layout.XML_DIR, ('.xml',)),
+                        ('tdms', job_layout.TDMS_DIR, ('.tdms',)),
+                        ('nc', job_layout.NC_DIR, ('.nc',)),
+                        ('log', job_layout.LOG_DIR, ('.log',)),
+                    ):
+                        found = job_layout.find_files(cur_job_dir, kind, suffixes)
+                        if found:
+                            existing_files_info[key] = os.path.basename(found[0])
                 else:
                     st.error("선택한 Job의 원본 폴더 경로(source_folder)가 DB에 기록되지 않아 추가할 수 없습니다.")
             else:
@@ -239,7 +240,7 @@ def render_data_upload():
                 part_clean = target_part_name.strip()
 
                 target_job_dir = ""
-                cad_dir = os.path.join(base_raw_dir, project_clean, part_clean, "CAD_Files")
+                cad_dir = os.path.join(base_raw_dir, project_clean, part_clean, job_layout.CAD_DIR)
 
                 if upload_target == "신규 Job 생성 및 데이터 업로드":
                     from job_manager import get_or_create_job
@@ -279,13 +280,19 @@ def render_data_upload():
                     saved_count += save_file(file_cad, cad_dir)
 
                 if target_job_dir:
-                    roughness_dir = os.path.join(target_job_dir, "Surface_Roughness")
-                    etc_dir = os.path.join(target_job_dir, "etc")
+                    roughness_dir = os.path.join(target_job_dir, job_layout.ROUGHNESS_DIR)
+                    etc_dir = os.path.join(target_job_dir, job_layout.ETC_DIR)
 
-                    saved_count += save_file(file_xml, target_job_dir)
-                    saved_count += save_file(file_tdms, target_job_dir)
-                    saved_count += save_file(file_nc, target_job_dir)
-                    saved_count += save_file(file_log, target_job_dir)
+                    # 자료 종류별 하위 폴더에 바로 넣는다 (수집기가 옮길 필요가 없도록)
+                    for uploaded, kind in (
+                        (file_xml, job_layout.XML_DIR),
+                        (file_tdms, job_layout.TDMS_DIR),
+                        (file_nc, job_layout.NC_DIR),
+                        (file_log, job_layout.LOG_DIR),
+                    ):
+                        if uploaded:
+                            saved_count += save_file(
+                                uploaded, job_layout.subdir_path(target_job_dir, kind, create=True))
 
                     if file_roughness:
                         os.makedirs(roughness_dir, exist_ok=True)

@@ -308,8 +308,7 @@ def test_fallbacks(tmp):
     check("DAQ 없을 때 FFT 비어 있음", res.fft.empty)
 
     # CNC 채널이 비어 있는 파일 (메타데이터만 기록된 경우)
-    empty = {k: (v[:0] if isinstance(v, np.ndarray) else np.array([], dtype=object))
-             for k, v in cnc.items()}
+    empty = {k: np.array([], dtype=np.float64) for k in cnc}
     p3 = write_tdms(os.path.join(tmp, "empty.tdms"), empty, None, start)
     with open_tdms(p3) as tdms:
         frame = read_cnc_frame(tdms)

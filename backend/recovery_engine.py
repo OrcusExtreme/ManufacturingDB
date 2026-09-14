@@ -11,6 +11,7 @@ from DB.models import (
     LogFileArchive, SurfaceRoughness, SurfaceRoughnessArchive,
     EnvMemo, Inspection, CadFileArchive, Part, Workplan
 )
+import job_layout
 from vault_manager import get_abs_vault_path, VAULT_ROOT, get_abs_raw_data_path, get_rel_raw_data_path
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -62,7 +63,8 @@ def get_job_archive_files(job_id):
         if job_archive and job_archive.xml_file_path:
             abs_p = get_abs_vault_path(job_archive.xml_file_path)
             if abs_p and os.path.exists(abs_p):
-                file_map['xml'].append((abs_p, os.path.basename(abs_p), "metadata.xml"))
+                file_map['xml'].append((abs_p, os.path.basename(abs_p),
+                                        f"{job_layout.XML_DIR}/metadata.xml"))
                 
         # 2. NC
         if job.workplan_id:
@@ -70,7 +72,8 @@ def get_job_archive_files(job_id):
             if wp_archive and wp_archive.nc_file_path:
                 abs_p = get_abs_vault_path(wp_archive.nc_file_path)
                 if abs_p and os.path.exists(abs_p):
-                    file_map['nc'].append((abs_p, os.path.basename(abs_p), f"{job.workplan_id}.nc"))
+                    file_map['nc'].append((abs_p, os.path.basename(abs_p),
+                                           f"{job_layout.NC_DIR}/{os.path.basename(abs_p)}"))
                     
         # 3. TDMS
         # Vault 내 tdms_files/Job_{id} 탐색
@@ -79,11 +82,12 @@ def get_job_archive_files(job_id):
             for f in os.listdir(tdms_vault_dir):
                 if f.endswith('.tdms'):
                     abs_p = os.path.join(tdms_vault_dir, f)
-                    file_map['tdms'].append((abs_p, f, f))
+                    file_map['tdms'].append((abs_p, f, f"{job_layout.TDMS_DIR}/{f}"))
         elif job.tdms_file_path:
             abs_tdms_path = get_abs_raw_data_path(job.tdms_file_path)
             if abs_tdms_path and os.path.exists(abs_tdms_path):
-                file_map['tdms'].append((abs_tdms_path, os.path.basename(abs_tdms_path), os.path.basename(abs_tdms_path)))
+                file_map['tdms'].append((abs_tdms_path, os.path.basename(abs_tdms_path),
+                                         f"{job_layout.TDMS_DIR}/{os.path.basename(abs_tdms_path)}"))
             
         # 4. Logs (Job과 1:1)
         if job.machine_log:
@@ -91,7 +95,8 @@ def get_job_archive_files(job_id):
             if log_archive and log_archive.log_file_path:
                 abs_p = get_abs_vault_path(log_archive.log_file_path)
                 if abs_p and os.path.exists(abs_p):
-                    file_map['log'].append((abs_p, os.path.basename(abs_p), os.path.basename(abs_p)))
+                    file_map['log'].append((abs_p, os.path.basename(abs_p),
+                                            f"{job_layout.LOG_DIR}/{os.path.basename(abs_p)}"))
                     
         # 5. Surface Roughness
         for rr in job.surface_roughnesses:
@@ -104,24 +109,27 @@ def get_job_archive_files(job_id):
                     if vp:
                         abs_p = get_abs_vault_path(vp)
                         if abs_p and os.path.exists(abs_p):
-                            file_map['roughness'].append((abs_p, os.path.basename(abs_p), f"Surface_Roughness/{os.path.basename(abs_p)}"))
+                            file_map['roughness'].append((abs_p, os.path.basename(abs_p),
+                                                          f"{job_layout.ROUGHNESS_DIR}/{os.path.basename(abs_p)}"))
                             
         # 6. Parquet
         if job.tdms_parquet_path:
             abs_parquet = get_abs_raw_data_path(job.tdms_parquet_path)
             if abs_parquet and os.path.exists(abs_parquet):
-                file_map['parquet'].append((abs_parquet, os.path.basename(abs_parquet), os.path.basename(abs_parquet)))
+                file_map['parquet'].append((abs_parquet, os.path.basename(abs_parquet),
+                                            f"{job_layout.PARQUET_DIR}/{os.path.basename(abs_parquet)}"))
         if job.tdms_fft_parquet_path:
             abs_fft = get_abs_raw_data_path(job.tdms_fft_parquet_path)
             if abs_fft and os.path.exists(abs_fft):
-                file_map['parquet'].append((abs_fft, os.path.basename(abs_fft), os.path.basename(abs_fft)))
+                file_map['parquet'].append((abs_fft, os.path.basename(abs_fft),
+                                            f"{job_layout.PARQUET_DIR}/{os.path.basename(abs_fft)}"))
             
         # 7. etc (기타 참고용 파일)
         etc_vault_dir = os.path.join(VAULT_ROOT, "etc_files", f"Job_{job.job_id}")
         if os.path.exists(etc_vault_dir):
             for f in os.listdir(etc_vault_dir):
                 abs_p = os.path.join(etc_vault_dir, f)
-                file_map.setdefault('etc', []).append((abs_p, f, f"etc/{f}"))
+                file_map.setdefault('etc', []).append((abs_p, f, f"{job_layout.ETC_DIR}/{f}"))
                 
         return file_map
 
@@ -153,7 +161,8 @@ def restore_single_job_to_raw_data(job_id_or_source_folder):
         # 1. XML 복원
         job_archive = session.query(JobFileArchive).filter_by(job_id=job.job_id).first()
         if job_archive:
-            xml_dest = os.path.join(dest_dir, "metadata.xml")
+            xml_dest = os.path.join(job_layout.subdir_path(dest_dir, job_layout.XML_DIR, create=True),
+                                    "metadata.xml")
             if _copy_from_vault_or_blob(job_archive.xml_file_path, job_archive.xml_file_content, xml_dest):
                 restored_files += 1
                 
@@ -162,16 +171,18 @@ def restore_single_job_to_raw_data(job_id_or_source_folder):
             wp_archive = session.query(WorkplanFileArchive).filter_by(workplan_id=job.workplan_id).first()
             if wp_archive:
                 nc_name = os.path.basename(wp_archive.nc_file_path) if wp_archive.nc_file_path else f"{job.workplan_id}.nc"
-                nc_dest = os.path.join(dest_dir, nc_name)
+                nc_dest = os.path.join(job_layout.subdir_path(dest_dir, job_layout.NC_DIR, create=True),
+                                       nc_name)
                 if _copy_from_vault_or_blob(wp_archive.nc_file_path, wp_archive.nc_file_content, nc_dest):
                     restored_files += 1
                     
         # 3. TDMS 복원
         tdms_vault_dir = os.path.join(VAULT_ROOT, "tdms_files", f"Job_{job.job_id}")
         if os.path.exists(tdms_vault_dir):
+            tdms_dest_dir = job_layout.subdir_path(dest_dir, job_layout.TDMS_DIR, create=True)
             for f in os.listdir(tdms_vault_dir):
                 src = os.path.join(tdms_vault_dir, f)
-                dest = os.path.join(dest_dir, f)
+                dest = os.path.join(tdms_dest_dir, f)
                 if not os.path.exists(dest):
                     shutil.copy2(src, dest)
                     restored_files += 1
@@ -182,13 +193,14 @@ def restore_single_job_to_raw_data(job_id_or_source_folder):
             if log_archive and log_archive.log_file_path:
                 src = get_abs_vault_path(log_archive.log_file_path)
                 if src and os.path.exists(src):
-                    dest = os.path.join(dest_dir, os.path.basename(src))
+                    log_dest_dir = job_layout.subdir_path(dest_dir, job_layout.LOG_DIR, create=True)
+                    dest = os.path.join(log_dest_dir, os.path.basename(src))
                     if not os.path.exists(dest):
                         shutil.copy2(src, dest)
                         restored_files += 1
                     
         # 5. Surface Roughness 복원 (DB 아카이브 + Vault 폴더 전체)
-        sr_dir = os.path.join(dest_dir, "Surface_Roughness")
+        sr_dir = os.path.join(dest_dir, job_layout.ROUGHNESS_DIR)
         roughness_records = session.query(SurfaceRoughness).filter_by(job_id=job.job_id).all()
         if roughness_records:
             os.makedirs(sr_dir, exist_ok=True)
@@ -217,8 +229,8 @@ def restore_single_job_to_raw_data(job_id_or_source_folder):
                         
         # 6. etc (기타 참고용 파일) 복원
         etc_vault_dir = os.path.join(VAULT_ROOT, "etc_files", f"Job_{job.job_id}")
-        etc_job_dir = os.path.join(VAULT_ROOT, "jobs", folder_name, "etc")
-        etc_dest_dir = os.path.join(dest_dir, "etc")
+        etc_job_dir = os.path.join(VAULT_ROOT, "jobs", folder_name, job_layout.ETC_DIR)
+        etc_dest_dir = os.path.join(dest_dir, job_layout.ETC_DIR)
         
         for v_etc in [etc_vault_dir, etc_job_dir]:
             if os.path.exists(v_etc):
@@ -239,7 +251,7 @@ def restore_single_job_to_raw_data(job_id_or_source_folder):
                 if cad_archive:
                     part_folder_parts = folder_name.split('/')[:2]
                     if len(part_folder_parts) == 2:
-                        cad_dest_dir = os.path.join(RAW_DATA_DIR, part_folder_parts[0], part_folder_parts[1], "CAD_Files")
+                        cad_dest_dir = os.path.join(RAW_DATA_DIR, part_folder_parts[0], part_folder_parts[1], job_layout.CAD_DIR)
                         cad_fname = cad_archive.file_name or f"Part{wp.part_code}.step"
                         cad_dest = os.path.join(cad_dest_dir, cad_fname)
                         if not os.path.exists(cad_dest):
@@ -247,7 +259,7 @@ def restore_single_job_to_raw_data(job_id_or_source_folder):
                                 restored_files += 1
 
         # 8. Parquet 시각화 데이터 복원 (processed_parquet)
-        parquet_dir = os.path.join(dest_dir, "processed_parquet")
+        parquet_dir = os.path.join(dest_dir, job_layout.PARQUET_DIR)
         for p_name in [f"job_{job.job_id}_viz.parquet", f"job_{job.job_id}_fft.parquet"]:
             v_p = os.path.join(VAULT_ROOT, "processed_parquet", p_name)
             p_p = os.path.join(PROJECT_ROOT, "processed_data", p_name)
@@ -312,7 +324,8 @@ def recover_all_jobs(base_output_dir="recovered_data"):
             # Files
             job_archive = session.query(JobFileArchive).filter_by(job_id=job.job_id).first()
             if job_archive:
-                _copy_from_vault_or_blob(job_archive.xml_file_path, job_archive.xml_file_content, os.path.join(job_dir, "metadata.xml"))
+                _copy_from_vault_or_blob(job_archive.xml_file_path, job_archive.xml_file_content,
+                                         os.path.join(job_layout.subdir_path(job_dir, job_layout.XML_DIR, create=True), "metadata.xml"))
             if job.workplan_id:
                 wp_archive = session.query(WorkplanFileArchive).filter_by(workplan_id=job.workplan_id).first()
                 if wp_archive:
@@ -321,17 +334,19 @@ def recover_all_jobs(base_output_dir="recovered_data"):
                     nc_name = (wp_row.program_code if wp_row and wp_row.program_code else f"WP{job.workplan_id}")
                     if not nc_name.lower().endswith(".nc"):
                         nc_name = f"{nc_name}.nc"
-                    _copy_from_vault_or_blob(wp_archive.nc_file_path, wp_archive.nc_file_content, os.path.join(job_dir, nc_name))
+                    _copy_from_vault_or_blob(wp_archive.nc_file_path, wp_archive.nc_file_content,
+                                             os.path.join(job_layout.subdir_path(job_dir, job_layout.NC_DIR, create=True), nc_name))
             if job.machine_log:
                 log_archive = session.query(LogFileArchive).filter_by(log_id=job.machine_log.log_id).first()
                 if log_archive and log_archive.log_file_path:
                     src = get_abs_vault_path(log_archive.log_file_path)
                     if src and os.path.exists(src):
-                        shutil.copy2(src, os.path.join(job_dir, os.path.basename(src)))
+                        shutil.copy2(src, os.path.join(
+                            job_layout.subdir_path(job_dir, job_layout.LOG_DIR, create=True), os.path.basename(src)))
             for rr in job.surface_roughnesses:
                 sr_archive = session.query(SurfaceRoughnessArchive).filter_by(roughness_id=rr.roughness_id).first()
                 if sr_archive:
-                    sr_dir = os.path.join(job_dir, "Surface_Roughness")
+                    sr_dir = os.path.join(job_dir, job_layout.ROUGHNESS_DIR)
                     os.makedirs(sr_dir, exist_ok=True)
                     for vp in [sr_archive.stat_csv_file_path, sr_archive.curve_csv_file_path]:
                         if vp:

@@ -3,6 +3,7 @@ import csv
 import pandas as pd
 from sqlalchemy import text
 from sqlalchemy.orm import Session
+import job_layout
 from DB.database import engine, SessionLocal
 from DB.models import SurfaceRoughness, Job, SurfaceRoughnessArchive, Inspection
 from vault_manager import save_to_vault
@@ -64,7 +65,7 @@ def parse_roughness(job_folder_path, job_id=None):
     job_folder_path (예: machining_raw_data/Alchemist_Test_250917) 내의 
     Surface_Roughness 폴더를 탐색하여 DB 및 Parquet으로 변환하고, Vault에 저장합니다.
     """
-    target_dir = os.path.join(job_folder_path, "Surface_Roughness")
+    target_dir = os.path.join(job_folder_path, job_layout.ROUGHNESS_DIR)
     if not os.path.exists(target_dir):
         return False
         
@@ -150,7 +151,7 @@ def parse_roughness(job_folder_path, job_id=None):
                             job_record = session.query(Job).filter_by(job_id=job_pk).first()
                             if job_record and job_record.source_folder:
                                 import shutil
-                                raw_job_dir = os.path.join(os.path.dirname(PROCESSED_DIR), "machining_raw_data", *job_record.source_folder.split('/'), "processed_parquet")
+                                raw_job_dir = os.path.join(os.path.dirname(PROCESSED_DIR), "machining_raw_data", *job_record.source_folder.split('/'), job_layout.PARQUET_DIR)
                                 os.makedirs(raw_job_dir, exist_ok=True)
                                 raw_parquet_path = os.path.join(raw_job_dir, os.path.basename(parquet_path))
                                 shutil.copy2(parquet_path, raw_parquet_path)

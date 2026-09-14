@@ -13,10 +13,12 @@
 import json
 import os
 import time
+from contextlib import contextmanager
 
 import numpy as np
 import pandas as pd
 
+import job_layout
 from DB.database import SessionLocal
 from DB.models import Job, JobFileArchive, Workplan, WorkplanFileArchive
 from vault_manager import (get_abs_raw_data_path, get_abs_vault_path,
@@ -32,6 +34,54 @@ BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(BACKEND_DIR)
 PROCESSED_DIR = os.path.join(PROJECT_ROOT, "processed_data")
 os.makedirs(PROCESSED_DIR, exist_ok=True)
+
+# 변환 점유 표시 파일이 이 시간보다 오래되면 죽은 프로세스가 남긴 것으로 보고 회수한다.
+# (수백 MB TDMS 한 건이 2분 안팎이므로 1시간이면 충분히 여유 있는 값이다.)
+LOCK_STALE_SECONDS = 3600.0
+
+
+@contextmanager
+def job_conversion_lock(job_id):
+    """같은 Job 을 두 프로세스가 동시에 변환하지 않도록 잠근다.
+
+    run_system.py 를 실수로 여러 번 띄우면 tdms_visualizer 데몬도 그만큼 떠서, 같은 Job 을
+    동시에 집어 같은 Parquet 을 향해 나란히 변환한다(수백 MB 파일에서는 서로 CPU/디스크를
+    빼앗아 소요 시간이 눈에 띄게 늘어난다). 파일 생성의 원자성(O_CREAT|O_EXCL)으로
+    먼저 잡은 쪽만 진행시키고, 나머지는 건너뛰게 한다.
+
+    얻으면 True, 이미 다른 쪽이 작업 중이면 False 를 넘겨준다.
+    """
+    lock_path = os.path.join(PROCESSED_DIR, f".job_{job_id}.converting")
+    acquired = False
+    try:
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.write(fd, str(os.getpid()).encode())
+            os.close(fd)
+            acquired = True
+        except FileExistsError:
+            # 잠금이 남아 있어도 그 주인이 이미 죽었을 수 있으므로 나이를 보고 회수한다.
+            try:
+                age = time.time() - os.path.getmtime(lock_path)
+            except OSError:
+                age = 0.0
+            if age > LOCK_STALE_SECONDS:
+                print(f"  - [알림] Job {job_id} 의 오래된 변환 점유 표시를 회수합니다 ({age/60:.0f}분 경과).")
+                try:
+                    os.remove(lock_path)
+                    fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                    os.write(fd, str(os.getpid()).encode())
+                    os.close(fd)
+                    acquired = True
+                except OSError:
+                    acquired = False
+        yield acquired
+    finally:
+        if acquired:
+            try:
+                os.remove(lock_path)
+            except OSError:
+                pass
 
 
 def find_tdms_path(job):
@@ -95,19 +145,18 @@ def find_nc_program(job, db=None):
                 with open(p, "rb") as f:
                     return parse_nc_blocks(f.read(), name=name or os.path.basename(p))
 
-        # 3) Job 원본 폴더 안의 .nc 파일
+        # 3) Job 원본 폴더 안의 .nc 파일 (NC/ 하위를 먼저 보고, 없으면 예전 구조인 Job 루트도 본다)
         if job.source_folder:
             job_dir = os.path.join(PROJECT_ROOT, "machining_raw_data", *job.source_folder.split('/'))
-            if os.path.isdir(job_dir):
-                cands = [f for f in os.listdir(job_dir) if f.lower().endswith(".nc")]
-                # 프로그램명과 같은 파일을 우선 사용 (프로브 매크로 등 부수 NC 배제)
-                if name:
-                    base = os.path.splitext(name)[0].lower()
-                    cands.sort(key=lambda f: (base not in f.lower(), len(f)))
-                if cands:
-                    p = os.path.join(job_dir, cands[0])
-                    with open(p, "rb") as f:
-                        return parse_nc_blocks(f.read(), name=name or cands[0])
+            cands = job_layout.find_files(job_dir, job_layout.NC_DIR, ('.nc',))
+            # 프로그램명과 같은 파일을 우선 사용 (프로브 매크로 등 부수 NC 배제)
+            if name:
+                base = os.path.splitext(name)[0].lower()
+                cands.sort(key=lambda p: (base not in os.path.basename(p).lower(), len(os.path.basename(p))))
+            if cands:
+                p = cands[0]
+                with open(p, "rb") as f:
+                    return parse_nc_blocks(f.read(), name=name or os.path.basename(p))
     except Exception as e:
         print(f"  - [경고] NC 프로그램 탐색 중 오류: {e}")
     finally:
@@ -272,7 +321,12 @@ def run_visualizer_batch():
             if jobs:
                 print(f"총 {len(jobs)}개의 TDMS Parquet 미생성/재판별 건을 처리합니다.")
                 for job in jobs:
-                    parquet_path, fft_parquet_path = process_tdms_file(job, db)
+                    with job_conversion_lock(job.job_id) as acquired:
+                        if not acquired:
+                            # 다른 파이프라인 인스턴스가 이미 이 Job 을 변환 중이다.
+                            # 다음 폴링에서 결과가 반영됐는지 다시 보면 되므로 조용히 넘어간다.
+                            continue
+                        parquet_path, fft_parquet_path = process_tdms_file(job, db)
                     if not parquet_path:
                         _, wait = retry_after.get(job.job_id, (0.0, FAILURE_BACKOFF_START))
                         wait = min(max(wait, FAILURE_BACKOFF_START) * 2, FAILURE_BACKOFF_MAX)                             if job.job_id in retry_after else FAILURE_BACKOFF_START
@@ -287,7 +341,7 @@ def run_visualizer_batch():
                     raw_fft_path = fft_parquet_path
                     if job.source_folder:
                         raw_job_dir = os.path.join(PROJECT_ROOT, "machining_raw_data",
-                                                   *job.source_folder.split('/'), "processed_parquet")
+                                                   *job.source_folder.split('/'), job_layout.PARQUET_DIR)
                         os.makedirs(raw_job_dir, exist_ok=True)
                         import shutil
                         raw_parquet_path = os.path.join(raw_job_dir, f"job_{job.job_id}_viz.parquet")

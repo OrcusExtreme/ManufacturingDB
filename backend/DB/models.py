@@ -65,6 +65,8 @@ class Workingstep(Base):
     step_order = Column(Integer, nullable=False, comment='공구 호출 순서 (Index)')
     tool_number = Column(Integer, nullable=False, comment='호출된 공구 번호 (예: 11, 15, 16, 17)')
     xml_tool_code = Column(String(50), comment='XML: toolCode / toolName')
+    feed_rate = Column(Float, comment='가공 이송속도 (mm/min, NC코드 파싱)')
+    spindle_speed = Column(Float, comment='스핀들 주축 회전수 (RPM, NC코드 파싱)')
 
     workplan = relationship("Workplan", back_populates="workingsteps")
     tool = relationship("Tool", back_populates="workingsteps")

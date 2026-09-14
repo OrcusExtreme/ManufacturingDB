@@ -1,8 +1,8 @@
 import os
-import glob
 import hashlib
 import xml.etree.ElementTree as ET
 from sqlalchemy import text
+import job_layout
 from DB.database import SessionLocal
 # 공구 마스터(tool 테이블)는 공구 마스터 엑셀 업로드(tool_inserter.py)만이 생성/수정/삭제한다.
 # XML 파서가 실수로 공구 행을 만들거나 바꾸지 못하도록 Tool 모델 자체를 import하지 않는다.
@@ -40,17 +40,17 @@ def parse_xml(file_path, job_id):
             print(f"    - [스킵] 메인 가공 데이터(WorkModel)가 아닙니다. (태그: {root.tag})")
             return
             
-        # 동일한 폴더 내 NC 파일 찾기 (계층형 구조로 인해 1:1 매칭됨)
-        xml_dir = os.path.dirname(file_path)
-        
-        nc_files = glob.glob(os.path.join(xml_dir, "*.nc"))
-        nc_files.extend(glob.glob(os.path.join(xml_dir, "*.NC")))
-        
+        # 같은 Job 폴더의 NC 파일 찾기 (계층형 구조로 인해 1:1 매칭됨).
+        # XML 은 XML/ 하위에, NC 는 NC/ 하위에 있으므로 Job 폴더까지 올라가서 찾는다.
+        job_dir = job_layout.job_dir_of(file_path)
+        nc_files = job_layout.find_files(job_dir, job_layout.NC_DIR, ('.nc',))
+
         # 백업 파일 매핑 방지 필터링
         valid_nc_files = [f for f in nc_files if 'backup' not in f.lower() and 'old' not in f.lower()]
         nc_file_path = valid_nc_files[0] if valid_nc_files else None
         
         nc_hash = "NOHASH"
+        nc_binary_data = None
         if nc_file_path and os.path.exists(nc_file_path):
             with open(nc_file_path, 'rb') as f:
                 nc_binary_data = f.read()
@@ -93,6 +93,24 @@ def parse_xml(file_path, job_id):
             Workplan.program_code == program_code,
             Workplan.nc_hash == nc_hash,
         ).first()
+
+        if not workplan and nc_hash != "NOHASH":
+            # NC 파일이 XML 보다 늦게 도착하면 해시를 모르는 채로("NOHASH") Workplan 이 먼저 만들어진다.
+            # 그 상태에서 NC 가 들어와 해시를 알게 됐다고 새 Workplan 을 만들면, 앞서 만든 행과
+            # 거기 달린 Workingstep 이 아무 Job 도 참조하지 않는 고아로 남는다.
+            # 같은 부품·프로그램의 NOHASH 행이 있으면 새로 만들지 말고 그 행의 해시를 채워 재사용한다.
+            workplan = db.query(Workplan).filter(
+                Workplan.part_code == part_code,
+                Workplan.program_code == program_code,
+                Workplan.nc_hash == "NOHASH",
+            ).first()
+            if workplan:
+                workplan.nc_hash = nc_hash
+                if nc_file_path and not workplan.nc_file_path:
+                    workplan.nc_file_path = nc_file_path
+                db.flush()
+                print(f"    - 뒤늦게 확보한 NC 해시({nc_hash})를 기존 Workplan({workplan.workplan_id})에 반영했습니다.")
+
         is_new_workplan = False
         if not workplan:
             workplan = Workplan(
@@ -191,6 +209,13 @@ def parse_xml(file_path, job_id):
                     "used_count": safe_int(props.get('toolUsedCount'), 0),
                     "offsets": offsets
                 })
+
+        # NC 코드가 존재하면 Workingstep의 feed_rate, spindle_speed 동기화
+        try:
+            from parsers.nc_parser import sync_workplan_nc_cutting_conditions
+            sync_workplan_nc_cutting_conditions(db, workplan_id, nc_file_path=nc_file_path, nc_content=nc_binary_data)
+        except Exception as e_nc:
+            print(f"[XML Parser] NC 가공조건 동기화 중 경고 ({workplan_id}): {e_nc}")
         
         # 4. Job Upsert (런타임 실행 이력)
         start_time_text = root.findtext('StartTime')

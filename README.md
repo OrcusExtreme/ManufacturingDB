@@ -5,7 +5,7 @@
 [![ORM](https://img.shields.io/badge/SQLAlchemy-2.0%2B-red.svg)](https://www.sqlalchemy.org/)
 [![Frontend](https://img.shields.io/badge/Streamlit-1.61%2B-FF4B4B.svg)](https://streamlit.io/)
 [![Standard](https://img.shields.io/badge/Standard-ISO%2014649%20(STEP--NC)-green.svg)](https://www.iso.org/)
-[![Release](https://img.shields.io/badge/Release-V2.3.4-brightgreen.svg)](https://github.com/OrcusExtreme/ManufacturingDB)
+[![Release](https://img.shields.io/badge/Release-V2.3.5-brightgreen.svg)](https://github.com/OrcusExtreme/ManufacturingDB)
 
 공작기계지능화실험실(Machine Tool Intelligence Lab)의 **통합 스마트 제조 데이터베이스 및 실시간 분석 플랫폼**입니다.  
 공작기계(CNC)에서 생성되는 다양한 이기종 데이터(XML 메타데이터, NC 프로그램, 100kHz+ 고주파 NI TDMS 진동 센서, 1Hz CNC 상태 로그, 표면 조도 측정 CSV, 3D CAD 도면)를 **Watchdog 기반으로 자동 감시·수집·파싱**하여 **ISO 14649(STEP-NC) 표준 기반 RDBMS**에 정규화 적재하고, 연구원 및 관리자에게 고성능 웹 대시보드를 제공합니다.
@@ -53,7 +53,7 @@ DB 테이블 조회/편집, 재난 복구(ZIP)까지 하나의 화면 흐름에�
   ├─ log_parser.py       : CNC 1Hz 로그 통계(Max/Avg Load, RPM, Feed) 요약 및 알람 수집
   ├─ roughness_parser.py : 조도 측정 결과(Ra, Rq, Rz) 자동 계산 및 2D 단면 Parquet 변환
   ├─ cad_parser.py       : 3D 모델(STEP, STL) 파트 매핑 및 원본 아카이빙
-  └─ nc_parser.py        : NC 프로그램 코드 추출 및 MD5 해시 식별자 생성
+  └─ nc_parser.py        : NC 프로그램 코드 추출, 공구별 절삭조건(Feed Rate / Spindle Speed) 파싱 및 MD5 해시 식별자 생성
        │
        ▼
 [MySQL Database (SQLAlchemy ORM)]  ◄═══►  [Vault System (vault_manager.py)]
@@ -86,7 +86,7 @@ erDiagram
 
 | 도메인 | 테이블명 | 주요 역할 |
 | :--- | :--- | :--- |
-| **마스터 & 계획** | `part`, `workplan`, `tool`, `workingstep`, `cad_file_archive` | 가공 대상 부품(숫자 PK + `part_name`), NC 공정 계획(숫자 PK + 부품·프로그램·NC해시 유일 제약), 공구 제원, 단위 공정 순서, 3D 도면 관리 |
+| **마스터 & 계획** | `part`, `workplan`, `tool`, `workingstep`, `cad_file_archive` | 가공 대상 부품(숫자 PK + `part_name`), NC 공정 계획(숫자 PK + 부품·프로그램·NC해시 유일 제약), 공구 제원, 단위 공정 순서 및 절삭 가공조건(Feed/Spindle), 3D 도면 관리 |
 | **가공 실행 & 품질** | `job`, `machine_log`, `surface_roughness`, `inspection`, `env_memo` | 가공 이력(시간,거리,에러), CNC 1Hz 부하 요약, 다지점 표면조도, 공차/합부(PASS/FAIL), 온습도/메모 |
 | **아카이브 & 백업** | `workplan_file_archive`, `job_file_archive`, `surface_roughness_archive`, `log_file_archive` | 원본 파일 Vault 저장 경로 및 LONGBLOB 이중화 백업 데이터 |
 
@@ -101,7 +101,16 @@ ManufacturingDB/
 ├── run_system.py                     # 전체 서비스 원클릭 통합 기동 관리자
 ├── gemini.md                         # 전체 시스템 복원 및 상세 기술 명세서
 ├── machining_raw_data/               # 외부 장비 데이터 유입 모니터링 폴더
-│   └── {ProjectName}/{PartName}/{JobID}/
+│   └── {ProjectName}/{PartName}/
+│       ├── CAD_Files/                # 3D 도면 (Part 단위, 가공차수와 무관)
+│       └── {JobID}/                  # 가공차수 1건
+│           ├── XML/                  # 장비 메타데이터
+│           ├── Log/                  # CNC 1Hz 상태 로그 (.log/.csv)
+│           ├── TDMS/                 # 고주파 센서 원본
+│           ├── NC/                   # NC 프로그램
+│           ├── Surface_Roughness/    # 조도 측정 결과
+│           ├── etc/                  # 참고용 기타 파일
+│           └── processed_parquet/    # 변환 산출물 (시스템 생성)
 ├── archive_vault/                    # SHA 해시 기반 원본 파일 안전 보관소
 ├── processed_data/                   # 변환된 시계열 및 FFT Parquet 저장소
 ├── failed_data/                      # 파싱 실패 격리 보관소 (DLQ)
@@ -115,13 +124,19 @@ ManufacturingDB/
 │   ├── vault_manager.py              # 파일 SHA 해시 기반 Vault 아카이빙
 │   ├── integrity.py                  # SHA-256 원본 복원 검증 단일 로직 (3-상태 결과)
 │   ├── integrity_monitor.py          # 원본 복원 검증 백그라운드 감시자 (주기 실행 + 로그 경고)
+│   ├── job_layout.py                 # Job 폴더 하위 분류(XML/Log/TDMS/NC) 규칙 단일 출처
 │   ├── migrate_keys_v3.py            # 키 정규화 마이그레이션 (숫자 PK 전환, 데이터 보존)
+│   ├── migrate_job_folder_layout.py  # 기존 Job 폴더를 자료 종류별 하위 폴더로 이전
+│   ├── backfill_workingstep_conditions.py # 기존 Workplan 대상 NC 절삭조건(Feed/Spindle) 소급 갱신
+│   ├── reset_database_and_storage.py # DB(orcus) 및 스토리지(raw/vault/processed/failed) 완전 초기화
 │   ├── DB/                           
 │   │   ├── database.py               # SQLAlchemy 커넥션 풀링 및 세션 팩토리
 │   │   ├── models.py                 # 14개 테이블 DDL 및 ORM 정의
 │   │   └── schema_patch.py           # 기동 시 누락 컬럼만 채우는 경량 스키마 보정
 │   ├── tests/
-│   │   └── test_tdms_alignment.py    # 합성 TDMS 기반 구간 판별/시간축 정렬 회귀 테스트
+│   │   ├── test_tdms_alignment.py    # 합성 TDMS 기반 구간 판별/시간축 정렬 회귀 테스트
+│   │   ├── test_nc_parser.py         # NC 절삭조건(Feed Rate/Spindle Speed/Tool) 파싱 단위 테스트
+│   │   └── verify_e2e_cutting_conditions.py # 실가공 NC(O0911.nc) 기반 E2E 파싱 및 DB 연동 검증
 │   └── parsers/                      # 확장자별 전용 파싱 엔진
 │       ├── xml_parser.py             # XML 메타데이터 및 공구 상태 파서
 │       ├── tdms_parser.py            # NI TDMS 고속 헤더 파서
@@ -228,6 +243,34 @@ XML/NC/CAD 원본이 저장 시점과 바이트 단위로 동일한지에 대한
 ---
 
 ## 🚀 릴리즈 노트 (Release Notes)
+
+### [V2.3.5] - 2026-09-14
+- **Workingstep 가공 조건 (Feed Rate & Spindle Speed) NC 자동 파싱 및 DB 연동**:
+  - **스키마 확장**: `workingstep` 테이블에 `feed_rate` (Float, mm/min, 가공 이송속도) 및 `spindle_speed` (Float, RPM, 주축 회전수) 컬럼 추가 (`backend/DB/models.py`).
+  - **NC 절삭 조건 파서 엔진 탑재** (`backend/parsers/nc_parser.py`):
+    - `parse_nc_cutting_conditions(nc_input)` 신설: 공구 호출(`M6`/`T`), 주축 회전수(`S`), 선형/원호 절삭 이송속도(`F`) 블록을 정규식 및 토큰 분석기로 정밀 파싱. 공백 생략 컴팩트 코드(`S3800M3`, `G1Z-2F710`, `M6T6`), 표준 공백 분리형, 블록 번호(`Nxx`), 소수점 표기(`F710.0`) 등 다양한 NC 코드 스타일을 100% 포괄.
+    - `sync_workplan_nc_cutting_conditions()` 구현: Workplan 하위 Workingstep의 공구 번호/순서와 매핑하여 DB 레코드에 절삭 조건 자동 동기화 (UPDATE/INSERT).
+  - **수집 파이프라인 연계 및 안전성 개선** (`backend/parsers/xml_parser.py`):
+    - XML 수집 시 연관 NC 파일이 존재하면 즉시 F/S 절삭 조건 연동 파싱.
+    - 파일 투입 순서 차이로 NC 파일 미도착 시 발생할 수 있던 `nc_binary_data` UnboundLocalError를 방지하도록 기본 바인딩(`nc_binary_data = None`) 사전 정의.
+  - **소급 동기화 백필 도구 신설** (`backend/backfill_workingstep_conditions.py`): 기등록된 Workplan들의 NC 파일을 재탐색하여 누락된 절삭 가공 조건을 일괄 보정하는 CLI 스크립트 제공.
+  - **검증 체계 구축**: `backend/tests/test_nc_parser.py` (단위 테스트 4종 전원 통과) 및 `backend/tests/verify_e2e_cutting_conditions.py` (실제 `O0911.nc` 실가공 원본 파일 기반 E2E 파싱 및 DB 적재 검증 통과 - F: 710 mm/min, S: 3800 RPM).
+- **계층형 마스터 데이터 UI 가공조건 시각화** (`frontend/components/master_tree.py`):
+  - **Workingsteps 테이블 컬럼 확장**: `주축회전수 (RPM)` 및 `이송속도 (mm/min)` 컬럼 추가 및 결측치 예외 처리(`-`).
+  - **순서별 가공 조건 요약 뱃지(Chips)**: 상단에 공구 호출 단계별 적용 공구 및 가공 조건을 직관적인 칩 형태로 시각화 (`Step 1 (T6): ⚡ 3,800 RPM | ⏩ 710 mm/min`)하여 한눈에 절삭 조건 파악 가능.
+- **무중단 스키마 자동 보정(`schema_patch.py`) 강화**:
+  - `part.part_name`, `workplan.nc_hash`, `job_file_archive.xml_file_sha256`, `cad_file_archive.file_sha256`, `workingstep.feed_rate`, `workingstep.spindle_speed` 등 누락되기 쉬운 컬럼을 `PENDING_COLUMNS`에 전면 등록.
+  - 시스템 기동 시 누락 컬럼 자동 추가 및 `part.part_name` NULL 값 자동 채움(`UPDATE part SET part_name = part_code WHERE part_name IS NULL`)을 무중단 지원.
+- **더미 데이터 및 고아 Workplan 자동 청소 고도화** (`backend/clean_dummy_data.py`):
+  - `workplan_id`의 `INT AUTO_INCREMENT` 정수 키 전환에 맞춰 dummy workplan 쿼리 로직을 `program_code.like("UNKNOWN_WORKPLAN_%")` 및 `program_code == "Unknown"`으로 고도화.
+  - 파일 유입 타이밍 차이로 발생할 수 있는 참조 없는 고아 Workplan을 안전하게 자동 정리.
+- **백그라운드 파이프라인 프로세스 생존 감시 및 복원력 강화** (`run_system.py`):
+  - `run_system.py` 메인 루프에서 백엔드 파이프라인(Watchdog), Streamlit 대시보드(8501), TDMS 변환기의 프로세스 상태(`p.poll()`)를 실시간 주기 감시하고 비정상 종료 시 경고 로그 출력.
+  - 예외 발생 시 상세 `traceback` 포맷팅 로깅 제공.
+- **데이터베이스 & 파일 스토리지 완전 초기화(Reset) 도구 제공** (`backend/reset_database_and_storage.py`):
+  - Windows 환경 파일/폴더의 읽기 전용 속성 해제 및 재시도 핸들러(`_remove_readonly`) 구현.
+  - MySQL 외래키 제약조건(`SET FOREIGN_KEY_CHECKS = 0`)을 고려하여 기존 16개 테이블 일괄 안전 삭제 및 최신 `models.py` 기반 14개 테이블 원클릭 클린 재생성(`Base.metadata.create_all`).
+  - `machining_raw_data/`, `archive_vault/`, `processed_data/`, `failed_data/`의 루트 및 기본 디렉터리 구조를 보존하면서 내부 잔여 파일 완전 초기화 지원.
 
 ### [V2.3.4] - 2026-09-11
 - **NC 코드 대조 기반 실가공 구간 자동 판별** (`backend/tdms_alignment.py` 신규): TDMS는 가공 한 건이 아니라

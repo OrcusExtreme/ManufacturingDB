@@ -6,6 +6,21 @@ from DB.database import SessionLocal
 from DB.models import Job, MachineLog, LogFileArchive
 from vault_manager import save_to_vault
 
+# CNC 1Hz 로그를 구분하기 위한 헤더 표식.
+# 같은 Job 폴더에는 CNC 로그 말고도 .log 확장자를 쓰는 파일이 떨어질 수 있다
+# (실제로 NI TDMS 라이브러리가 "TDS Exception in Initialize..." 오류를 UTF-16 .log 로 남긴다).
+# 그런 파일을 그대로 받아들이면 job.log_file_path 가 엉뚱한 파일을 가리키고
+# machine_log 통계가 전부 0 으로 덮어써지므로, 헤더를 보고 아니면 건너뛴다.
+CNC_LOG_REQUIRED_COLUMNS = {'time'}
+CNC_LOG_SIGNATURE_COLUMNS = {'cls', 'crpm', 'cfr', 'ctime', 'cut'}
+
+
+def looks_like_cnc_log(fieldnames):
+    """csv 리더가 읽은 헤더가 CNC 1Hz 로그의 것인지 판단한다."""
+    columns = {(name or '').strip().lower() for name in (fieldnames or [])}
+    return CNC_LOG_REQUIRED_COLUMNS <= columns and bool(columns & CNC_LOG_SIGNATURE_COLUMNS)
+
+
 def safe_float(val, default=0.0):
     try:
         return float(val) if val else default
@@ -77,7 +92,13 @@ def parse_log(file_path, job_id):
                 # Fallback: 탭이 있으면 탭, 없으면 콤마로 설정
                 delimiter = '\t' if '\t' in sample else ','
                 reader = csv.DictReader(f, delimiter=delimiter)
-            
+
+            if not looks_like_cnc_log(reader.fieldnames):
+                preview = ", ".join((reader.fieldnames or [])[:5]) or "(헤더 없음)"
+                print(f"    - [건너뜀] CNC 1Hz 로그 형식이 아니라 무시합니다 "
+                      f"({os.path.basename(file_path)} / 열: {preview})")
+                return False
+
             for row in reader:
                 # 타임스탬프
                 row_t = row.get('time', '').strip()

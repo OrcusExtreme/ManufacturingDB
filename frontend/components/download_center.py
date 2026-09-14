@@ -5,6 +5,8 @@ import zipfile
 import pandas as pd
 import streamlit as st
 
+import job_layout
+
 from .common import PROJECT_ROOT, load_data
 
 ALL = "(전체)"
@@ -66,6 +68,70 @@ def _job_folder(source_folder):
     return folder if os.path.isdir(folder) else None
 
 
+def _part_folder(source_folder):
+    """Job 의 source_folder({Project}/{Part}/{JobID})에서 Part 폴더 경로를 얻는다.
+
+    CAD 도면은 가공차수가 아니라 부품에 딸린 자료라 Job 폴더보다 한 단계 위에 있다.
+    """
+    normalized = (source_folder or "").replace("\\", "/").strip("/")
+    segments = normalized.split("/")
+    if len(segments) < 2:
+        return None
+    return os.path.join(RAW_DIR, *segments[:2])
+
+
+def _part_cad_files(scoped):
+    """선택한 부품의 CAD 파일 목록 [(실제 경로, 압축 내 경로)].
+
+    원본 폴더(CAD_Files/)를 먼저 보고, 없으면 Vault 경로 -> DB BLOB 순으로 조달한다.
+    BLOB 만 남아 있는 경우에는 임시 파일로 풀어 내려받을 수 있게 한다.
+    """
+    if scoped.empty:
+        return []
+
+    source_folder = scoped.iloc[0]['source_folder'] or ""
+    part_dir = _part_folder(source_folder)
+    if part_dir:
+        cad_dir = os.path.join(part_dir, job_layout.CAD_DIR)
+        if os.path.isdir(cad_dir):
+            found = [(os.path.join(cad_dir, name), f"{job_layout.CAD_DIR}/{name}")
+                     for name in sorted(os.listdir(cad_dir))
+                     if os.path.isfile(os.path.join(cad_dir, name))]
+            if found:
+                return found
+
+    # 원본 폴더가 없거나 비었으면 아카이브에서 조달한다.
+    from sqlalchemy import text as _text
+    from vault_manager import get_abs_vault_path
+
+    from .common import engine
+    collected = []
+    with engine.connect() as conn:
+        part_code = conn.execute(_text(
+            "SELECT w.part_code FROM job j JOIN workplan w ON j.workplan_id = w.workplan_id "
+            "WHERE j.job_id = :jid"
+        ), {"jid": int(scoped.iloc[0]['job_id'])}).scalar()
+        if not part_code:
+            return []
+
+        rows = conn.execute(_text(
+            "SELECT cad_id, file_name, file_path, file_content FROM cad_file_archive "
+            "WHERE part_code = :pc ORDER BY cad_id"
+        ), {"pc": part_code}).fetchall()
+
+    for cad_id, file_name, file_path, file_content in rows:
+        name = file_name or f"Part{part_code}_{cad_id}.step"
+        abs_vault = get_abs_vault_path(file_path) if file_path else None
+        if abs_vault and os.path.exists(abs_vault):
+            collected.append((abs_vault, f"{job_layout.CAD_DIR}/{name}"))
+        elif file_content:
+            temp = tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(name)[1])
+            temp.write(file_content)
+            temp.close()
+            collected.append((temp.name, f"{job_layout.CAD_DIR}/{name}"))
+    return collected
+
+
 @st.cache_data(ttl=60)
 def _job_catalog():
     df = load_data("""
@@ -117,10 +183,12 @@ def _make_zip(files):
 def _prepare(state_key, files, download_name):
     """파일이 1개면 원본 그대로, 여러 개면 ZIP으로 묶어 다운로드 슬롯에 담는다."""
     if len(files) == 1:
-        abs_path = files[0][0]
+        abs_path, arcname = files[0]
+        # 내려받는 이름은 압축 내 경로(원래 이름)를 따른다. DB BLOB 에서 풀어낸 임시 파일은
+        # 실제 경로가 tmpXXXX 라서 그대로 쓰면 사용자에게 의미 없는 이름이 내려간다.
         st.session_state[state_key] = {
             'path': abs_path,
-            'file_name': os.path.basename(abs_path),
+            'file_name': os.path.basename(arcname) or os.path.basename(abs_path),
             'mime': "application/octet-stream",
         }
     else:
@@ -155,13 +223,13 @@ def render_download_center():
     n1, n2, n3 = st.columns(3)
     with n1:
         projects = sorted(catalog['project_name'].unique().tolist())
-        sel_project = st.selectbox("1️⃣ 프로젝트 (Project Name)", [ALL] + projects, key="dc_project")
+        sel_project = st.selectbox(":material/counter_1: 프로젝트 (Project Name)", [ALL] + projects, key="dc_project")
 
     scoped = catalog if sel_project == ALL else catalog[catalog['project_name'] == sel_project]
 
     with n2:
         parts = sorted(scoped['part_name'].unique().tolist())
-        sel_part = st.selectbox("2️⃣ 부품 (Part Name)", [ALL] + parts, key="dc_part")
+        sel_part = st.selectbox(":material/counter_2: 부품 (Part Name)", [ALL] + parts, key="dc_part")
 
     if sel_part != ALL:
         scoped = scoped[scoped['part_name'] == sel_part]
@@ -173,7 +241,7 @@ def render_download_center():
             for _, row in scoped.iterrows()
         }
         sel_job = st.selectbox(
-            "3️⃣ 가공 이력 (Job)", [ALL] + job_ids,
+            ":material/counter_3: 가공 이력 (Job)", [ALL] + job_ids,
             format_func=lambda x: x if x == ALL else job_labels.get(x, f"Job {x}"), key="dc_job",
         )
 
@@ -197,13 +265,41 @@ def render_download_center():
         st.session_state['dc_scope_sig'] = scope_name
         st.session_state.pop('dc_prepared', None)
         st.session_state.pop('dc_single_download', None)
+        st.session_state.pop('dc_cad', None)
 
     st.divider()
+
+    # CAD 도면은 가공차수가 아니라 부품에 딸린 자료라, 부품이 정해지는 순간 따로 받을 수 있다.
+    if sel_part != ALL:
+        _render_cad_download(scoped, sel_project, sel_part)
 
     if sel_job == ALL:
         _render_scope_download(scoped, scope_name)
     else:
         _render_job_download(scoped, scope_name, sel_job)
+
+
+def _render_cad_download(scoped, sel_project, sel_part):
+    """선택한 부품의 CAD 도면만 따로 내려받는 영역."""
+    cad_files = _part_cad_files(scoped)
+    if not cad_files:
+        return
+
+    st.markdown("#### :material/view_in_ar: 부품 도면(CAD) 다운로드")
+    st.caption(f"`{sel_part}` 부품에 등록된 3D 도면입니다. 가공차수와 무관하게 부품 단위로 보관됩니다.")
+
+    names = ", ".join(os.path.basename(arc) for _abs, arc in cad_files)
+    st.caption(f"대상 파일 {len(cad_files)}개: {names}")
+
+    project_label = sel_project if sel_project != ALL else "AllProjects"
+    cad_name = f"{project_label}_{sel_part}_CAD".replace(" ", "").replace("/", "-")
+
+    if st.button("CAD 파일", key="dc_btn_cad", icon=":material/view_in_ar:"):
+        with st.spinner("CAD 파일을 준비하는 중입니다..."):
+            _prepare('dc_cad', cad_files, cad_name)
+
+    _offer_download('dc_cad', "CAD 다운로드")
+    st.divider()
 
 
 def _render_scope_download(scoped, scope_name):

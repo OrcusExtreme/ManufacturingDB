@@ -6,6 +6,7 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 from collections import OrderedDict
 
+import job_layout
 from DB.schema_patch import ensure_schema
 from parsers.xml_parser import parse_xml
 from parsers.tdms_parser import parse_tdms
@@ -83,7 +84,7 @@ class MachiningDataHandler(FileSystemEventHandler):
                 target_jobs = db.query(Job).filter(Job.source_folder.like(f"{prefix}%")).all()
             else:
                 # Job 단위 또는 개별 파일 삭제 (예: Alchemist/Bracket/1 또는 .../metadata.xml)
-                if rel_parts[2] == "CAD_Files":
+                if rel_parts[2] == job_layout.CAD_DIR:
                     # Part 레벨 CAD 파일 삭제 감지 시 Part에 속한 Job의 CAD 복원
                     prefix = f"{rel_parts[0]}/{rel_parts[1]}/"
                     target_jobs = db.query(Job).filter(Job.source_folder.like(f"{prefix}%")).all()
@@ -156,10 +157,16 @@ class MachiningDataHandler(FileSystemEventHandler):
 
     def handle_file(self, file_path):
         file_path_norm = os.path.normpath(file_path)
-        
+
         if file_path_norm in self.processed_files:
             return
-            
+
+        # 이미 사라진 경로에 대한 뒤늦은 이벤트(하위 폴더로 옮겼거나 삭제된 경우)는 바로 넘어간다.
+        # 그냥 두면 wait_for_file_ready 가 10초를 기다린 뒤에야 포기해서, 단일 워커 스레드가
+        # 그 시간 동안 뒤에 쌓인 진짜 파일들을 처리하지 못한다.
+        if not os.path.exists(file_path_norm):
+            return
+
         file_extension = os.path.splitext(file_path_norm)[1].lower()
         file_name = os.path.basename(file_path_norm)
 
@@ -186,19 +193,39 @@ class MachiningDataHandler(FileSystemEventHandler):
         # 성공적으로 열리고 전송이 끝나면 처리 대상
         self._mark_processed(file_path_norm)
 
-        # 계층형 폴더 구조 분석: machining_raw_data / Project / Part / JobID(또는 CAD_Files) / [Surface_Roughness]
+        # 계층형 폴더 구조 분석:
+        #   machining_raw_data / Project / Part / CAD_Files / 도면
+        #   machining_raw_data / Project / Part / JobID / {XML|Log|TDMS|NC|Surface_Roughness|etc} / 파일
         parts = file_path_norm.split(os.sep)
         try:
             raw_idx = parts.index("machining_raw_data")
             rel_parts = parts[raw_idx + 1:] # Project, Part, JobID, ...
         except ValueError:
             return
-            
+
         if len(rel_parts) < 3:
             # Project/Part/ 파일은 처리 불가
             return
-            
-        if len(rel_parts) > 3 and rel_parts[3].lower() == "etc":
+
+        # Job 폴더 바로 아래 떨어진 파일은 확장자에 맞는 하위 폴더로 옮긴 뒤 처리한다.
+        # (장비가 예전 방식으로 한 폴더에 쏟아내도 구조가 저절로 정리된다)
+        if len(rel_parts) == 4 and rel_parts[2] != job_layout.CAD_DIR:
+            moved = job_layout.relocate_into_subdir(file_path_norm)
+            if os.path.normpath(moved) != file_path_norm:
+                print(f"[정리] {file_name} -> {os.path.basename(os.path.dirname(moved))}/ 로 이동")
+                file_path_norm = os.path.normpath(moved)
+                # 이동으로 생기는 watchdog 생성 이벤트가 같은 파일을 두 번 처리하지 않도록 미리 표시
+                self._mark_processed(file_path_norm)
+                parts = file_path_norm.split(os.sep)
+                rel_parts = parts[parts.index("machining_raw_data") + 1:]
+
+        # 하위 폴더 이름은 사람이 손으로 만들면 대소문자가 섞이므로 표준 표기로 맞춰 본다.
+        sub_kind = job_layout.canonical_subdir(rel_parts[3]) if len(rel_parts) > 4 else None
+
+        if sub_kind == job_layout.PARQUET_DIR:
+            return      # 시스템이 만든 산출물이라 다시 수집할 필요가 없다
+
+        if sub_kind == job_layout.ETC_DIR:
             project_name = rel_parts[0]
             part_name = rel_parts[1]
             folder_level_3 = rel_parts[2]
@@ -222,22 +249,17 @@ class MachiningDataHandler(FileSystemEventHandler):
         project_name = rel_parts[0]
         part_name = rel_parts[1]
         folder_level_3 = rel_parts[2] # JobID 또는 CAD_Files
-        
-        is_roughness = False
-        is_cad = False
-        
-        if folder_level_3 == "CAD_Files":
-            is_cad = True
-        else:
-            if len(rel_parts) > 4 and rel_parts[3] == "Surface_Roughness":
-                is_roughness = True
-            
-            job_id_num = folder_level_3
-            current_job_id = f"{project_name}/{part_name}/{job_id_num}"
+
+        is_cad = folder_level_3 == job_layout.CAD_DIR
+        is_roughness = sub_kind == job_layout.ROUGHNESS_DIR
+        current_job_id = None
+        if not is_cad:
+            current_job_id = f"{project_name}/{part_name}/{folder_level_3}"
 
         print(f"[처리] 파일 감지: {file_path_norm}")
 
-        # 파일 확장자에 따른 분기 처리
+        # 어느 하위 폴더에 있느냐로 자료 종류를 정하고, 확장자는 그 안에서 다시 확인한다.
+        # (예전처럼 Job 루트에 남아 있는 파일은 sub_kind 가 없으므로 확장자만으로 판단한다)
         try:
             if is_cad:
                 if file_extension in ['.step', '.stp', '.stl']:
@@ -245,7 +267,20 @@ class MachiningDataHandler(FileSystemEventHandler):
             elif is_roughness:
                 if file_extension in ['.txt', '.csv', '.fpk']:
                     self.process_roughness(file_path_norm, current_job_id)
-            else:
+            elif sub_kind == job_layout.XML_DIR:
+                if file_extension == '.xml':
+                    self.process_xml(file_path_norm, current_job_id)
+            elif sub_kind == job_layout.TDMS_DIR:
+                if file_extension == '.tdms':
+                    self.process_tdms(file_path_norm, current_job_id)
+            elif sub_kind == job_layout.NC_DIR:
+                if file_extension == '.nc':
+                    self.process_nc(file_path_norm, current_job_id)
+            elif sub_kind == job_layout.LOG_DIR:
+                if file_extension in ['.csv', '.log']:
+                    self.process_log(file_path_norm, current_job_id)
+            elif sub_kind is None:
+                # Job 루트에 남아 있는 예전 구조 (이동 규칙이 없는 확장자 등)
                 if file_extension == '.xml':
                     self.process_xml(file_path_norm, current_job_id)
                 elif file_extension == '.tdms':

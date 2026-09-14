@@ -82,6 +82,8 @@ def render_master_tree():
                     ws_query = f"""
                         SELECT ws.step_order AS '순서', ws.operation_type AS '작업(Op)',
                                ws.xml_tool_code AS '사용 공구',
+                               ws.spindle_speed AS '주축회전수 (RPM)',
+                               ws.feed_rate AS '이송속도 (mm/min)',
                                t.company_name AS '제조사',
                                t.tool_type AS '공구종류',
                                t.cutter_diameter AS '직경',
@@ -95,6 +97,13 @@ def render_master_tree():
 
                     if not ws_df.empty:
                         st.markdown("##### 하위 가공 스텝 (Workingsteps)")
-                        st.dataframe(ws_df, width="stretch", hide_index=True)
+
+                        # 단위는 열 이름에만 적고 칸에는 숫자만 남긴다 (결측값은 '-')
+                        disp_df = ws_df.copy()
+                        for column in ('주축회전수 (RPM)', '이송속도 (mm/min)'):
+                            disp_df[column] = disp_df[column].apply(
+                                lambda v: f"{int(v):,}" if pd.notnull(v) else "-"
+                            )
+                        st.dataframe(disp_df, width="stretch", hide_index=True)
                     else:
                         st.info("등록된 Workingstep이 없습니다.")

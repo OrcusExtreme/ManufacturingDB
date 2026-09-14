@@ -21,6 +21,7 @@ __data__/
 archive_vault/
 processed_data/
 failed_data/
+.playwright-mcp/
 
 # IDEs
 .vscode/
