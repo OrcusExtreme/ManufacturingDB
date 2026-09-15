@@ -98,7 +98,7 @@ data/machining_raw_data/{프로젝트}/{부품}/{가공차수}/
 [파서 6종] xml · nc · tdms · log · roughness · cad
       │
       ├─▶ MySQL (정규화 적재)
-      ├─▶ data/archive_vault/ (원본 사본)
+      ├─▶ {보관소 루트}/archive_vault (원본 사본 · 프로젝트 밖 가능)
       └─▶ LONGBLOB (15MB 이하 원본)
       │
       ▼
@@ -615,7 +615,7 @@ Vault(`cad_models/Part_{부품명}/`) 보관 + 15MB 이하면 LONGBLOB + SHA-256
 4. 기존 전체 삭제 → 엑셀 내용만 등록 → `tool_id` 를 1부터 연속 재부여
 5. `relink_workingsteps()` 가 `xml_tool_code`(없으면 `T{tool_number}`) 기준으로
    가공 이력의 공구 연결을 다시 맺음. 이번 엑셀에 없는 공구는 `tool_id` 만 비우고 호출 번호는 보존
-6. 원본을 `data/archive_vault/tool_master/tool_info.xlsx` 로 보관(최신 1개만)
+6. 원본을 `{보관소 루트}/tool_master/tool_info.xlsx` 로 보관(최신 1개만)
 
 ---
 
@@ -741,9 +741,41 @@ python backend/tdms_alignment.py --tdms <파일> --nc <파일> [--xml <파일>] 
 
 ```python
 PROJECT_ROOT   = <프로젝트 루트>
-VAULT_ROOT     = PROJECT_ROOT/archive_vault
-RAW_DATA_ROOT  = PROJECT_ROOT/machining_raw_data
+DATA_ROOT      = PROJECT_ROOT/data
+RAW_DATA_ROOT  = DATA_ROOT/machining_raw_data
+PROCESSED_ROOT = DATA_ROOT/processed_data
+FAILED_ROOT    = DATA_ROOT/failed_data
+VAULT_ROOT     = resolve_vault_root()   # 프로젝트 밖으로 뺄 수 있다
 ```
+
+**보관소 위치는 환경변수로 정합니다.**
+
+보관소가 프로젝트 안에 있으면 프로젝트 폴더를 지우는 순간 원본 백업까지 같이 사라집니다.
+백업의 존재 이유가 "원본이 없어져도 복원할 수 있다"는 것이라, 보관소는 프로젝트와 수명이
+다른 곳(예: DB 가 설치된 폴더)에 두어야 합니다. `.env` 에서 지정합니다.
+
+| 우선순위 | 환경변수 | 의미 |
+| :--- | :--- | :--- |
+| 1 | `ORCUS_VAULT_ROOT` | 보관소 절대경로를 직접 지정 |
+| 2 | `ORCUS_DB_DATA_DIR` | DB 설치 폴더. 그 아래 `archive_vault/` 를 만들어 사용 |
+| 3 | (없음) | 예전 위치 `data/archive_vault` 를 그대로 사용 |
+
+```ini
+# .env
+ORCUS_DB_DATA_DIR=C:\ProgramData\MySQL\MySQL Server 8.0\Data\orcus
+```
+
+OS 환경변수가 이미 있으면 `.env` 보다 그쪽이 우선합니다(`load_dotenv` 기본 동작).
+
+DB 에 저장되는 Vault 경로는 **전부 `VAULT_ROOT` 기준 상대경로**라, 값을 바꾸고 폴더만
+옮기면 기존 레코드는 손대지 않아도 그대로 살아납니다. 이전은
+`backend/migrate_vault_location.py` 가 담당합니다(기본 미리보기, `--apply` 로 실행).
+
+| 함수/상수 | 용도 |
+| :--- | :--- |
+| `resolve_vault_root()` | 위 우선순위대로 보관소 위치를 결정 |
+| `VAULT_IS_EXTERNAL` | 보관소가 프로젝트 밖인지 (초기화 경고 문구를 가름) |
+| `ensure_vault_root()` | 폴더 생성 + 쓰기 가능 여부 확인 → `(성공여부, 설명)` |
 
 | 함수 | 용도 |
 | :--- | :--- |
@@ -755,7 +787,7 @@ RAW_DATA_ROOT  = PROJECT_ROOT/machining_raw_data
 **Vault 구조**
 
 ```
-data/archive_vault/
+{보관소 루트}/          # 기본: data/archive_vault, 설정 시 DB 설치 폴더 아래
   ├─ jobs/{프로젝트}/{부품}/{차수}/metadata.xml
   ├─ workplan_nc/WP{id}.nc
   ├─ tdms_files/Job_{id}/
@@ -1100,8 +1132,26 @@ python tools/run_system.py
 3. 같은 `(workplan_id, step_order)` 로 **중복 생성된 Workingstep 병합**
    (살아남는 행의 빈칸을 나머지 행에서 채운 뒤 삭제)
 
-`backend/reset_database_and_storage.py` — DB 전체 DROP + `create_all` + 스토리지 비우기.
-**되돌릴 수 없습니다.** 컨트롤러의 `DB · 스토리지 초기화` 버튼이 이것을 부릅니다.
+`backend/reset_database_and_storage.py` — 컨트롤러의 `DB · 스토리지 초기화` 버튼이 부릅니다.
+**되돌릴 수 없습니다.**
+
+| 구분 | 대상 |
+| :--- | :--- |
+| **초기화** | DB 전체 DROP + `create_all` |
+| **초기화** | `data/machining_raw_data` · `data/processed_data` · `data/failed_data` |
+| **보존** | 원본 백업 보관소(`archive_vault`) — **어떤 경우에도 지우지 않음** |
+
+보관소는 원본이 사라져도 복원할 수 있게 해 주는 마지막 방어선이고, 프로젝트와 함께
+지워지지 않도록 일부러 밖으로 빼 둔 폴더입니다. 초기화가 그것까지 지우면 밖으로 뺀 의미가
+없어지므로 **이중 안전장치**를 둡니다.
+
+1. `reset_storage()` 의 삭제 대상 목록에서 보관소를 아예 제외
+2. `clean_directory()` 가 실제 삭제 직전에 `vault_manager.is_inside_vault()` 로 확인하고,
+   보관소 자신이거나 그 안쪽이면 `[보호]` 를 찍고 즉시 반환
+
+경로 설정이 바뀌거나 호출이 잘못돼도 2번에서 막힙니다. 초기화가 끝나면 보관소에 남은
+파일 수를 세어 보존됐음을 보고합니다. 이 상태에서 복원이 필요하면 `recovery_engine` 의
+복구 기능으로 보관소에서 되살릴 수 있습니다.
 
 ### 13.4 테스트
 

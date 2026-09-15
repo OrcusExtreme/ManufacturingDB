@@ -156,6 +156,66 @@ void PostLogMessage(const std::wstring& text) {
 
 std::wstring ConfigPath() { return g_projectDir + L"\\backend\\pipeline_config.json"; }
 
+// .env 에서 key 값을 읽는다. 없으면 빈 문자열.
+// 컨트롤러는 파이썬처럼 dotenv 를 쓰지 않으므로, 보관소 위치를 화면에 정확히 보여주려면
+// 같은 .env 를 직접 읽어야 한다. (OS 환경변수가 있으면 그쪽이 우선 - 파이썬과 동일한 규칙)
+static std::wstring ReadEnvSetting(const wchar_t* key) {
+    wchar_t buf[1024];
+    DWORD n = GetEnvironmentVariableW(key, buf, 1024);
+    if (n > 0 && n < 1024) return std::wstring(buf, n);
+
+    FILE* fp = _wfopen((g_projectDir + L"\\.env").c_str(), L"rb");
+    if (!fp) return L"";
+    std::string raw;
+    char chunk[4096];
+    size_t got;
+    while ((got = fread(chunk, 1, sizeof(chunk), fp)) > 0) raw.append(chunk, got);
+    fclose(fp);
+
+    std::wstring text = Utf8ToWide(raw);
+    std::wstring needle(key);
+    size_t pos = 0;
+    while (pos < text.size()) {
+        size_t eol = text.find(L'\n', pos);
+        if (eol == std::wstring::npos) eol = text.size();
+        std::wstring line = text.substr(pos, eol - pos);
+        pos = eol + 1;
+
+        size_t b = line.find_first_not_of(L" \t\r");
+        if (b == std::wstring::npos || line[b] == L'#') continue;
+        size_t eq = line.find(L'=', b);
+        if (eq == std::wstring::npos) continue;
+        std::wstring name = line.substr(b, eq - b);
+        size_t ne = name.find_last_not_of(L" \t\r");
+        if (ne != std::wstring::npos) name = name.substr(0, ne + 1);
+        if (name != needle) continue;
+
+        std::wstring val = line.substr(eq + 1);
+        size_t vb = val.find_first_not_of(L" \t\r");
+        if (vb == std::wstring::npos) return L"";
+        size_t ve = val.find_last_not_of(L" \t\r");
+        val = val.substr(vb, ve - vb + 1);
+        if (val.size() >= 2 && (val.front() == L'"' || val.front() == L'\'')
+            && val.back() == val.front())
+            val = val.substr(1, val.size() - 2);
+        return val;
+    }
+    return L"";
+}
+
+// 원본 백업 보관소의 실제 경로. vault_manager.resolve_vault_root() 와 같은 우선순위를 따른다.
+std::wstring ResolveVaultRootForDisplay() {
+    std::wstring explicitRoot = ReadEnvSetting(L"ORCUS_VAULT_ROOT");
+    if (!explicitRoot.empty()) return explicitRoot;
+
+    std::wstring dbDir = ReadEnvSetting(L"ORCUS_DB_DATA_DIR");
+    if (!dbDir.empty()) {
+        if (dbDir.back() == L'\\' || dbDir.back() == L'/') dbDir.pop_back();
+        return dbDir + L"\\archive_vault";
+    }
+    return g_projectDir + L"\\data\\archive_vault";
+}
+
 void SaveConfigFromUI() {
     if (!appcfg::Save(ConfigPath(), g_cfg)) {
         PostLogMessage(GetTimestamp() + L"[경고] pipeline_config.json 저장에 실패했습니다.\r\n");
@@ -978,9 +1038,18 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             break;
 
         case IDC_BTN_RESET_STORAGE: {
-            int ret = MessageBoxW(hWnd,
-                L"DB('orcus')와 machining_raw_data / archive_vault / processed_data 를\n"
-                L"모두 비웁니다. 되돌릴 수 없습니다.\n\n정말 진행하시겠습니까?",
+            // 백업 보관소는 프로젝트를 지워도 남으라고 밖으로 뺀 폴더이고,
+            // 초기화 대상이 아니다. 무엇이 지워지고 무엇이 남는지 창에서 분명히 나눠 보여준다.
+            std::wstring vaultLine = ResolveVaultRootForDisplay();
+            std::wstring msg =
+                L"[초기화 대상] 되돌릴 수 없습니다.\n"
+                L"    · DB('orcus') 의 모든 테이블 내용\n"
+                L"    · 프로젝트 폴더의 data\\machining_raw_data\n"
+                L"    · 프로젝트 폴더의 data\\processed_data\n"
+                L"    · 프로젝트 폴더의 data\\failed_data\n\n"
+                L"[보존] 원본 백업 보관소는 지우지 않습니다.\n    " + vaultLine + L"\n\n"
+                L"정말 진행하시겠습니까?";
+            int ret = MessageBoxW(hWnd, msg.c_str(),
                 L"초기화 확인", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2);
             if (ret == IDYES) {
                 RunUtilityScript(L"backend\\reset_database_and_storage.py", L"DB · 스토리지 초기화");

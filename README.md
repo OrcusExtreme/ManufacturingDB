@@ -149,7 +149,7 @@ ManufacturingDB/
 │   ├── integrity.py                  #   SHA-256 원본 복원 검증 단일 로직 (3-상태)
 │   ├── integrity_monitor.py          #   검증 백그라운드 감시자 (30분 주기)
 │   ├── clean_dummy_data.py           #   고아 Workplan·중복 Workingstep 자동 정리
-│   ├── reset_database_and_storage.py #   DB + 스토리지 완전 초기화
+│   ├── reset_database_and_storage.py #   DB + 프로젝트 data/ 초기화 (보관소는 보존)
 │   ├── migrate_keys_v3.py            #   키 정규화 마이그레이션 (숫자 PK 전환)
 │   ├── migrate_job_folder_layout.py  #   Job 폴더를 자료 종류별 하위 폴더로 이전
 │   ├── backfill_workingstep_conditions.py  # 기존 Workplan 절삭조건 소급 갱신
@@ -192,9 +192,12 @@ ManufacturingDB/
 │   │           ├── Surface_Roughness/
 │   │           ├── etc/
 │   │           └── processed_parquet/
-│   ├── archive_vault/                #   원본 파일 안전 보관소
 │   ├── processed_data/               #   변환된 시계열·FFT Parquet
 │   └── failed_data/                  #   파싱 실패 격리 (DLQ)
+│
+│   ※ 원본 백업 보관소(archive_vault)는 프로젝트 밖에 둡니다.
+│     .env 의 ORCUS_DB_DATA_DIR 로 DB 설치 폴더를 가리키면
+│     프로젝트 폴더가 사라져도 백업은 남습니다.
 │
 ├── tools/                            # 개발·운영 도구
 │   ├── run_system.py                 #   CLI 일괄 실행 (컨트롤러 대안)
@@ -234,7 +237,47 @@ DB_USER=root
 DB_PASSWORD=your_password
 DB_NAME=orcus
 PYTHONPATH=backend
+
+# 원본 백업 보관소(archive_vault)를 프로젝트 밖에 둡니다.
+# 그 아래 archive_vault/ 폴더가 자동으로 만들어집니다.
+ORCUS_DB_DATA_DIR=C:\ProgramData\MySQL\MySQL Server 8.0\Data\orcus
 ```
+
+#### 백업 보관소를 프로젝트 밖에 두는 이유
+
+보관소가 프로젝트 안에 있으면 **프로젝트 폴더를 지우는 순간 원본 백업도 함께 사라집니다.**
+백업의 존재 이유가 "원본이 없어져도 복원할 수 있다"는 것이므로, 보관소는 프로젝트와
+수명이 다른 곳(예: DB 가 설치된 폴더)에 두어야 합니다.
+
+| 우선순위 | 환경변수 | 의미 |
+| :--- | :--- | :--- |
+| 1 | `ORCUS_VAULT_ROOT` | 보관소 절대경로를 직접 지정 |
+| 2 | `ORCUS_DB_DATA_DIR` | DB 설치 폴더. 그 아래 `archive_vault/` 를 만들어 사용 |
+| 3 | (설정 없음) | 예전 위치 `data/archive_vault` 를 그대로 사용 |
+
+DB 에는 보관소 루트 기준의 **상대경로만** 저장되므로, 위 값을 바꾸고 폴더만 옮기면
+기존 레코드를 손대지 않아도 복원 기능이 그대로 동작합니다. 이미 쌓인 보관소를 옮길 때는
+아래 도구를 사용하세요.
+
+```bash
+python backend\migrate_vault_location.py            # 무엇이 옮겨질지 미리보기
+python backend\migrate_vault_location.py --apply    # 실제 이동 (복사 → 검증 → 원본 삭제)
+```
+
+**보관소는 초기화 버튼으로 지워지지 않습니다.** 컨트롤러의 `DB · 스토리지 초기화` 는
+DB 테이블과 프로젝트 폴더의 `data/` 만 비우고 보관소는 손대지 않습니다. 삭제 대상 목록에서
+제외하는 것에 더해, 실제 삭제 직전에 보관소 안쪽 경로인지 한 번 더 확인해 막습니다.
+
+| 구분 | 대상 |
+| :--- | :--- |
+| 초기화 | DB 테이블 전체 · `data/machining_raw_data` · `data/processed_data` · `data/failed_data` |
+| 보존 | 원본 백업 보관소 `archive_vault` |
+
+> **주의** 보관소를 MySQL 스키마 폴더(`...\Data\orcus`) 안에 두면, 나중에
+> `DROP DATABASE orcus` 를 실행할 때 MySQL 이 폴더를 지우지 못해 오류가 납니다.
+> 이 프로젝트의 초기화 도구는 `DROP TABLE` 만 사용하므로 평소에는 문제가 없지만,
+> 스키마를 통째로 재생성할 계획이라면 `ORCUS_VAULT_ROOT` 로 스키마 폴더 바깥
+> (예: `C:\ProgramData\Orcus\archive_vault`)을 가리키는 편이 안전합니다.
 
 ### 4. 시스템 실행 (Run System)
 
@@ -296,7 +339,7 @@ python run_system.py
 4. **공구 마스터**: 엑셀(`.xlsx`) 업로드로 공구 마스터 전체 교체(기존 데이터 삭제 후 엑셀 내용만 등록,
    `T1`~`T99` 형식 코드만 적재, 가공 이력의 공구 연결은 공구 코드 기준으로 자동 재연결) 및 전체 공구 목록 조회.
    유효 공구가 0건이면 교체를 취소해 잘못된 파일로 마스터가 비워지는 사고를 막습니다.
-   업로드한 원본은 `archive_vault/tool_master/tool_info.xlsx`로 보관되며 화면에서 바로 내려받을 수 있습니다
+   업로드한 원본은 보관소의 `tool_master/tool_info.xlsx`로 보관되며 화면에서 바로 내려받을 수 있습니다
 5. **데이터 삽입**: CAD 도면(`.stl`/`.stp`/`.step`), XML, NC, TDMS, Log, 조도 CSV 웹 수동 업로드.
    업로드한 파일은 처음부터 자료 종류별 하위 폴더에 저장됩니다
 6. **DB 테이블**: 인터랙티브 ERD에서 테이블을 선택해 실시간 조회·검색, 속성별 정렬(오름/내림차순)과 속성 ▸

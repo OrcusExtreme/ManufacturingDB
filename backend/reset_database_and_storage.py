@@ -7,11 +7,20 @@
    - schema_patch.ensure_schema() 실행
    - 모든 테이블의 레코드 수 0건 검증
 
-2. 파일 스토리지:
-   - machining_raw_data/ 내 모든 파일 및 하위 폴더 삭제 (루트 폴더 유지)
-   - archive_vault/ 내 모든 파일 및 하위 폴더 삭제 (루트 및 기본 폴더 구조 유지)
-   - processed_data/ 내 모든 파일 삭제 (루트 폴더 유지)
-   - failed_data/ 내 모든 파일 삭제 (루트 폴더 유지)
+2. 파일 스토리지 — 프로젝트 폴더 안의 data/ 만 비운다:
+   - data/machining_raw_data/ 내 모든 파일 및 하위 폴더 삭제 (루트 폴더 유지)
+   - data/processed_data/ 내 모든 파일 삭제 (루트 폴더 유지)
+   - data/failed_data/ 내 모든 파일 삭제 (루트 폴더 유지)
+
+원본 백업 보관소(archive_vault)는 '절대로' 건드리지 않는다.
+------------------------------------------------------------------
+보관소는 원본이 사라져도 복원할 수 있게 해 주는 마지막 방어선이고, 프로젝트와 함께
+지워지지 않도록 일부러 프로젝트 밖(DB 설치 폴더 등)으로 빼 둔 폴더다. 초기화가 그것까지
+지우면 밖으로 뺀 의미가 없어진다. 그래서 이 스크립트는 보관소를 삭제 대상에서 제외할 뿐
+아니라, clean_directory 가 보관소 안쪽 경로를 받으면 실제 삭제 직전에 막는다(이중 안전장치).
+
+초기화 후에는 DB 가 비고 보관소만 남는다. 이 상태에서 복원이 필요하면
+recovery_engine 의 복구 기능으로 보관소에서 되살릴 수 있다.
 """
 import os
 import sys
@@ -30,8 +39,8 @@ from DB.database import engine, Base
 # 등록되고, 아래 create_all 이 14개 테이블을 전부 다시 만든다. 지우면 빈 DB 가 된다.
 from DB import models  # noqa: F401
 from DB.schema_patch import ensure_schema
-from vault_manager import (RAW_DATA_ROOT, VAULT_ROOT,
-                           PROCESSED_ROOT, FAILED_ROOT)
+from vault_manager import (RAW_DATA_ROOT, VAULT_ROOT, VAULT_IS_EXTERNAL,
+                           PROCESSED_ROOT, FAILED_ROOT, is_inside_vault)
 
 
 def _remove_readonly(func, path, exc_info):
@@ -44,7 +53,16 @@ def _remove_readonly(func, path, exc_info):
 
 
 def clean_directory(dir_path, recreate_subdirs=None):
-    """디렉터리 내의 모든 파일과 하위 폴더를 삭제하고 루트는 유지"""
+    """디렉터리 내의 모든 파일과 하위 폴더를 삭제하고 루트는 유지.
+
+    백업 보관소(archive_vault)와 그 안쪽은 어떤 경우에도 지우지 않는다.
+    호출부에서 이미 보관소를 대상에서 빼 두었지만, 경로 설정이 바뀌거나 호출이 잘못돼도
+    원본 백업이 날아가는 일은 없어야 해서 실제 삭제 직전에 한 번 더 막는다.
+    """
+    if is_inside_vault(dir_path):
+        print(f"[보호] 백업 보관소는 초기화 대상이 아닙니다. 건너뜁니다: {dir_path}")
+        return
+
     if not os.path.exists(dir_path):
         os.makedirs(dir_path, exist_ok=True)
         print(f"[스토리지 초기화] 폴더 생성: {dir_path}")
@@ -93,33 +111,19 @@ def clean_directory(dir_path, recreate_subdirs=None):
 
 
 def reset_storage():
-    """모든 데이터 및 백업 디렉터리 초기화"""
-    print("\n=== [1/2] 파일 스토리지 및 백업 초기화 시작 ===")
+    """프로젝트 폴더 안의 data/ 만 초기화한다. 백업 보관소는 건드리지 않는다."""
+    print("\n=== [1/2] 프로젝트 data/ 초기화 시작 ===")
 
-    raw_data_dir = RAW_DATA_ROOT
-    vault_dir = VAULT_ROOT
-    processed_dir = PROCESSED_ROOT
-    failed_dir = FAILED_ROOT
+    # 보관소는 의도적으로 목록에서 뺀다. 원본이 사라져도 복원할 수 있게 해 주는
+    # 마지막 방어선이라, 초기화가 닿으면 안 된다.
+    print(f"  [보존] 백업 보관소는 지우지 않습니다: {VAULT_ROOT}")
+    if VAULT_IS_EXTERNAL:
+        print(f"         (프로젝트 밖에 있어 프로젝트를 지워도 남습니다)")
 
-    # archive_vault 기본 하위 폴더 목록
-    vault_subdirs = [
-        "cad_models",
-        "etc_files",
-        "jobs",
-        "machine_logs",
-        "processed_parquet",
-        "surface_roughness",
-        "tdms_files",
-        "tool_master",
-        "workplan_nc"
-    ]
+    for target in (RAW_DATA_ROOT, PROCESSED_ROOT, FAILED_ROOT):
+        clean_directory(target)
 
-    clean_directory(raw_data_dir)
-    clean_directory(vault_dir, recreate_subdirs=vault_subdirs)
-    clean_directory(processed_dir)
-    clean_directory(failed_dir)
-
-    print("=== 파일 스토리지 및 백업 초기화 완료 ===\n")
+    print("=== 프로젝트 data/ 초기화 완료 ===\n")
 
 
 def reset_database():
@@ -193,10 +197,20 @@ def main():
     print("==================================================")
     print("   Orcus Lab Database & Storage Reset Routine     ")
     print("==================================================")
+    print("  초기화 대상 : 프로젝트 data/ + DB 테이블")
+    print(f"  보존 대상   : 백업 보관소 {VAULT_ROOT}")
+    print("==================================================")
     reset_storage()
     reset_database()
+
+    # 보관소가 초기화를 온전히 견뎠는지 실제 파일 수로 확인해 남긴다.
+    survived = 0
+    for _root, _dirs, files in os.walk(VAULT_ROOT):
+        survived += len(files)
+
     print("==================================================")
     print("           전체 초기화 작업 완료                  ")
+    print(f"  백업 보관소 보존 확인: 파일 {survived:,}개 그대로 남아 있음")
     print("==================================================")
 
 

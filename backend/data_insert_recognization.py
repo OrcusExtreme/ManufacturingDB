@@ -357,6 +357,16 @@ def start_pipeline(watch_dir):
     # 새 기능으로 늘어난 컬럼이 빠져 있으면 채운 뒤 시작한다 (이미 있으면 아무 것도 하지 않음)
     ensure_schema()
 
+    # 원본 백업 보관소가 어디인지, 실제로 쓸 수 있는지 시작할 때 못박아 둔다.
+    # 보관소를 프로젝트 밖(DB 설치 폴더 등)으로 뺄 수 있게 되면서 "백업이 어디에 쌓이는지"가
+    # 눈에 안 보이면 안 되는 정보가 됐다. 쓸 수 없는 상태면 파일이 들어오기 전에 알아야 한다.
+    from vault_manager import ensure_vault_root
+    vault_ok, vault_msg = ensure_vault_root()
+    print(f"[알림] {vault_msg}")
+    if not vault_ok:
+        print("[경고] 원본 백업이 저장되지 않습니다. .env 의 ORCUS_DB_DATA_DIR /"
+              " ORCUS_VAULT_ROOT 설정과 폴더 권한을 확인하세요.")
+
     try:
         from recovery_engine import backfill_missing_job_metadata
         backfill_missing_job_metadata()
