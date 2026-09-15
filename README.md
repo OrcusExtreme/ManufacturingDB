@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="logo_card.png" width="140" alt="Orcus ManufacturingDB Logo" />
+  <img src="assets/logo_card.png" width="140" alt="Orcus ManufacturingDB Logo" />
 </p>
 
 <h1 align="center">공작기계지능화실험실 통합 제조 데이터베이스 시스템 (ManufacturingDB)</h1>
