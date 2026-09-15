@@ -5,7 +5,7 @@ import streamlit as st
 
 import job_layout
 
-from .common import PROJECT_ROOT, load_data
+from .common import PROJECT_ROOT, RAW_DATA_DIR, load_data
 from cad_viewer_component import render_cad_viewer
 
 
@@ -24,7 +24,7 @@ def render_data_upload():
         </style>
     """, unsafe_allow_html=True)
 
-    base_raw_dir = os.path.join(PROJECT_ROOT, "machining_raw_data")
+    base_raw_dir = RAW_DATA_DIR
     os.makedirs(base_raw_dir, exist_ok=True)
 
     st.markdown("#### Step 1. 대상 Project 및 Part 설정")

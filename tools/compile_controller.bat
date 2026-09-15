@@ -1,5 +1,8 @@
 @echo off
 setlocal
+rem This script lives in tools\ but every path below is relative to the project root.
+cd /d "%~dp0.."
+
 echo ====================================================
 echo   Building Orcus System Controller
 echo ====================================================
@@ -22,7 +25,7 @@ set "RES_OBJ="
 where windres.exe >nul 2>&1
 if %ERRORLEVEL% equ 0 (
     echo [1/2] Compiling resources ^(icon, version info^)...
-    windres.exe "src\system_controller.rc" -O coff -o "build\resources.o"
+    windres.exe "controller\system_controller.rc" -O coff -o "build\resources.o"
     if %ERRORLEVEL% equ 0 (
         set "RES_OBJ=build\resources.o"
     ) else (
@@ -34,7 +37,7 @@ if %ERRORLEVEL% equ 0 (
 
 echo [2/2] Compiling C++ Win32 application...
 g++.exe -std=c++17 -O2 -municode -mwindows ^
-    "src\system_controller.cpp" %RES_OBJ% ^
+    "controller\system_controller.cpp" %RES_OBJ% ^
     -o "system_controller.exe" ^
     -lcomctl32 -lshlwapi -lgdiplus -lgdi32 -luser32 -lole32 ^
     -static -static-libgcc -static-libstdc++

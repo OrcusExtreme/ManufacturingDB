@@ -30,6 +30,8 @@ from DB.database import engine, Base
 # 등록되고, 아래 create_all 이 14개 테이블을 전부 다시 만든다. 지우면 빈 DB 가 된다.
 from DB import models  # noqa: F401
 from DB.schema_patch import ensure_schema
+from vault_manager import (RAW_DATA_ROOT, VAULT_ROOT,
+                           PROCESSED_ROOT, FAILED_ROOT)
 
 
 def _remove_readonly(func, path, exc_info):
@@ -94,10 +96,10 @@ def reset_storage():
     """모든 데이터 및 백업 디렉터리 초기화"""
     print("\n=== [1/2] 파일 스토리지 및 백업 초기화 시작 ===")
 
-    raw_data_dir = os.path.join(project_dir, "machining_raw_data")
-    vault_dir = os.path.join(project_dir, "archive_vault")
-    processed_dir = os.path.join(project_dir, "processed_data")
-    failed_dir = os.path.join(project_dir, "failed_data")
+    raw_data_dir = RAW_DATA_ROOT
+    vault_dir = VAULT_ROOT
+    processed_dir = PROCESSED_ROOT
+    failed_dir = FAILED_ROOT
 
     # archive_vault 기본 하위 폴더 목록
     vault_subdirs = [

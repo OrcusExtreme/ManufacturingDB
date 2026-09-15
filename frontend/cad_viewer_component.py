@@ -13,7 +13,7 @@ if BACKEND_DIR not in sys.path:
 import job_layout
 from DB.database import SessionLocal
 from DB.models import CadFileArchive, Part
-from vault_manager import get_abs_vault_path, VAULT_ROOT
+from vault_manager import get_abs_vault_path, VAULT_ROOT, RAW_DATA_ROOT
 
 def get_cad_file_data(part_name):
     """
@@ -59,7 +59,7 @@ def get_cad_file_data(part_name):
                         
         # 3. machining_raw_data 탐색
         if not file_bytes:
-            raw_dir = os.path.join(PROJECT_ROOT, "machining_raw_data")
+            raw_dir = RAW_DATA_ROOT
             if os.path.exists(raw_dir):
                 for proj in os.listdir(raw_dir):
                     p_path = os.path.join(raw_dir, proj, part_name, job_layout.CAD_DIR)
@@ -99,7 +99,7 @@ def find_cad_file_name(part_name):
             if f.lower().endswith(CAD_EXTENSIONS):
                 return f
 
-    raw_dir = os.path.join(PROJECT_ROOT, "machining_raw_data")
+    raw_dir = RAW_DATA_ROOT
     if os.path.exists(raw_dir):
         for proj in os.listdir(raw_dir):
             p_path = os.path.join(raw_dir, proj, part_name, job_layout.CAD_DIR)

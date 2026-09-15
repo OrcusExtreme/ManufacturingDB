@@ -114,81 +114,99 @@ erDiagram
 
 ## 📁 디렉터리 구조 (Directory Structure)
 
+루트에는 **실행 파일과 최소한의 설정만** 둡니다. 코드·데이터·도구·문서는 모두 폴더로 분리되어 있습니다.
+
 ```text
 ManufacturingDB/
-├── .env                              # 데이터베이스 및 시스템 환경변수 설정
-├── requirements.txt                  # 런타임 종속 파이썬 패키지 목록
-├── run_system.py                     # 전체 서비스 원클릭 통합 기동 관리자
-├── gemini.md                         # 전체 시스템 복원 및 상세 기술 명세서
-├── machining_raw_data/               # 외부 장비 데이터 유입 모니터링 폴더
-│   └── {ProjectName}/{PartName}/
-│       ├── CAD_Files/                # 3D 도면 (Part 단위, 가공차수와 무관)
-│       └── {JobID}/                  # 가공차수 1건
-│           ├── XML/                  # 장비 메타데이터
-│           ├── Log/                  # CNC 1Hz 상태 로그 (.log/.csv)
-│           ├── TDMS/                 # 고주파 센서 원본
-│           ├── NC/                   # NC 프로그램
-│           ├── Surface_Roughness/    # 조도 측정 결과
-│           ├── etc/                  # 참고용 기타 파일
-│           └── processed_parquet/    # 변환 산출물 (시스템 생성)
-├── system_controller.exe             # 제조 DB Controller (모듈/파서 제어 + 실시간 로그)
-├── compile_controller.bat            # 컨트롤러 빌드 (g++ + windres)
-├── run_controller.bat                # 컨트롤러 원클릭 실행 (없으면 자동 빌드)
-├── logo_card.png / logo.png / logo.ico  # 브랜드 로고 (컨트롤러 헤더 · 대시보드 · 앱 아이콘)
-├── src/                              # 컨트롤러 C++ 소스
-│   ├── system_controller.cpp         # Win32 오너드로우 UI + 프로세스 감독
-│   ├── theme.h                       # 대시보드와 맞춘 팔레트 및 그리기 도우미
-│   ├── app_config.h                  # 설정 JSON 읽기/쓰기 + 파이썬 인터프리터 탐색
-│   └── system_controller.rc          # 실행 파일 아이콘 및 버전 정보
-├── archive_vault/                    # SHA 해시 기반 원본 파일 안전 보관소
-├── processed_data/                   # 변환된 시계열 및 FFT Parquet 저장소
-├── failed_data/                      # 파싱 실패 격리 보관소 (DLQ)
-├── backend/                          # 백엔드 파이프라인 모듈
-│   ├── data_insert_recognization.py  # Watchdog 파일 감시 및 큐 분배기
-│   ├── job_manager.py                # Job 생성 및 중복 확인 유틸리티
-│   ├── recovery_engine.py            # Vault/DB 기반 재난 복구 ZIP 생성기
-│   ├── tool_inserter.py              # 공구 마스터 Excel 파서 (전체 교체 + 원본 보관, UI에서도 실행 가능)
-│   ├── tdms_visualizer.py            # 백그라운드 TDMS Parquet/FFT 변환 데몬
-│   ├── tdms_alignment.py             # NC 코드 대조 실가공 구간 판별 + CNC/DAQ 시간축 정렬 (단독 CLI 제공)
-│   ├── vault_manager.py              # 파일 SHA 해시 기반 Vault 아카이빙
-│   ├── integrity.py                  # SHA-256 원본 복원 검증 단일 로직 (3-상태 결과)
-│   ├── integrity_monitor.py          # 원본 복원 검증 백그라운드 감시자 (주기 실행 + 로그 경고)
-│   ├── job_layout.py                 # Job 폴더 하위 분류(XML/Log/TDMS/NC) 규칙 단일 출처
-│   ├── migrate_keys_v3.py            # 키 정규화 마이그레이션 (숫자 PK 전환, 데이터 보존)
-│   ├── migrate_job_folder_layout.py  # 기존 Job 폴더를 자료 종류별 하위 폴더로 이전
-│   ├── backfill_workingstep_conditions.py # 기존 Workplan 대상 NC 절삭조건(Feed/Spindle) 소급 갱신
-│   ├── reset_database_and_storage.py # DB(orcus) 및 스토리지(raw/vault/processed/failed) 완전 초기화
-│   ├── DB/                           
-│   │   ├── database.py               # SQLAlchemy 커넥션 풀링 및 세션 팩토리
-│   │   ├── models.py                 # 14개 테이블 DDL 및 ORM 정의
-│   │   └── schema_patch.py           # 기동 시 누락 컬럼만 채우는 경량 스키마 보정
-│   ├── tests/
-│   │   ├── test_tdms_alignment.py    # 합성 TDMS 기반 구간 판별/시간축 정렬 회귀 테스트
-│   │   ├── test_nc_parser.py         # NC 절삭조건(Feed Rate/Spindle Speed/Tool) 파싱 단위 테스트
-│   │   └── verify_e2e_cutting_conditions.py # 실가공 NC(O0911.nc) 기반 E2E 파싱 및 DB 연동 검증
-│   └── parsers/                      # 확장자별 전용 파싱 엔진
-│       ├── xml_parser.py             # XML 메타데이터 및 공구 상태 파서
-│       ├── tdms_parser.py            # NI TDMS 고속 헤더 파서
-│       ├── log_parser.py             # CNC 컨트롤러 1Hz 상태 로그 파서
-│       ├── roughness_parser.py       # 표면조도(Ra/Rq/Rz) 및 평가곡선 파서
-│       ├── cad_parser.py             # STEP/STL 도면 파서
-│       └── nc_parser.py              # NC 프로그램 G코드 파서
-└── frontend/                         # Streamlit 통합 대시보드 (Port 8501)
-    ├── dashboard.py                   # 단일 엔트리포인트: 페이지 설정, 사이드바 내비게이션
-    ├── cad_viewer_component.py        # 3D CAD(STEP/STL) 뷰어 컴포넌트
-    ├── erd_component.py               # 인터랙티브 ERD 다이어그램 컴포넌트
-    └── components/                    # 화면별 모듈화된 렌더링 컴포넌트
-        ├── common.py                  # 공통 유틸(경로 설정, 캐싱 쿼리, ZIP 생성 등)
-        ├── filters.py                 # 5단계 캐스케이딩 Job 검색 필터
-        ├── job_workspace.py           # Job 검색·분석·수정·다운로드 통합 화면
-        ├── master_tree.py             # 계층형 마스터 데이터(ISO 14649 트리) 조회
-        ├── tool_master.py             # 공구 마스터 엑셀(.xlsx) 전체 교체, 보관 원본 조회 및 목록 조회
-        ├── data_upload.py             # 가공 데이터 수동 업로드
-        ├── db_explorer.py             # DB 테이블 ERD/조회/정렬·조건 필터/편집/CSV 내보내기
-        ├── download_center.py         # 프로젝트 ▸ Part ▸ Job ▸ 세부 데이터 다운로드 내비게이션
-        ├── native_picker.py           # 파일 선택창의 형식 필터 이름 지정(File System Access API)
-        └── recovery.py                # 시스템 백업/복구 (전체 복구 ZIP 생성)
+├── system_controller.exe             # ★ 실행은 이것 하나 (제조 DB Controller)
+├── README.md
+├── .env                              # DB 접속 정보 (dotenv 가 cwd 기준으로 읽어 루트 고정)
+├── .streamlit/config.toml            # Streamlit 설정 (streamlit 이 $CWD 에서만 읽어 루트 고정)
+├── pyrefly.toml                      # 타입 체커 설정
+│
+├── assets/                           # 브랜드 자산 (컨트롤러·대시보드가 공유)
+│   ├── logo_card.png                 #   컨트롤러 헤더 · 사이드바 카드
+│   ├── logo.png / logo.jpg           #   홈 헤더 · 일반 용도
+│   └── logo.ico / favicon.ico        #   앱 아이콘 · 브라우저 탭
+│
+├── controller/                       # 제조 DB Controller C++ 소스
+│   ├── system_controller.cpp         #   Win32 오너드로우 UI + 프로세스 감독
+│   ├── theme.h                       #   Google Cloud 콘솔풍 팔레트 및 그리기 도우미
+│   ├── app_config.h                  #   설정 JSON 읽기/쓰기 + 파이썬 인터프리터 탐색
+│   └── system_controller.rc          #   실행 파일 아이콘 및 버전 정보
+│
+├── backend/                          # 수집 파이프라인
+│   ├── data_insert_recognization.py  #   Watchdog 파일 감시 및 큐 분배기
+│   ├── job_layout.py                 #   Job 폴더 하위 분류(XML/Log/TDMS/NC) 규칙 단일 출처
+│   ├── vault_manager.py              #   경로 기준(PROJECT_ROOT·DATA_ROOT 등) 및 Vault 아카이빙
+│   ├── job_manager.py                #   Job 생성 및 중복 확인 유틸리티
+│   ├── recovery_engine.py            #   Vault/DB 기반 복원 및 재난 복구 ZIP 생성
+│   ├── tdms_visualizer.py            #   백그라운드 TDMS Parquet/FFT 변환 데몬
+│   ├── tdms_alignment.py             #   NC 대조 실가공 구간 판별 + CNC/DAQ 시간축 정렬 (단독 CLI)
+│   ├── tool_inserter.py              #   공구 마스터 Excel 전체 교체 + 원본 보관
+│   ├── pipeline_control.py           #   파서 토글/일시정지 상태 (컨트롤러와 JSON 공유)
+│   ├── pipeline_config.json          #   ↑ 그 상태 파일
+│   ├── integrity.py                  #   SHA-256 원본 복원 검증 단일 로직 (3-상태)
+│   ├── integrity_monitor.py          #   검증 백그라운드 감시자 (30분 주기)
+│   ├── clean_dummy_data.py           #   고아 Workplan·중복 Workingstep 자동 정리
+│   ├── reset_database_and_storage.py #   DB + 스토리지 완전 초기화
+│   ├── migrate_keys_v3.py            #   키 정규화 마이그레이션 (숫자 PK 전환)
+│   ├── migrate_job_folder_layout.py  #   Job 폴더를 자료 종류별 하위 폴더로 이전
+│   ├── backfill_workingstep_conditions.py  # 기존 Workplan 절삭조건 소급 갱신
+│   ├── DB/
+│   │   ├── database.py               #   SQLAlchemy 커넥션 풀링 및 세션 팩토리
+│   │   ├── models.py                 #   14개 테이블 ORM 정의
+│   │   └── schema_patch.py           #   기동 시 누락 컬럼만 채우는 경량 보정
+│   ├── parsers/                      #   자료 종류별 파싱 엔진
+│   │   ├── xml_parser.py  nc_parser.py  tdms_parser.py
+│   │   └── log_parser.py  roughness_parser.py  cad_parser.py
+│   └── tests/
+│       ├── test_nc_parser.py                  # pytest
+│       ├── test_controller_integration.py     # pytest
+│       ├── test_tdms_alignment.py             # 단독 실행 (합성 TDMS 31개 검사)
+│       └── verify_e2e_cutting_conditions.py   # 단독 실행 (실 DB 연동 검증)
+│
+├── frontend/                         # Streamlit 통합 대시보드 (Port 8501)
+│   ├── dashboard.py                  #   단일 엔트리포인트: 사이드바 내비게이션
+│   ├── cad_viewer_component.py       #   3D CAD(STEP/STL) 뷰어 (Z-up, 축 gizmo)
+│   ├── erd_component.py              #   인터랙티브 ERD 다이어그램
+│   └── components/
+│       ├── common.py                 #   경로 설정 · 캐싱 쿼리
+│       ├── home_view.py              #   홈 화면 및 Quick Access 카드
+│       ├── filters.py                #   5단계 캐스케이딩 Job 검색 필터
+│       ├── job_workspace.py          #   Job 검색·분석·수정 통합 화면
+│       ├── master_tree.py            #   계층형 마스터 데이터 (ISO 14649 트리)
+│       ├── tool_master.py            #   공구 마스터 엑셀 업로드 및 조회
+│       ├── data_upload.py            #   가공 데이터 수동 업로드
+│       ├── db_explorer.py            #   DB 테이블 조회·필터·편집·CSV
+│       ├── download_center.py        #   프로젝트 ▸ Part ▸ Job 드릴다운 다운로드
+│       ├── native_picker.py          #   파일 선택창 형식 필터 이름 지정
+│       └── recovery.py               #   시스템 백업/복구
+│
+├── data/                             # 런타임 데이터 (코드와 분리 · 전부 gitignore)
+│   ├── machining_raw_data/           #   장비 데이터 유입 감시 폴더
+│   │   └── {Project}/{Part}/
+│   │       ├── CAD_Files/            #     3D 도면 (Part 단위)
+│   │       └── {JobID}/              #     가공차수 1건
+│   │           ├── XML/  Log/  TDMS/  NC/
+│   │           ├── Surface_Roughness/
+│   │           ├── etc/
+│   │           └── processed_parquet/
+│   ├── archive_vault/                #   원본 파일 안전 보관소
+│   ├── processed_data/               #   변환된 시계열·FFT Parquet
+│   └── failed_data/                  #   파싱 실패 격리 (DLQ)
+│
+├── tools/                            # 개발·운영 도구
+│   ├── run_system.py                 #   CLI 일괄 실행 (컨트롤러 대안)
+│   ├── compile_controller.bat        #   컨트롤러 빌드 (g++ + windres)
+│   ├── run_controller.bat            #   컨트롤러 실행 (없으면 자동 빌드)
+│   ├── run_windows.bat               #   venv 생성 + 의존성 설치 + CLI 실행
+│   └── requirements.txt              #   런타임 의존 패키지
+│
+└── docs/
+    └── gemini.md                     # 전체 시스템 상세 명세서
 ```
+
 
 ---
 
@@ -315,19 +333,13 @@ XML/NC/CAD 원본이 저장 시점과 바이트 단위로 동일한지에 대한
 각 버전의 핵심만 적습니다. 세부 동작과 판단 근거는 [`gemini.md`](gemini.md)를 참고하세요.
 
 ### [V3.0] - 2026-09-14
-- **제조 DB 전용 브랜드 로고 & 멀티 포맷 에셋 체계 구축**:
-  - 절삭 가공 엔드밀 공구, 클라우드 회로 루프 및 황금빛 스파크를 형상화한 전용 브랜드 심볼 디자인
-  - 사각형 내부 엠블럼 형태만 추출한 고해상도 JPG (`frontend/assets/logo.jpg`, `logo.jpg`)
-  - 256×256 규격을 최우선 프레임으로 내장한 멀티 해상도 파비콘 ICO (`logo.ico`, `frontend/assets/logo.ico`)
-  - 다크모드 가시성 강화를 위한 소프트 화이트 컨투어 투명 PNG (`frontend/assets/logo.png`, `logo.png`)
-  - 모던 앱 아이콘 스타일의 둥근 모서리 화이트 박스 카드 로고 (`frontend/assets/logo_card.png`, `logo_card.png`)
-- **Streamlit 웹 대시보드 UI 홈 화면 개편 & 브랜드 통합**:
-  - 홈 화면(Home)에 네이티브 컨테이너(`st.container(border=True)`) 기반 **Quick Access 8개 카드 그리드** 신설
-  - 좌측 사이드바 상단 브랜드 영역에 라운드 박스 로고 카드를 텍스트 상단에 수직 배치
-  - 브라우저 탭 아이콘(파비콘)에 256×256 고해상도 `logo.ico` 연동
-- **제조 DB Controller (`system_controller.exe`) GUI 고도화**:
-  - 256×256 고해상도 앱 아이콘 PE 임베딩 (`src/system_controller.rc`, `src/system_controller.cpp`)
-  - 윈도우 타이틀바, 작업표시줄 및 Alt+Tab 쉘 아이콘 일체화 적용
+- **전용 브랜드 로고 도입**: 엔드밀 공구·클라우드 회로 루프·스파크를 형상화한 심볼을
+  JPG / 멀티해상도 ICO / 투명 PNG / 카드형 PNG 4종으로 제작해 `assets/` 한 곳에 보관.
+  컨트롤러 헤더·앱 아이콘, 대시보드 사이드바·파비콘이 모두 같은 파일을 씁니다
+- **대시보드 홈 화면 신설**: 브랜드 헤더 + Quick Access 카드 8개 그리드
+- **프로젝트 구조 정리**: 루트에 흩어져 있던 로고 중복본을 제거하고
+  `assets/` · `docs/` · `tools/` · `controller/`(구 `src/`)로 분리.
+  루트에는 `system_controller.exe`와 README, 설정 파일만 남습니다
 
 ### [V2.3.5] - 2026-09-14
 - **Workingstep 절삭조건 자동 파싱**: NC 코드에서 공구별 `Feed Rate`/`Spindle Speed`를 추출해

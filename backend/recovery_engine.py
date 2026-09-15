@@ -13,7 +13,7 @@ from DB.models import (
 import job_layout
 from vault_manager import get_abs_vault_path, VAULT_ROOT, get_abs_raw_data_path, get_rel_raw_data_path
 
-from vault_manager import PROJECT_ROOT, RAW_DATA_ROOT as RAW_DATA_DIR  # noqa: E402  경로 기준은 vault_manager 한 곳
+from vault_manager import PROCESSED_ROOT, RAW_DATA_ROOT as RAW_DATA_DIR  # noqa: E402  경로 기준은 vault_manager 한 곳
 
 def _copy_from_vault_or_blob(vault_path, blob_content, destination_path):
     """
@@ -65,13 +65,21 @@ def get_job_archive_files(job_id):
                                         f"{job_layout.XML_DIR}/metadata.xml"))
                 
         # 2. NC
+        # nc_file_path 는 RAW_DATA_ROOT 기준 상대경로이고, 같은 파일의 사본이 Vault 의
+        # workplan_nc/WP{id}.nc 에도 있다. 원본 폴더가 지워졌을 수 있으므로 둘 다 본다.
         if job.workplan_id:
             wp_archive = session.query(WorkplanFileArchive).filter_by(workplan_id=job.workplan_id).first()
             if wp_archive and wp_archive.nc_file_path:
-                abs_p = get_abs_vault_path(wp_archive.nc_file_path)
-                if abs_p and os.path.exists(abs_p):
-                    file_map['nc'].append((abs_p, os.path.basename(abs_p),
-                                           f"{job_layout.NC_DIR}/{os.path.basename(abs_p)}"))
+                nc_name = os.path.basename(str(wp_archive.nc_file_path).replace("\\", "/"))
+                candidates = [
+                    get_abs_raw_data_path(wp_archive.nc_file_path),
+                    get_abs_vault_path(f"workplan_nc/WP{job.workplan_id}.nc"),
+                    get_abs_vault_path(wp_archive.nc_file_path),
+                ]
+                for abs_p in candidates:
+                    if abs_p and os.path.exists(abs_p):
+                        file_map['nc'].append((abs_p, nc_name, f"{job_layout.NC_DIR}/{nc_name}"))
+                        break
                     
         # 3. TDMS
         # Vault 내 tdms_files/Job_{id} 탐색
@@ -262,7 +270,7 @@ def _restore_job_files(session, job, dest_dir, raw_root, folder_name):
     parquet_dir = os.path.join(dest_dir, job_layout.PARQUET_DIR)
     for p_name in [f"job_{job.job_id}_viz.parquet", f"job_{job.job_id}_fft.parquet"]:
         v_p = os.path.join(VAULT_ROOT, "processed_parquet", p_name)
-        p_p = os.path.join(PROJECT_ROOT, "processed_data", p_name)
+        p_p = os.path.join(PROCESSED_ROOT, p_name)
         src_p = v_p if os.path.exists(v_p) else (p_p if os.path.exists(p_p) else None)
         if src_p:
             os.makedirs(parquet_dir, exist_ok=True)
@@ -377,7 +385,11 @@ def create_recovery_zip():
                     zf.write(abs_path, rel_path)
         return temp_zip_path
     finally:
-        shutil.rmtree(temp_dir)
+        # 임시 폴더 정리는 실패해도 넘어간다.
+        # Vault 원본이 읽기 전용이면 shutil.copy2 가 그 속성까지 복사해 와서 rmtree 가
+        # PermissionError(WinError 5) 를 내는데, finally 에서 그대로 터지면 이미 다 만들어 둔
+        # ZIP 경로가 반환되지 못하고 백업 자체가 실패한 것처럼 보인다.
+        shutil.rmtree(temp_dir, ignore_errors=True)
 
 def create_single_job_zip(job_id, categories=None):
     """
@@ -444,7 +456,7 @@ def backfill_missing_job_metadata():
             # --- 2순위: TDMS / Parquet 파일 기반 Fallback ---
             candidate_pqs = [
                 job.tdms_parquet_path,
-                os.path.join(PROJECT_ROOT, "processed_data", f"job_{job.job_id}_viz.parquet"),
+                os.path.join(PROCESSED_ROOT, f"job_{job.job_id}_viz.parquet"),
                 get_abs_vault_path(f"processed_parquet/job_{job.job_id}_viz.parquet")
             ]
             

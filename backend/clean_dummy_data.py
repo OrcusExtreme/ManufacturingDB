@@ -6,7 +6,7 @@ if backend_dir not in sys.path:
     sys.path.append(backend_dir)
 
 from DB.database import SessionLocal
-from DB.models import Part, Workplan, Workingstep, Job
+from DB.models import Part, Workplan, Workingstep, Job, WorkplanFileArchive
 
 # 한 Workplan 안에서 같은 순서를 두 행이 나눠 가질 수는 없다. 아래 컬럼들은 만든 경로에 따라
 # 한쪽에만 값이 있을 수 있어(XML 경로는 tool_id/operation_type, NC 경로는 이송·회전수),
@@ -71,6 +71,30 @@ def _superseded_nohash_workplans(db, used_ids):
     return targets
 
 
+def _contentless_workplans(db, used_ids):
+    """아무 내용도 없이 신원만 남은 Workplan 을 고른다.
+
+    파서가 임시 Workplan 에 진짜 program_code / nc_hash 를 채우려다 uq_workplan_identity 에
+    걸려 실패하면, 절반만 갱신된 껍데기 행이 남을 수 있었다. (예: program_code 는 실제
+    이름인데 nc_hash 는 'NOHASH' 이고 Job·Workingstep·NC 원본이 전부 없는 행)
+    program_code 가 'Unknown' 이 아니라 위의 더미 조건에도, NOHASH 승계 조건에도 걸리지 않는다.
+
+    'NC 만 올려두고 아직 돌리지 않은 정상 계획'을 지우지 않도록, Job·Workingstep·NC 경로·
+    NC 아카이브가 '모두' 비어 있는 행만 대상으로 삼는다. 그런 행은 담고 있는 정보가 없다.
+    """
+    targets = []
+    for wp in db.query(Workplan).filter(Workplan.nc_hash == "NOHASH").all():
+        if wp.workplan_id in used_ids or wp.nc_file_path:
+            continue
+        if db.query(Workingstep).filter(Workingstep.workplan_id == wp.workplan_id).count() > 0:
+            continue
+        if db.query(WorkplanFileArchive).filter(
+                WorkplanFileArchive.workplan_id == wp.workplan_id).first() is not None:
+            continue
+        targets.append(wp)
+    return targets
+
+
 def run_cleanup():
     db = SessionLocal()
     try:
@@ -79,24 +103,37 @@ def run_cleanup():
             (Workplan.program_code.like("UNKNOWN_WORKPLAN_%")) | (Workplan.program_code == "Unknown")
         ).all()
 
-        deleted_wps = 0
         deleted_parts = 0
+
+        # 세 가지 규칙이 같은 행을 동시에 집을 수 있어(예: program_code='Unknown' 이면서
+        # 내용도 비어 있는 행) 삭제 대상은 id 집합으로 모아 한 번씩만 센다.
+        doomed = {}
 
         for wp in dummy_wps:
             # Check if any job uses it
             job_count = db.query(Job).filter(Job.workplan_id == wp.workplan_id).count()
             if job_count == 0:
-                db.delete(wp)
-                deleted_wps += 1
+                doomed[wp.workplan_id] = wp
 
         # 해시가 뒤늦게 확보되면서 밀려난 NOHASH Workplan 도 함께 정리한다.
         # (딸린 Workingstep 은 cascade 로 같이 지워진다)
         used_ids = {wp_id for (wp_id,) in db.query(Job.workplan_id).distinct()}
         for wp, successor_id in _superseded_nohash_workplans(db, used_ids):
-            print(f"[정리] 고아 Workplan {wp.workplan_id} ({wp.program_code}) 삭제 "
-                  f"- 해시를 확보한 Workplan {successor_id}로 대체됨")
+            if wp.workplan_id not in doomed:
+                print(f"[정리] 고아 Workplan {wp.workplan_id} ({wp.program_code}) 삭제 "
+                      f"- 해시를 확보한 Workplan {successor_id}로 대체됨")
+            doomed[wp.workplan_id] = wp
+
+        # 신원만 남고 내용이 전혀 없는 껍데기 Workplan 도 함께 정리한다.
+        for wp in _contentless_workplans(db, used_ids):
+            if wp.workplan_id not in doomed:
+                print(f"[정리] 빈 Workplan {wp.workplan_id} ({wp.program_code}) 삭제 "
+                      f"- Job·Workingstep·NC 원본이 모두 없음")
+            doomed[wp.workplan_id] = wp
+
+        for wp in doomed.values():
             db.delete(wp)
-            deleted_wps += 1
+        deleted_wps = len(doomed)
 
         # 고아 Workplan 을 먼저 지운 뒤에 남은 스텝만 보도록 순서를 지킨다.
         db.flush()

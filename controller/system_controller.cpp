@@ -162,13 +162,11 @@ void SaveConfigFromUI() {
     }
 }
 
-// 로고는 프로젝트 루트를 먼저, 없으면 대시보드가 쓰는 assets 폴더를 본다.
+// 브랜드 자산은 프로젝트 루트의 assets/ 한 곳에 모아 두고, 웹 대시보드도 같은 파일을 쓴다.
 void LoadLogo() {
     const wchar_t* candidates[] = {
-        L"\\logo_card.png",
-        L"\\frontend\\assets\\logo_card.png",
-        L"\\logo.png",
-        L"\\frontend\\assets\\logo.png",
+        L"\\assets\\logo_card.png",
+        L"\\assets\\logo.png",
     };
     for (const wchar_t* rel : candidates) {
         std::wstring path = g_projectDir + rel;
@@ -1066,6 +1064,15 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow) {
     g_cfg = appcfg::Load(ConfigPath());
     g_python = appcfg::Detect(g_projectDir);
 
+    // 실시간 로그 창은 자식 프로세스의 출력을 CP_UTF8 로 해석한다(Utf8ToWide).
+    // 그런데 윈도우 파이썬은 출력이 파이프일 때 UTF-8 이 아니라 시스템 ANSI 코드페이지
+    // (한국어 환경이면 cp949)로 내보낸다. 그래서 파서들이 찍는 한글이 로그 창에서 깨졌다.
+    // (실행한 쉘에 PYTHONIOENCODING 이 우연히 있으면 멀쩡해 보여서 더 헷갈린다.)
+    // CreateProcessW 에 lpEnvironment=NULL 을 주면 자식이 이 프로세스의 환경을 물려받으므로,
+    // 여기서 한 번만 지정해 두면 모듈 세 개 모두 UTF-8 로 출력한다.
+    SetEnvironmentVariableW(L"PYTHONIOENCODING", L"utf-8");
+    SetEnvironmentVariableW(L"PYTHONUTF8", L"1");
+
     // 제어기가 비정상 종료돼도 자식 프로세스가 남지 않도록 Job Object 에 묶는다.
     g_hJobObject = CreateJobObjectW(NULL, NULL);
     if (g_hJobObject) {
@@ -1087,7 +1094,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow) {
     icc.dwICC = ICC_STANDARD_CLASSES;
     InitCommonControlsEx(&icc);
 
-    HICON hIcon = (HICON)LoadImageW(NULL, (g_projectDir + L"\\logo.ico").c_str(), IMAGE_ICON,
+    HICON hIcon = (HICON)LoadImageW(NULL, (g_projectDir + L"\\assets\\logo.ico").c_str(), IMAGE_ICON,
                                     0, 0, LR_LOADFROMFILE | LR_DEFAULTSIZE);
     if (!hIcon) {
         hIcon = LoadIconW(hInstance, MAKEINTRESOURCEW(1));

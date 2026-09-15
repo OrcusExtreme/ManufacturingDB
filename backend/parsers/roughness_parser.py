@@ -8,8 +8,8 @@ from vault_manager import save_to_vault
 from job_manager import get_or_create_job
 
 BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-from vault_manager import PROJECT_ROOT   # 경로 기준은 vault_manager 한 곳
-PROCESSED_DIR = os.path.join(PROJECT_ROOT, "processed_data")
+from vault_manager import PROCESSED_ROOT, RAW_DATA_ROOT   # 경로 기준은 vault_manager 한 곳
+PROCESSED_DIR = PROCESSED_ROOT
 os.makedirs(PROCESSED_DIR, exist_ok=True)
 
 
@@ -148,7 +148,7 @@ def parse_roughness(job_folder_path, job_id=None):
                             job_record = session.query(Job).filter_by(job_id=job_pk).first()
                             if job_record and job_record.source_folder:
                                 import shutil
-                                raw_job_dir = os.path.join(os.path.dirname(PROCESSED_DIR), "machining_raw_data", *job_record.source_folder.split('/'), job_layout.PARQUET_DIR)
+                                raw_job_dir = os.path.join(RAW_DATA_ROOT, *job_record.source_folder.split('/'), job_layout.PARQUET_DIR)
                                 os.makedirs(raw_job_dir, exist_ok=True)
                                 raw_parquet_path = os.path.join(raw_job_dir, os.path.basename(parquet_path))
                                 shutil.copy2(parquet_path, raw_parquet_path)

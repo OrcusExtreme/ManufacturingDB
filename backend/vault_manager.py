@@ -6,10 +6,19 @@ import shutil
 # 경로 기준은 여기 한 곳에서만 정한다.
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# Vault root directory
-VAULT_ROOT = os.path.join(PROJECT_ROOT, "archive_vault")
-# Raw data root directory
-RAW_DATA_ROOT = os.path.join(PROJECT_ROOT, "machining_raw_data")
+# 코드와 데이터를 섞지 않도록 런타임 데이터는 전부 data/ 아래에 둔다.
+# DB 에 저장되는 경로는 아래 각 루트 기준의 '상대경로'라, 이 상수만 바꾸면
+# 폴더를 통째로 옮겨도 기존 레코드를 손볼 필요가 없다.
+DATA_ROOT = os.path.join(PROJECT_ROOT, "data")
+
+# 원본 파일 안전 보관소
+VAULT_ROOT = os.path.join(DATA_ROOT, "archive_vault")
+# 장비 데이터 유입 감시 폴더
+RAW_DATA_ROOT = os.path.join(DATA_ROOT, "machining_raw_data")
+# 변환 산출물(Parquet, 구간 판별 JSON)
+PROCESSED_ROOT = os.path.join(DATA_ROOT, "processed_data")
+# 파싱 실패 격리 보관소 (DLQ)
+FAILED_ROOT = os.path.join(DATA_ROOT, "failed_data")
 
 def get_rel_raw_data_path(abs_path):
     """

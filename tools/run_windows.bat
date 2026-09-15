@@ -1,5 +1,8 @@
 @echo off
 chcp 65001 >nul
+rem 이 스크립트는 tools 폴더 안에 있지만 venv 와 실행 대상은 루트 기준이므로 먼저 루트로 이동한다.
+cd /d "%~dp0.."
+
 echo ====================================================
 echo   공작기계지능화실험실 시스템 시작 (Windows)
 echo ====================================================
@@ -20,15 +23,15 @@ IF NOT EXIST "venv\Scripts\activate.bat" (
 )
 
 :: Activate virtual environment
-call venv\Scripts\activate.bat
+call "venv\Scripts\activate.bat"
 
 :: Upgrade pip and install requirements
 echo [정보] 패키지 의존성을 확인 및 설치합니다...
 python -m pip install --upgrade pip >nul
-pip install -r requirements.txt
+pip install -r "tools\requirements.txt"
 
 :: Run the system
-echo [정보] 통합 파이프라인(run_system.py)을 실행합니다...
-python run_system.py
+echo [정보] 통합 파이프라인을 실행합니다...
+python "tools\run_system.py"
 
 pause

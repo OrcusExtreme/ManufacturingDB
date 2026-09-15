@@ -9,6 +9,7 @@ from DB.database import SessionLocal
 from DB.models import Part, Workplan, Workingstep, Job, WorkplanFileArchive, JobFileArchive
 from vault_manager import save_to_vault
 from integrity import sha256_bytes
+from job_manager import discard_orphan_workplan
 
 def safe_float(val, default=0.0):
     try:
@@ -264,7 +265,14 @@ def parse_xml(file_path, job_id):
             xml_vault_path = save_to_vault(file_path, "jobs", *canonical_sf.split('/'), "metadata.xml")
             print(f"    - 이미 존재하는 Job (PK: {existing_job.job_id} / 폴더: {existing_job.source_folder}) 발견. Job 정보를 업데이트합니다.")
             existing_job.start_time = start_time
+            # XML 이 프로그램 코드의 최종 근거다. TDMS/NC 가 먼저 처리되면서 만들어 둔 임시
+            # Workplan 에서 Job 을 떼어 오는데, 그 행이 이 Job 하나만 붙들고 있었다면 여기서
+            # 고아가 된다. 옮긴 직후에 참조 수를 확인해 바로 정리한다.
+            previous_workplan_id = existing_job.workplan_id
             existing_job.workplan_id = workplan_id
+            if previous_workplan_id and previous_workplan_id != workplan_id:
+                db.flush()   # autoflush=False 라 flush 해야 참조 수가 제대로 보인다
+                discard_orphan_workplan(db, previous_workplan_id)
             existing_job.work_id = work_id
             existing_job.machine_code = root.findtext('MachineCode')
             existing_job.machine_ip = root.findtext('MachineIpAddress')

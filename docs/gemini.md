@@ -92,13 +92,13 @@ Part (부품)
 [장비 / 계측 PC]
       │ 폴더째 복사
       ▼
-machining_raw_data/{프로젝트}/{부품}/{가공차수}/
+data/machining_raw_data/{프로젝트}/{부품}/{가공차수}/
       │ Watchdog 감지 → 확장자로 하위 폴더 자동 정리 → 큐 적재
       ▼
 [파서 6종] xml · nc · tdms · log · roughness · cad
       │
       ├─▶ MySQL (정규화 적재)
-      ├─▶ archive_vault/ (원본 사본)
+      ├─▶ data/archive_vault/ (원본 사본)
       └─▶ LONGBLOB (15MB 이하 원본)
       │
       ▼
@@ -176,7 +176,7 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 수집·복원·업로드·다운로드가 모두 이 모듈을 참조하므로, 폴더 이름을 바꾸려면 여기만 고치면 됩니다.
 
 ```text
-machining_raw_data/{프로젝트}/{부품}/
+data/machining_raw_data/{프로젝트}/{부품}/
   ├─ CAD_Files/                  ← Part 레벨 (도면은 가공차수와 무관)
   └─ {가공차수}/                  ← Job 1건
        ├─ XML/                   장비 메타데이터
@@ -593,7 +593,7 @@ CNC_LOG_SIGNATURE_COLUMNS = {'cls', 'crpm', 'cfr', 'ctime', 'cut'}
    | `Ra` | 편차 절대값의 평균 — `mean(|z_centered|)` |
    | `Rq` | 편차 제곱 평균의 제곱근 — `sqrt(mean(z_centered²))` |
    | `Rz` | 프로파일을 **5구간으로 나눠** 각 구간의 `max − min` 을 구한 뒤 평균 (ISO 4287) |
-3. `(X, Z)` 2열 Parquet 생성 → `processed_data/` 와 Job 폴더 `processed_parquet/` 양쪽에 저장
+3. `(X, Z)` 2열 Parquet 생성 → `data/processed_data/` 와 Job 폴더 `processed_parquet/` 양쪽에 저장
 4. `measure_name` 은 파일명(확장자 제외)
 5. 모든 측정의 `Ra`/`Rz` 평균을 `inspection` 에 자동 기록(소수 3자리)
 
@@ -615,7 +615,7 @@ Vault(`cad_models/Part_{부품명}/`) 보관 + 15MB 이하면 LONGBLOB + SHA-256
 4. 기존 전체 삭제 → 엑셀 내용만 등록 → `tool_id` 를 1부터 연속 재부여
 5. `relink_workingsteps()` 가 `xml_tool_code`(없으면 `T{tool_number}`) 기준으로
    가공 이력의 공구 연결을 다시 맺음. 이번 엑셀에 없는 공구는 `tool_id` 만 비우고 호출 번호는 보존
-6. 원본을 `archive_vault/tool_master/tool_info.xlsx` 로 보관(최신 1개만)
+6. 원본을 `data/archive_vault/tool_master/tool_info.xlsx` 로 보관(최신 1개만)
 
 ---
 
@@ -697,7 +697,7 @@ NC 정규화: 주석 제거 → 공백 제거 → 대문자 → 헤더/끝 표�
 - `machining_window` 가 없음
 - NC 없이 만든 구간인데 이제 NC 가 생김 (단 1회만 재판별 — 무한 루프 방지)
 
-**중복 변환 방지** — `job_conversion_lock()` 이 `processed_data/.job_{id}.converting` 을
+**중복 변환 방지** — `job_conversion_lock()` 이 `data/processed_data/.job_{id}.converting` 을
 `O_CREAT|O_EXCL` 로 만들어 선점합니다. `run_system.py` 를 실수로 여러 번 띄워도
 같은 Job 을 두 번 변환하지 않습니다. 1시간이 지난 잠금은 죽은 프로세스가 남긴 것으로 보고 회수합니다.
 
@@ -755,7 +755,7 @@ RAW_DATA_ROOT  = PROJECT_ROOT/machining_raw_data
 **Vault 구조**
 
 ```
-archive_vault/
+data/archive_vault/
   ├─ jobs/{프로젝트}/{부품}/{차수}/metadata.xml
   ├─ workplan_nc/WP{id}.nc
   ├─ tdms_files/Job_{id}/
@@ -848,7 +848,7 @@ _already_has(dest_dir, kind, extensions)   # 그 종류가 이미 있으면 복�
 
 ## 10. 제조 DB Controller (C++)
 
-`src/system_controller.cpp` + `theme.h` + `app_config.h` + `system_controller.rc`
+`controller/system_controller.cpp` + `theme.h` + `app_config.h` + `system_controller.rc`
 → `system_controller.exe` (약 2.7MB, 정적 링크)
 
 ### 10.1 성격
@@ -924,8 +924,8 @@ Google Cloud 콘솔풍 밝은 화면을 Win32 오너드로우로 직접 그립�
 ### 10.6 빌드
 
 ```bash
-compile_controller.bat     # windres(아이콘/버전) + g++
-run_controller.bat         # 없으면 자동 빌드 후 실행
+tools\compile_controller.bat     # windres(아이콘/버전) + g++
+tools\run_controller.bat         # 없으면 자동 빌드 후 실행
 ```
 
 ```
@@ -1040,7 +1040,7 @@ Three.js 를 `components.html` 로 임베드합니다. STEP/STL 을 base64 로 �
 
 | 경과 | 일어나는 일 |
 | ---: | :--- |
-| 0.0s | `machining_raw_data/{프로젝트}/{부품}/{차수}/` 에 폴더 복사 |
+| 0.0s | `data/machining_raw_data/{프로젝트}/{부품}/{차수}/` 에 폴더 복사 |
 | 0.9s | CAD 파서 → `cad_file_archive` |
 | 1.7s | 파일들이 확장자에 맞는 하위 폴더로 이동 → XML 파싱 → **Part·Workplan·Workingstep·Job 생성**, NC 절삭조건 반영, XML·NC 원본 BLOB 보관 |
 | 2.5s | 로그 파싱 → `machine_log` 통계 + Vault |
@@ -1063,7 +1063,7 @@ Three.js 를 `components.html` 로 임베드합니다. STEP/STL 을 base64 로 �
 **방법 1 — 제조 DB Controller (권장)**
 
 ```bash
-system_controller.exe     # 또는 run_controller.bat
+system_controller.exe          # 또는 tools\run_controller.bat
 ```
 
 모듈을 개별로 켜고 끄며 실시간 로그를 보고 파서를 토글할 수 있습니다.
@@ -1071,7 +1071,7 @@ system_controller.exe     # 또는 run_controller.bat
 **방법 2 — CLI 일괄 실행**
 
 ```bash
-python run_system.py
+python tools/run_system.py
 ```
 
 패키지 확인 → 더미 청소 → Watchdog → 대시보드 → TDMS 데몬을 순서대로 띄우고

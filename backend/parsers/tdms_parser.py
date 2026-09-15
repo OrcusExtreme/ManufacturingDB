@@ -6,7 +6,7 @@ from DB.database import SessionLocal
 from DB.models import Workplan
 from tdms_alignment import open_tdms
 
-from job_manager import get_or_create_job
+from job_manager import get_or_create_job, adopt_workplan_identity
 
 from vault_manager import save_to_vault
 
@@ -37,7 +37,16 @@ def parse_tdms(file_path, job_id):
             except Exception:
                 pass
 
-        # 2. 메타데이터 초고속 추출 로직
+        # 2. 파일 경로 매핑을 '먼저' 확정한다.
+        #    이 한 줄이 tdms_visualizer 데몬이 Parquet 변환 대상을 찾는 유일한 근거라서
+        #    아래 메타데이터 보완(선택 작업)보다 우선이다. 예전에는 순서가 반대였는데,
+        #    Workplan program_code 보완이 uq_workplan_identity 에 걸리면 except 의 rollback 이
+        #    이 매핑까지 되돌려서 Job 의 TDMS 경로·Parquet·가공구간이 통째로 비었다.
+        from vault_manager import get_rel_raw_data_path
+        job.tdms_file_path = get_rel_raw_data_path(file_path)
+        db.commit()
+
+        # 3. 메타데이터 초고속 추출 로직 (선택 작업)
         #    (수집 중 비정상 종료로 파일 끝이 깨졌거나 *.tdms_index 가 손상된 경우에도
         #     읽히도록 tdms_alignment.open_tdms 를 사용한다)
         try:
@@ -67,24 +76,27 @@ def parse_tdms(file_path, job_id):
                             workplan = db.query(Workplan).filter_by(workplan_id=job.workplan_id).first()
                             if workplan:
                                 if prog_name and (not workplan.program_code or workplan.program_code == 'Unknown'):
-                                    workplan.program_code = prog_name
-                                    
-                                if mat_code and workplan.part_code:
+                                    # 직접 대입하면 같은 부품·프로그램의 Workplan 이 이미 있을 때
+                                    # uq_workplan_identity 에 걸린다. 그 경우 같은 NC 를 다시 돌린
+                                    # 것이므로 기존 Workplan 으로 Job 을 옮기는 것이 맞다.
+                                    adopt_workplan_identity(db, job, program_code=prog_name)
+                                    workplan = job.workplan
+
+                                if mat_code and workplan is not None and workplan.part_code:
                                     from DB.models import Part
                                     part = db.query(Part).filter_by(part_code=workplan.part_code).first()
                                     if part and (not part.material_code or part.material_code == 'Unknown'):
                                         part.material_code = mat_code
+            db.commit()
         except Exception as meta_e:
-            print(f"    - [경고] TDMS 메타데이터 고속 스캔 중 오류: {meta_e}")
+            # 여기서 실패해도 위에서 이미 커밋한 경로 매핑은 살아남는다.
+            db.rollback()
+            print(f"    - [경고] TDMS 메타데이터 보완을 건너뜁니다: {meta_e}")
         # -------------------------------------------
 
-        # 파일 경로 업데이트
-        from vault_manager import get_rel_raw_data_path
-        job.tdms_file_path = get_rel_raw_data_path(file_path)
-        
-        # Vault에 TDMS 원본 백업
+        # 4. Vault에 TDMS 원본 백업
         tdms_vault_rel = save_to_vault(file_path, "tdms_files", f"Job_{job.job_id}", os.path.basename(file_path))
-        
+
         db.commit()
         print(f"    - TDMS 메타데이터 파싱, Vault 백업({tdms_vault_rel}) 및 파일 참조 매핑 완료 (내부 PK: {job.job_id})")
         

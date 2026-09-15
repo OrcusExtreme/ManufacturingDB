@@ -14,8 +14,7 @@ for _p in (BACKEND_DIR, FRONTEND_DIR):
         sys.path.append(_p)
 
 from DB.database import engine  # noqa: E402
-
-RAW_DATA_DIR = os.path.join(PROJECT_ROOT, "machining_raw_data")
+from vault_manager import RAW_DATA_ROOT as RAW_DATA_DIR  # noqa: E402  경로 기준은 vault_manager 한 곳
 
 
 @st.cache_data(ttl=60)

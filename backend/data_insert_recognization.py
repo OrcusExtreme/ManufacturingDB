@@ -7,6 +7,7 @@ from watchdog.events import FileSystemEventHandler
 from collections import OrderedDict
 
 import job_layout
+from vault_manager import RAW_DATA_ROOT, FAILED_ROOT
 from DB.schema_patch import ensure_schema
 from parsers.xml_parser import parse_xml
 from parsers.tdms_parser import parse_tdms
@@ -104,7 +105,7 @@ class MachiningDataHandler(FileSystemEventHandler):
                 return
                 
             base_dir = os.path.dirname(os.path.abspath(__file__))
-            watch_dir = os.path.join(os.path.dirname(base_dir), "machining_raw_data")
+            watch_dir = RAW_DATA_ROOT
             
             for job in target_jobs:
                 sf = job.source_folder or f"Job_{job.job_id}"
@@ -223,6 +224,17 @@ class MachiningDataHandler(FileSystemEventHandler):
         # 하위 폴더 이름은 사람이 손으로 만들면 대소문자가 섞이므로 표준 표기로 맞춰 본다.
         sub_kind = job_layout.canonical_subdir(rel_parts[3]) if len(rel_parts) > 4 else None
 
+        # 폴더가 한 겹 더 감싸인 채로 들어오는 경우가 있다
+        # (예: 이미 있는 Job 폴더 위로 같은 이름의 폴더를 통째로 복사해 {Job}/{Job}/TDMS/... 가 됨).
+        # 그때도 자료 종류를 알아볼 수 있도록 Job 폴더와 파일 사이의 모든 단계에서 아는 이름을 찾는다.
+        # 확장자만으로 가르면 조도 CSV 가 CNC 로그로 넘어가 헤더 검사에 걸려 조용히 버려진다.
+        if sub_kind is None and len(rel_parts) > 4:
+            for segment in reversed(rel_parts[3:-1]):
+                guess = job_layout.canonical_subdir(segment)
+                if guess:
+                    sub_kind = guess
+                    break
+
         if sub_kind == job_layout.PARQUET_DIR:
             return      # 시스템이 만든 산출물이라 다시 수집할 필요가 없다
 
@@ -308,11 +320,9 @@ class MachiningDataHandler(FileSystemEventHandler):
             from datetime import datetime
             
             try:
-                # DLQ: Move failed files to a 'failed_data' directory
-                base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-                failed_dir = os.path.join(base_dir, 'failed_data')
-                if not os.path.exists(failed_dir):
-                    os.makedirs(failed_dir)
+                # DLQ: 파싱에 실패한 파일은 격리 보관소로 옮겨 재처리 루프를 끊는다
+                failed_dir = FAILED_ROOT
+                os.makedirs(failed_dir, exist_ok=True)
                 
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 original_filename = os.path.basename(file_path_norm)
@@ -387,7 +397,7 @@ def start_pipeline(watch_dir):
 if __name__ == "__main__":
     # 실제 CNC/DAQ 장비 데이터가 저장되는 공유 폴더 경로 지정 (Project 폴더 내)
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-    WATCH_DIRECTORY = os.path.join(os.path.dirname(BASE_DIR), "machining_raw_data")
+    WATCH_DIRECTORY = RAW_DATA_ROOT
     
     # 테스트를 위해 폴더가 없으면 생성
     if not os.path.exists(WATCH_DIRECTORY):

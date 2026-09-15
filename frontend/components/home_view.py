@@ -2,7 +2,10 @@
 import os
 import streamlit as st
 
-ASSETS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets")
+# 브랜드 자산은 프로젝트 루트의 assets/ 한 곳에 모아 둔다.
+# 컨트롤러(controller/system_controller.cpp)도 같은 파일을 읽으므로 frontend 안에 두지 않는다.
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+ASSETS_DIR = os.path.join(_PROJECT_ROOT, "assets")
 LOGO_PATH = os.path.join(ASSETS_DIR, "logo.png")
 LOGO_ICO_PATH = os.path.join(ASSETS_DIR, "logo.ico")
 LOGO_JPG_PATH = os.path.join(ASSETS_DIR, "logo.jpg")

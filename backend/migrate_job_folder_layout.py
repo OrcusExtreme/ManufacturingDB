@@ -26,8 +26,7 @@ from DB.database import SessionLocal  # noqa: E402
 from DB.models import Job, Workplan, WorkplanFileArchive  # noqa: E402
 from vault_manager import get_abs_raw_data_path, get_rel_raw_data_path  # noqa: E402
 
-PROJECT_ROOT = os.path.dirname(_here)
-RAW_DATA_DIR = os.path.join(PROJECT_ROOT, "machining_raw_data")
+from vault_manager import PROJECT_ROOT, RAW_DATA_ROOT as RAW_DATA_DIR  # noqa: E402
 
 
 def _job_dirs():

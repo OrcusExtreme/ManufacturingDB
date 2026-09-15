@@ -11,9 +11,13 @@ if sys.stdout.encoding.lower() != 'utf-8':
 # (Popen, 화면에 찍을 이름) 쌍으로 담는다.
 processes = []
 
+# 이 스크립트는 tools/ 안에 있고, 실행 대상(backend/, frontend/)은 프로젝트 루트 아래에 있다.
+TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(TOOLS_DIR)
+
+
 def install_requirements():
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    req_path = os.path.join(base_dir, "requirements.txt")
+    req_path = os.path.join(TOOLS_DIR, "requirements.txt")
     if os.path.exists(req_path):
         print("📦 [0/3] 필수 파이썬 패키지를 확인하고 설치합니다 (requirements.txt)...")
         try:
@@ -25,16 +29,19 @@ def install_requirements():
             print("수동으로 'pip install -r requirements.txt'를 실행해 주세요.\n")
 
 def start_services():
-    base_dir = os.path.dirname(os.path.abspath(__file__))
+    # 자식 프로세스는 반드시 프로젝트 루트를 작업 폴더로 가져야 한다.
+    # .env(dotenv 가 cwd 부터 탐색)와 .streamlit/config.toml(streamlit 이 $CWD 에서만 읽음)이
+    # 루트에 있어서, tools/ 에서 실행하면 둘 다 못 찾는다.
+    base_dir = PROJECT_ROOT
     
     print("🧹 [1/4] 더미 데이터 청소를 실행합니다...")
     cleaner_path = os.path.join(base_dir, "backend", "clean_dummy_data.py")
-    subprocess.call([sys.executable, cleaner_path])
+    subprocess.call([sys.executable, cleaner_path], cwd=PROJECT_ROOT)
 
     print("🚀 [2/4] 데이터 수집 파이프라인(Backend)을 시작합니다...")
     parser_path = os.path.join(base_dir, "backend", "data_insert_recognization.py")
     # -u: 파이프라인 로그(자동 복원 알림, 원본 복원 검증 결과 등)가 버퍼에 갇히지 않고 즉시 출력되도록.
-    p1 = subprocess.Popen([sys.executable, "-u", parser_path])
+    p1 = subprocess.Popen([sys.executable, "-u", parser_path], cwd=PROJECT_ROOT)
     processes.append((p1, "Backend 파이프라인"))
     
     # 파서가 초기화될 시간을 잠깐 줍니다.
@@ -42,12 +49,13 @@ def start_services():
     
     print("🚀 [3/4] 통합 대시보드를 시작합니다 (Port 8501)...")
     dashboard_path = os.path.join(base_dir, "frontend", "dashboard.py")
-    p2 = subprocess.Popen([sys.executable, "-m", "streamlit", "run", dashboard_path, "--server.port", "8501"])
+    p2 = subprocess.Popen([sys.executable, "-m", "streamlit", "run", dashboard_path,
+                           "--server.port", "8501"], cwd=PROJECT_ROOT)
     processes.append((p2, "Streamlit 대시보드"))
 
     print("🚀 [4/4] TDMS 파켓 변환 백그라운드 서비스를 시작합니다...")
     tdms_viz_path = os.path.join(base_dir, "backend", "tdms_visualizer.py")
-    p4 = subprocess.Popen([sys.executable, "-u", tdms_viz_path])
+    p4 = subprocess.Popen([sys.executable, "-u", tdms_viz_path], cwd=PROJECT_ROOT)
     processes.append((p4, "TDMS 변환기"))
 
 def stop_services():

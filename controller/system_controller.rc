@@ -1,9 +1,9 @@
 // 실행 파일 자체의 아이콘(탐색기에서 보이는 아이콘)과 버전 정보.
-// 창/작업표시줄 아이콘은 실행 시 logo.ico 를 읽어 따로 지정한다(system_controller.cpp).
+// 창/작업표시줄 아이콘은 실행 시 assets/logo.ico 를 읽어 따로 지정한다(system_controller.cpp).
 #include <windows.h>
 
 // 리소스 ID 가 가장 낮은 아이콘이 탐색기 아이콘으로 쓰인다.
-1 ICON "..\\logo.ico"
+1 ICON "..\\assets\\logo.ico"
 
 VS_VERSION_INFO VERSIONINFO
 FILEVERSION     3, 0, 0, 0

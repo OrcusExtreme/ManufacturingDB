@@ -7,10 +7,10 @@ import streamlit as st
 
 import job_layout
 
-from .common import PROJECT_ROOT, load_data
+from .common import RAW_DATA_DIR, load_data
 
 ALL = "(전체)"
-RAW_DIR = os.path.join(PROJECT_ROOT, "machining_raw_data")
+RAW_DIR = RAW_DATA_DIR
 
 # (표시 이름, 파일명용 영문 슬러그, 판별 규칙) - 위에서부터 먼저 일치하는 유형으로 분류된다.
 CATEGORY_RULES = [

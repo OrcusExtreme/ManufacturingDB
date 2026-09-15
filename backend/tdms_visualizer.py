@@ -29,8 +29,8 @@ from tdms_alignment import (TARGET_DATAPOINTS, build_aligned_frames,
                             summarize_window)
 
 # Root processed_data directory (independent from machining_raw_data)
-from vault_manager import PROJECT_ROOT   # 경로 기준은 vault_manager 한 곳
-PROCESSED_DIR = os.path.join(PROJECT_ROOT, "processed_data")
+from vault_manager import PROCESSED_ROOT, RAW_DATA_ROOT   # 경로 기준은 vault_manager 한 곳
+PROCESSED_DIR = PROCESSED_ROOT
 os.makedirs(PROCESSED_DIR, exist_ok=True)
 
 # 변환 점유 표시 파일이 이 시간보다 오래되면 죽은 프로세스가 남긴 것으로 보고 회수한다.
@@ -145,7 +145,7 @@ def find_nc_program(job, db=None):
 
         # 3) Job 원본 폴더 안의 .nc 파일 (NC/ 하위를 먼저 보고, 없으면 예전 구조인 Job 루트도 본다)
         if job.source_folder:
-            job_dir = os.path.join(PROJECT_ROOT, "machining_raw_data", *job.source_folder.split('/'))
+            job_dir = os.path.join(RAW_DATA_ROOT, *job.source_folder.split('/'))
             cands = job_layout.find_files(job_dir, job_layout.NC_DIR, ('.nc',))
             # 프로그램명과 같은 파일을 우선 사용 (프로브 매크로 등 부수 NC 배제)
             if name:
@@ -338,7 +338,7 @@ def run_visualizer_batch():
                     raw_parquet_path = parquet_path
                     raw_fft_path = fft_parquet_path
                     if job.source_folder:
-                        raw_job_dir = os.path.join(PROJECT_ROOT, "machining_raw_data",
+                        raw_job_dir = os.path.join(RAW_DATA_ROOT,
                                                    *job.source_folder.split('/'), job_layout.PARQUET_DIR)
                         os.makedirs(raw_job_dir, exist_ok=True)
                         import shutil

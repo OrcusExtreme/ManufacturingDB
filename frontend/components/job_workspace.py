@@ -7,7 +7,8 @@ import pandas as pd
 import streamlit as st
 from sqlalchemy import text
 
-from .common import engine, load_data, PROJECT_ROOT
+from .common import engine, load_data
+from vault_manager import PROCESSED_ROOT, VAULT_ROOT
 from .filters import render_search_filters, render_job_table
 from cad_viewer_component import find_cad_file_name, render_cad_viewer
 
@@ -56,7 +57,7 @@ def _load_machining_window(job_info, job_id):
     if isinstance(raw, dict) and raw:
         return raw
 
-    side = os.path.join(PROJECT_ROOT, "processed_data", f"job_{job_id}_window.json")
+    side = os.path.join(PROCESSED_ROOT, f"job_{job_id}_window.json")
     if os.path.exists(side):
         try:
             with open(side, encoding="utf-8") as f:
@@ -146,13 +147,13 @@ def resolve_parquet_file(file_path, default_filename=None):
         if abs_p and os.path.exists(abs_p):
             return abs_p
     if default_filename:
-        p1 = os.path.join(PROJECT_ROOT, "processed_data", default_filename)
+        p1 = os.path.join(PROCESSED_ROOT, default_filename)
         if os.path.exists(p1):
             return p1
-        p2 = os.path.join(PROJECT_ROOT, "archive_vault", "processed_parquet", default_filename)
+        p2 = os.path.join(VAULT_ROOT, "processed_parquet", default_filename)
         if os.path.exists(p2):
             return p2
-        p3 = os.path.join(PROJECT_ROOT, "archive_vault", "surface_roughness", default_filename)
+        p3 = os.path.join(VAULT_ROOT, "surface_roughness", default_filename)
         if os.path.exists(p3):
             return p3
     return None

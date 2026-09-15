@@ -28,6 +28,7 @@ from pipeline_control import (
     CONFIG_PATH
 )
 import job_layout
+from vault_manager import RAW_DATA_ROOT
 from data_insert_recognization import MachiningDataHandler
 
 
@@ -113,7 +114,7 @@ def test_2_parser_skip_logic():
     handler = MachiningDataHandler()
     
     # 테스트용 가공 경로 생성: machining_raw_data/TestProject/TestPart/TestJob/...
-    raw_base = os.path.join(project_dir, "machining_raw_data", "_CtrlTestProj", "TestPart", "TestJob")
+    raw_base = os.path.join(RAW_DATA_ROOT, "_CtrlTestProj", "TestPart", "TestJob")
     # 폴더 이름은 job_layout 규칙을 그대로 쓴다. 예전에는 NC_Code / XML_Metadata 라는
     # 존재하지 않는 이름이라, 수집기가 '분류 폴더가 아님'으로 보고 다른 경로를 타고 있었다.
     nc_dir = os.path.join(raw_base, job_layout.NC_DIR)
@@ -159,7 +160,7 @@ def test_2_parser_skip_logic():
             os.remove(temp_nc)
         if os.path.exists(temp_xml):
             os.remove(temp_xml)
-        test_base = os.path.join(project_dir, "machining_raw_data", "_CtrlTestProj")
+        test_base = os.path.join(RAW_DATA_ROOT, "_CtrlTestProj")
         if os.path.exists(test_base):
             import shutil
             shutil.rmtree(test_base, ignore_errors=True)
