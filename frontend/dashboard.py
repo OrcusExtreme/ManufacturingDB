@@ -49,7 +49,7 @@ with st.sidebar:
     sidebar_logo = LOGO_CARD_PATH if os.path.exists(LOGO_CARD_PATH) else LOGO_PATH
     if os.path.exists(sidebar_logo):
         st.image(sidebar_logo, width=72)
-    st.markdown("**공작기계지능화실험실 제조 DB**<br><span style='font-size:12px; opacity:0.75;'>v3.0.0</span>", unsafe_allow_html=True)
+    st.markdown("**공작기계지능화실험실 제조 DB**<br><span style='font-size:12px; opacity:0.75;'>v3.0.3</span>", unsafe_allow_html=True)
 
     st.write("")
 

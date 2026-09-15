@@ -10,7 +10,7 @@
   <a href="https://www.sqlalchemy.org/"><img src="https://img.shields.io/badge/SQLAlchemy-2.0%2B-red.svg" alt="ORM" /></a>
   <a href="https://streamlit.io/"><img src="https://img.shields.io/badge/Streamlit-1.61%2B-FF4B4B.svg" alt="Frontend" /></a>
   <a href="https://www.iso.org/"><img src="https://img.shields.io/badge/Standard-ISO%2014649%20(STEP--NC)-green.svg" alt="Standard" /></a>
-  <a href="https://github.com/OrcusExtreme/ManufacturingDB"><img src="https://img.shields.io/badge/Release-V3.0-brightgreen.svg" alt="Release" /></a>
+  <a href="https://github.com/OrcusExtreme/ManufacturingDB"><img src="https://img.shields.io/badge/Release-V3.0.3-brightgreen.svg" alt="Release" /></a>
 </p>
 
 공작기계지능화실험실(Machine Tool Intelligence Lab)의 **통합 스마트 제조 데이터베이스 및 실시간 분석 플랫폼**입니다.  
@@ -28,8 +28,9 @@
 ### 2. 하이브리드 4계층 스토리지 & 재난 복구(DR) 체계
 - **MySQL RDBMS**: B-Tree 인덱스 기반의 초고속 조건 필터링, 정렬, 다차원 조인 및 통계 쿼리
 - **Apache Parquet**: 수백만 행 고주파 센서 시계열(12.8kHz)과 마이크로미터($\mu m$) 단면 조도 곡선을 Snappy 컬럼형 압축 포맷으로 초고속 렌더링
-- **File Vault**: SHA 해시 기반의 불변 원본 파일 안전 보관 디렉터리
+- **File Vault**: SHA 해시 기반의 불변 원본 파일 안전 보관 디렉터리 (프로젝트 외부 경로 지정 지원으로 프로젝트 삭제 시에도 백업 영구 보존)
 - **LONGBLOB 백업 미러링**: MySQL 덤프 파일 단독으로도 `recovery_engine.py`를 통해 모든 원본 파일과 디렉터리 트리를 100% 원복 가능
+- **스토리지 초기화 시 보관소 영구 보호**: DB 및 런타임 데이터 초기화 시에도 보관소(`archive_vault`)는 절대 삭제되지 않도록 이중 격리 보호
 
 ### 3. 무중단 실시간 자동 파이프라인 (Automated Pipeline)
 - `machining_raw_data/` 모니터링 디렉터리에 폴더째 파일 투입 시 자동 감지(Watchdog)
@@ -152,6 +153,7 @@ ManufacturingDB/
 │   ├── reset_database_and_storage.py #   DB + 프로젝트 data/ 초기화 (보관소는 보존)
 │   ├── migrate_keys_v3.py            #   키 정규화 마이그레이션 (숫자 PK 전환)
 │   ├── migrate_job_folder_layout.py  #   Job 폴더를 자료 종류별 하위 폴더로 이전
+│   ├── migrate_vault_location.py     #   원본 보관소 위치 이전 도구 (미리보기 / --apply)
 │   ├── backfill_workingstep_conditions.py  # 기존 Workplan 절삭조건 소급 갱신
 │   ├── DB/
 │   │   ├── database.py               #   SQLAlchemy 커넥션 풀링 및 세션 팩토리
@@ -219,7 +221,7 @@ ManufacturingDB/
 - **Python**: 3.10 이상
 - **MySQL**: 8.0 이상 (인스턴스 구동 필요)
 - **OS**: Windows 10/11 — 제조 DB Controller 가 Win32 API 를 직접 사용합니다.
-  다른 OS 에서는 CLI 실행(`run_system.py`)을 쓰세요
+  다른 OS 에서는 CLI 실행(`python tools/run_system.py`)을 쓰세요
 - **g++ (MinGW-w64 / w64devkit)**: 컨트롤러를 **수정해 다시 빌드할 때만** 필요합니다
 
 ### 2. 저장소 복제 (Clone Repository)
@@ -287,13 +289,13 @@ C++ Win32 네이티브 컨트롤러로 Streamlit UI, Watchdog 파일 감시, TDM
 오너드로우로 직접 그렸고, 강조색은 대시보드와 같은 `#1A73E8` 입니다.
 ```bash
 system_controller.exe          # 실행 파일 직접 실행
-run_controller.bat             # 없으면 자동 빌드 후 실행
+tools\run_controller.bat       # 없으면 자동 빌드 후 실행
 ```
 
 **동작 방식** — 컨트롤러는 파이썬 코드를 품고 있지 않고 디스크의 `.py` 를 그대로 실행하는 감독자입니다.
 따라서 `backend/`, `frontend/` 를 수정하면 **컨트롤러를 다시 빌드하지 않아도** 다음 실행부터 반영됩니다.
 
-**파이썬 인터프리터 탐색 순서** (`src/app_config.h`)
+**파이썬 인터프리터 탐색 순서** (`controller/app_config.h`)
 1. `runtime\python.exe` — 프로젝트에 동봉한 임베디드 런타임 (파이썬 미설치 PC 대응)
 2. `py -3` → 실제 `sys.executable` 경로를 조회해 사용
 3. PATH 의 `python` → 마찬가지로 실제 경로를 조회해 사용
@@ -304,13 +306,13 @@ run_controller.bat             # 없으면 자동 빌드 후 실행
 
 **컨트롤러 빌드** (수정했을 때만 필요, MinGW-w64 / w64devkit 의 g++ 사용)
 ```bash
-compile_controller.bat
+tools\compile_controller.bat
 ```
 
 #### 방법 2: CLI 터미널 일괄 실행
-`run_system.py`를 실행하면 필수 패키지 설치 확인, DB 스키마 자동 초기화, 파이프라인 및 통합 대시보드가 서브프로세스로 동시 기동됩니다.
+`tools/run_system.py`를 실행하면 필수 패키지 설치 확인, DB 스키마 자동 초기화, 파이프라인 및 통합 대시보드가 서브프로세스로 동시 기동됩니다.
 ```bash
-python run_system.py
+python tools/run_system.py
 ```
 
 ### 5. 서비스 접속
@@ -373,9 +375,27 @@ XML/NC/CAD 원본이 저장 시점과 바이트 단위로 동일한지에 대한
 
 ## 🚀 릴리즈 노트 (Release Notes)
 
-각 버전의 핵심만 적습니다. 세부 동작과 판단 근거는 [`gemini.md`](gemini.md)를 참고하세요.
+각 버전의 핵심만 적습니다. 세부 동작과 판단 근거는 [`docs/gemini.md`](docs/gemini.md)를 참고하세요.
 
-### [V3.0] - 2026-09-14
+### [V3.0.3] - 2026-09-15
+- **문서화 및 가이드 최신화**:
+  - `tools/`, `controller/`, `docs/`, `assets/` 디렉터리 분리에 따른 README 실행·빌드 가이드 및 스크립트 경로 전면 갱신
+  - V3.0.2 원본 백업 보관소 외부 분리(`ORCUS_VAULT_ROOT` / `ORCUS_DB_DATA_DIR`) 가이드 및 `migrate_vault_location.py` 사용법 정리
+  - 스토리지 초기화 시 보관소 영구 보존 정책 및 이중 보호 체계 문서 반영
+
+### [V3.0.2] - 2026-09-15
+- **원본 백업 보관소(Vault) 외부 분리 및 영구 보호**:
+  - 프로젝트 폴더 삭제나 재설치 시에도 원본 백업이 함께 유실되지 않도록 보관소 경로를 프로젝트 외부(예: MySQL 데이터 디렉터리 등)로 지정 지원 (`ORCUS_VAULT_ROOT` / `ORCUS_DB_DATA_DIR` 환경변수)
+  - `backend/migrate_vault_location.py` 마이그레이션 도구 신설 (기본 드라이런 미리보기 및 `--apply` 옵션을 통한 안전한 원본 복사·검증·삭제)
+  - DB 및 캐시 초기화(`reset_database_and_storage.py`) 시 원본 백업 보관소(`archive_vault`)를 영구 보존하는 이중 보호 장치(`is_inside_vault`) 적용
+  - C++ 컨트롤러 다이얼로그에서 실제 보관소 위치 표시 및 초기화 대상(DB, raw_data, processed_data, failed_data)과 보존 대상(보관소) 분리 안내
+
+### [V3.0.1] - 2026-09-15
+- **프로젝트 디렉터리 구조 개편 및 정돈**:
+  - 루트의 중복 로고 및 배치 스크립트를 정리하고 `assets/`, `docs/`, `tools/`, `controller/`(구 `src/`) 하위로 기능별 분리
+  - 빌드 및 실행 도구(`tools/`), 마크다운 상세 문서(`docs/`) 경로 표준화 및 README 내 안내 경로 갱신
+
+### [V3.0.0] - 2026-09-14
 - **전용 브랜드 로고 도입**: 엔드밀 공구·클라우드 회로 루프·스파크를 형상화한 심볼을
   JPG / 멀티해상도 ICO / 투명 PNG / 카드형 PNG 4종으로 제작해 `assets/` 한 곳에 보관.
   컨트롤러 헤더·앱 아이콘, 대시보드 사이드바·파비콘이 모두 같은 파일을 씁니다
