@@ -90,20 +90,31 @@ def find_valid_data_end(path: str) -> Tuple[int, int]:
 
 
 class _TruncatedFile(io.RawIOBase):
-    """지정한 길이까지만 존재하는 것처럼 보이게 하는 읽기 전용 래퍼."""
+    """지정한 길이까지만 존재하는 것처럼 보이게 하는 읽기 전용 래퍼.
+
+    읽기 위치를 직접 들고 있는다. 예전에는 읽을 때마다 self._fh.tell() 을 불렀는데,
+    nptdms 는 세그먼트마다 잘게 읽기 때문에 이 래퍼의 read 가 464MB 파일 하나에 대해
+    400만 번 넘게 호출됐다(실측 cProfile). tell() 한 번의 비용은 작아도 400만 번이면
+    전체 변환 시간의 4분의 1이 여기서 나갔다. 위치를 더하기만 하면 되는 값이라 들고 있는다.
+    """
 
     def __init__(self, fh, limit: int):
         self._fh = fh
         self._limit = limit
+        self._pos = fh.tell()
 
     def _remaining(self) -> int:
-        return max(0, self._limit - self._fh.tell())
+        return max(0, self._limit - self._pos)
 
     def read(self, n=-1):
         remain = self._remaining()
+        if remain == 0:
+            return b""
         if n is None or n < 0:
             n = remain
-        return self._fh.read(min(n, remain))
+        chunk = self._fh.read(min(n, remain))
+        self._pos += len(chunk)
+        return chunk
 
     def readinto(self, buf):
         remain = self._remaining()
@@ -112,15 +123,19 @@ class _TruncatedFile(io.RawIOBase):
         view = memoryview(buf)
         if len(view) > remain:
             view = view[:remain]
-        return self._fh.readinto(view)
+        read = self._fh.readinto(view) or 0
+        self._pos += read
+        return read
 
     def seek(self, offset, whence=os.SEEK_SET):
         if whence == os.SEEK_END:
-            return self._fh.seek(self._limit + offset, os.SEEK_SET)
-        return self._fh.seek(offset, whence)
+            self._pos = self._fh.seek(self._limit + offset, os.SEEK_SET)
+        else:
+            self._pos = self._fh.seek(offset, whence)
+        return self._pos
 
     def tell(self):
-        return self._fh.tell()
+        return self._pos
 
     def readable(self):
         return True
@@ -135,22 +150,60 @@ class _TruncatedFile(io.RawIOBase):
             super().close()
 
 
+def _eager_read_is_affordable(file_size: int) -> bool:
+    """파일 전체를 메모리에 올려도 되는지 여유 메모리를 보고 판단한다.
+
+    실측(464MB 파일) 기준 메모리 사용량은 파일 크기의 약 1.3배였다.
+    여유 메모리의 절반을 넘지 않을 때만 통째로 읽는다.
+    """
+    try:
+        import psutil
+        available = psutil.virtual_memory().available
+    except Exception:
+        return False
+    return file_size * 1.3 < available * 0.5
+
+
 @contextmanager
-def open_tdms(path: str, metadata_only: bool = False):
+def open_tdms(path: str, metadata_only: bool = False, eager: Optional[bool] = None):
     """TDMS 를 여는 컨텍스트 매니저.
 
     파일 경로 대신 파일 객체를 넘겨 nptdms 가 손상된 *.tdms_index 를 집어들지 않게 하고,
-    0-패딩된 꼬리는 잘라낸 상태로 보여준다. 채널 데이터는 필요한 구간만 지연 로딩된다.
+    0-패딩된 꼬리는 잘라낸 상태로 보여준다.
+
+    읽기 방식 (eager)
+    -----------------
+    TdmsFile.open() 은 채널을 '필요할 때' 읽는다. 채널 하나를 읽을 때마다 파일 전체의
+    세그먼트를 훑어야 해서, 채널 수만큼 파일을 다시 스캔한다. CNC 그룹은 채널이 34개라
+    464MB 파일을 34번 훑었고, HDD 에서 이것만 45~51초가 걸렸다 (전체 변환 시간의 79%).
+    정작 데이터량이 100배인 DAQ 6채널은 0.75초였다. 병목은 데이터량이 아니라 '탐색 횟수'다.
+
+    TdmsFile.read() 는 파일을 순차로 한 번만 훑어 모든 채널을 채운다. 같은 파일이
+    51초 -> 15초로 줄었다. 대신 전부 메모리에 올라가므로(464MB 파일 -> 약 592MB)
+    여유 메모리가 부족하면 예전처럼 지연 로딩으로 돌아간다.
+
+    eager=None 이면 파일 크기와 여유 메모리를 보고 자동으로 고른다.
     """
     from nptdms import TdmsFile
 
     valid_end, size = find_valid_data_end(path)
-    fh = _TruncatedFile(open(path, "rb"), valid_end)
+
+    # 래퍼를 BufferedReader 로 한 번 더 감싼다.
+    # nptdms 는 세그먼트마다 잘게 읽는데(이 파일은 세그먼트가 약 56만 개), 그 호출이
+    # 전부 파이썬으로 짠 _TruncatedFile 로 들어오면 464MB 하나에 400만 번이 넘는다.
+    # 1MB 버퍼를 끼우면 파이썬 쪽 호출이 수백 번으로 줄고 나머지는 C 버퍼가 받아낸다.
+    # (실측: 15.0초 -> 9.2초)
+    fh = io.BufferedReader(
+        _TruncatedFile(open(path, "rb", buffering=0), valid_end),
+        buffer_size=1 << 20,
+    )
     try:
         if metadata_only:
             tdms = TdmsFile.read_metadata(fh)
         else:
-            tdms = TdmsFile.open(fh)
+            use_eager = _eager_read_is_affordable(valid_end) if eager is None else eager
+            tdms = TdmsFile.read(fh) if use_eager else TdmsFile.open(fh)
+            tdms.eager_loaded = bool(use_eager)   # 진단용
         tdms.truncated_bytes = size - valid_end  # 진단용 부가 정보
         yield tdms
     finally:

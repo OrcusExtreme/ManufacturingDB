@@ -10,7 +10,7 @@
   <a href="https://www.sqlalchemy.org/"><img src="https://img.shields.io/badge/SQLAlchemy-2.0%2B-red.svg" alt="ORM" /></a>
   <a href="https://streamlit.io/"><img src="https://img.shields.io/badge/Streamlit-1.61%2B-FF4B4B.svg" alt="Frontend" /></a>
   <a href="https://www.iso.org/"><img src="https://img.shields.io/badge/Standard-ISO%2014649%20(STEP--NC)-green.svg" alt="Standard" /></a>
-  <a href="https://github.com/OrcusExtreme/ManufacturingDB"><img src="https://img.shields.io/badge/Release-V3.0.3-brightgreen.svg" alt="Release" /></a>
+  <a href="https://github.com/OrcusExtreme/ManufacturingDB"><img src="https://img.shields.io/badge/Release-V3.0.4-brightgreen.svg" alt="Release" /></a>
 </p>
 
 공작기계지능화실험실(Machine Tool Intelligence Lab)의 **통합 스마트 제조 데이터베이스 및 실시간 분석 플랫폼**입니다.  
@@ -38,6 +38,8 @@
 - **Job 폴더 자동 정리**: 파일이 Job 폴더에 섞여 들어와도 확장자를 보고
   `XML/` · `Log/` · `TDMS/` · `NC/` 하위 폴더로 옮긴 뒤 처리 (규칙은 `backend/job_layout.py` 단일 출처)
 - 비동기 백그라운드 데몬(`tdms_visualizer.py`)을 통한 시간 도메인 & FFT 주파수 스펙트럼 Parquet 자동 생성
+- **단일 패스 TDMS 읽기**: 여유 메모리를 보고 파일 전체를 한 번에 훑어 채널별 재스캔을 제거
+  (464MB 실측 54.9초 → 10.1초). 메모리가 부족하면 지연 로딩으로 자동 전환
 
 ### 4. 제조 DB Controller (C++ 네이티브 GUI)
 `system_controller.exe` 하나로 Streamlit UI · Watchdog 수집기 · TDMS 변환기를 개별 제어하고,
@@ -154,6 +156,7 @@ ManufacturingDB/
 │   ├── migrate_keys_v3.py            #   키 정규화 마이그레이션 (숫자 PK 전환)
 │   ├── migrate_job_folder_layout.py  #   Job 폴더를 자료 종류별 하위 폴더로 이전
 │   ├── migrate_vault_location.py     #   원본 보관소 위치 이전 도구 (미리보기 / --apply)
+│   ├── normalize_name_casing.py      #   보관소 폴더 대소문자 표기를 DB 기준으로 통일
 │   ├── backfill_workingstep_conditions.py  # 기존 Workplan 절삭조건 소급 갱신
 │   ├── DB/
 │   │   ├── database.py               #   SQLAlchemy 커넥션 풀링 및 세션 팩토리
@@ -266,6 +269,22 @@ python backend\migrate_vault_location.py            # 무엇이 옮겨질지 미
 python backend\migrate_vault_location.py --apply    # 실제 이동 (복사 → 검증 → 원본 삭제)
 ```
 
+#### 폴더 이름 대소문자 표기
+
+Windows 파일시스템과 MySQL 기본 콜레이션은 **둘 다 대소문자를 구분하지 않습니다.** 그래서
+같은 부품을 `DB_Test` 로도 `DB_TEST` 로도 넣을 수 있고 DB 조회는 어느 쪽으로도 같은 행을
+찾습니다(중복 Part 는 생기지 않습니다). 파서는 **먼저 등록된 표기**를 기준으로 경로를 만들어
+보관소 폴더가 갈라지지 않게 합니다. 이미 갈라진 폴더가 있다면 아래 도구로 정리하세요.
+
+```bash
+python backend\normalize_name_casing.py             # 무엇이 바뀔지 미리보기
+python backend\normalize_name_casing.py --apply     # DB 표기 기준으로 폴더 이름 통일
+```
+
+> Windows 에서는 대소문자가 달라도 파일이 열려 당장은 문제가 없지만, 보관소를 리눅스/NAS 로
+> 옮기거나 다른 PC 에서 복원하면 대소문자를 구분하는 파일시스템에서 경로가 어긋납니다.
+> DB 가 참조하지 않는 고아 폴더는 **삭제하지 않고 보고만** 합니다.
+
 **보관소는 초기화 버튼으로 지워지지 않습니다.** 컨트롤러의 `DB · 스토리지 초기화` 는
 DB 테이블과 프로젝트 폴더의 `data/` 만 비우고 보관소는 손대지 않습니다. 삭제 대상 목록에서
 제외하는 것에 더해, 실제 삭제 직전에 보관소 안쪽 경로인지 한 번 더 확인해 막습니다.
@@ -376,6 +395,28 @@ XML/NC/CAD 원본이 저장 시점과 바이트 단위로 동일한지에 대한
 ## 🚀 릴리즈 노트 (Release Notes)
 
 각 버전의 핵심만 적습니다. 세부 동작과 판단 근거는 [`docs/gemini.md`](docs/gemini.md)를 참고하세요.
+
+### [V3.0.4] - 2026-09-15
+- **TDMS 변환 성능 5.4배 개선** (464MB 파일 실측 54.9초 → 10.1초, 폴더 투입부터 UI 전체 노출까지 148초 → 43.2초):
+  - 채널별 지연 로딩이 채널 수만큼 파일을 다시 스캔하던 문제를 단일 패스 읽기(`TdmsFile.read`)로 교체.
+    CNC 34채널을 읽는 데만 45초(전체의 79%)가 소모되던 병목 제거
+  - 손상 파일 꼬리를 잘라내는 `_TruncatedFile` 래퍼가 파일 하나당 400만 회 호출되던 문제를
+    읽기 위치 직접 추적 + `BufferedReader`(1MB) 도입으로 수백 회 수준까지 축소
+  - 여유 메모리를 보고 단일 패스와 지연 로딩을 자동 선택 (`open_tdms(eager=None)`)하여
+    대용량 파일에서도 안전하게 동작
+- **부품·프로젝트 표기 통일**: Windows·MySQL 모두 대소문자를 구분하지 않아 같은 부품이
+  `DB_Test` / `DB_TEST` 등 서로 다른 Vault 폴더로 갈라지던 문제 해결
+  - 파서가 들어온 이름 대신 **DB에 등록된 표기**로 경로를 생성하도록 수정 (`canonical_names`)
+  - 기존 보관소 폴더 표기를 일괄 정리하는 `backend/normalize_name_casing.py` 신설
+    (미리보기 기본, `--apply` 적용, 고아 폴더는 삭제하지 않고 보고만)
+- **Watchdog 삭제 감지 안정화**:
+  - 탐색기가 폴더 복사 중 생성·삭제하는 `desktop.ini`, `Thumbs.db`, 오피스 임시 파일 등을
+    수집·삭제 양쪽에서 동일 기준으로 무시 (`job_layout.is_ignored_file`)
+  - 삭제 이벤트마다 스레드를 새로 띄우던 구조를 큐 + 단일 워커로 교체.
+    파일 14개 폴더 삭제 시 15개 스레드가 동시에 DB 세션을 잡아 커넥션 풀이 고갈되던
+    (`QueuePool limit ... timed out`) 문제 해소, 자동 복원 트리거 15회 → 1회
+- **Streamlit 1.61 지원**: 폐기 예정 경고를 발생시키던 `use_container_width`를
+  `width="stretch"`로 전면 교체 (11곳)
 
 ### [V3.0.3] - 2026-09-15
 - **문서화 및 가이드 최신화**:

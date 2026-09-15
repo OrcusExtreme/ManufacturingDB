@@ -31,6 +31,41 @@ PARQUET_DIR = "processed_parquet"
 # Part 레벨 폴더 (Job 폴더와 같은 깊이에 놓인다)
 CAD_DIR = "CAD_Files"
 
+# 운영체제·응용프로그램이 제멋대로 만들었다 지우는 부수 파일들.
+# 가공 데이터가 아니므로 수집도 하지 않고, 사라져도 복원 대상이 아니다.
+#
+# 탐색기로 폴더를 통째로 끌어다 넣으면 Windows 가 폴더 서식 정보를 옮기느라 desktop.ini 를
+# 잠깐 만들었다가 지운다. 수집 쪽은 확장자 화이트리스트로 걸러지는데 삭제 감지 쪽은 그렇지
+# 않아서, 업로드할 때마다 "복원 대상에서 제외됩니다" 알림이 줄줄이 찍혔다.
+IGNORED_FILENAMES = {
+    "desktop.ini",      # Windows 폴더 서식 정보
+    "thumbs.db",        # Windows 썸네일 캐시
+    "ehthumbs.db",
+    ".ds_store",        # macOS 폴더 정보 (네트워크 드라이브 경유로 섞여 들어온다)
+}
+
+# 저장 중이거나 임시로 만들어지는 파일. 완성본이 아니라 다룰 이유가 없다.
+IGNORED_PREFIXES = ("~$", ".~lock.")
+IGNORED_SUFFIXES = (".tmp", ".temp", ".crdownload", ".part", ".partial", ".swp")
+
+
+def is_ignored_file(path):
+    """가공 데이터가 아닌 부수 파일이면 True.
+
+    수집(생성/수정)과 삭제 감지가 같은 기준을 써야 한다. 한쪽만 거르면
+    '들어올 때는 무시했는데 사라질 때는 반응하는' 비대칭이 생긴다.
+    """
+    if not path:
+        return False
+    name = os.path.basename(str(path).rstrip("/\\")).lower()
+    if not name:
+        return False
+    if name in IGNORED_FILENAMES:
+        return True
+    if name.startswith(IGNORED_PREFIXES):
+        return True
+    return name.endswith(IGNORED_SUFFIXES)
+
 # 확장자 -> 들어가야 할 하위 폴더.
 # .csv 는 조도 폴더 안에 있으면 조도 측정값이지만, Job 루트에 떨어진 것은 CNC 로그로 다룬다.
 EXTENSION_DIRS = {

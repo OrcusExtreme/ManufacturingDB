@@ -32,6 +32,11 @@ def get_or_create_job(db, job_identifier):
                 db.flush()
             return job
 
+    # 이미 등록된 부품이면 그때 쓴 표기로 맞춘다. 그러지 않으면 대소문자만 다른 업로드가
+    # source_folder·Vault 폴더를 새 표기로 만들어 같은 부품이 두 갈래로 쌓인다.
+    normalized_id = canonical_folder_id(db, normalized_id)
+    folder_parts = normalized_id.split('/')
+
     print(f"    - [Job Manager] Job({job_identifier})이 존재하지 않아 새로 생성합니다.")
     
     # 4. 프로젝트 명과 Part 명 파싱
@@ -213,3 +218,49 @@ def discard_orphan_workplan(db, workplan_id):
     db.delete(stale)   # Workingstep·NC 아카이브는 cascade 로 함께 정리된다
     db.flush()
     return True
+
+
+def canonical_names(db, project_code, part_name):
+    """들어온 프로젝트/부품 표기를 DB 에 이미 등록된 표기로 맞춰 돌려준다.
+
+    Windows 파일시스템과 MySQL 기본 콜레이션은 둘 다 대소문자를 구분하지 않는다. 그래서
+    같은 부품을 'DB_Test' 로도 'DB_TEST' 로도 넣을 수 있고, 조회는 어느 쪽으로도 같은 행을
+    찾아 준다(중복 Part 는 생기지 않는다). 문제는 Vault 폴더 이름을 'DB 에 저장된 이름'이
+    아니라 '이번에 들어온 이름'으로 만들고 있었다는 점이다. 그래서 업로드할 때마다 표기가
+    다른 폴더가 따로 쌓였다. 실측에서 jobs/Alchemist 아래에 DB_TEST 와 TEST 가, cad_models
+    아래에 Part_DB_TEST 와 Part_TEST 가 각각 남았다.
+
+    Windows 에서는 대소문자가 달라도 열리니 당장은 티가 안 나지만, 보관소를 리눅스/NAS 로
+    옮기거나 다른 PC 에서 복원하면 대소문자를 구분하는 파일시스템에서 경로가 통째로 어긋난다.
+    그래서 '먼저 등록된 표기'를 기준으로 못박아 더 이상 흔들리지 않게 한다.
+    """
+    from DB.models import Part
+
+    if not part_name:
+        return project_code, part_name
+
+    row = db.query(Part).filter(Part.part_name == part_name).first()
+    if row is None:
+        return project_code, part_name
+
+    canon_part = row.part_name or part_name
+    canon_proj = project_code
+    if row.project_code and project_code and row.project_code.lower() == project_code.lower():
+        canon_proj = row.project_code
+
+    if canon_part != part_name or canon_proj != project_code:
+        print(f"    - [표기 통일] '{project_code}/{part_name}' -> 이미 등록된 표기 "
+              f"'{canon_proj}/{canon_part}' 를 사용합니다.")
+    return canon_proj, canon_part
+
+
+def canonical_folder_id(db, folder_id):
+    """'{프로젝트}/{부품}/{차수}' 식별자를 DB 에 등록된 표기로 맞춘다."""
+    if not folder_id:
+        return folder_id
+    parts = str(folder_id).replace(chr(92), '/').strip('/').split('/')
+    if len(parts) < 3:
+        return folder_id
+    proj, part_name, tail = parts[-3], parts[-2], parts[-1]
+    proj, part_name = canonical_names(db, proj, part_name)
+    return f"{proj}/{part_name}/{tail}"

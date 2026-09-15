@@ -353,7 +353,7 @@ def _render_job_download(scoped, scope_name, job_id):
     cols = st.columns(4)
     for idx, (btn_label, category, count) in enumerate(buttons):
         with cols[idx % 4]:
-            if st.button(f"{btn_label} ({count})", key=f"dc_cat_{idx}", use_container_width=True):
+            if st.button(f"{btn_label} ({count})", key=f"dc_cat_{idx}", width="stretch"):
                 slug = "AllData" if category is None else CATEGORY_SLUGS[category]
                 with st.spinner("파일을 준비하는 중입니다..."):
                     _prepare('dc_prepared', _collect_files(scoped, category), f"{scope_name}_{slug}")
@@ -372,7 +372,7 @@ def _render_job_download(scoped, scope_name, job_id):
         }
         for abs_path, arcname in files
     ])
-    st.dataframe(file_rows, use_container_width=True, hide_index=True, height=260)
+    st.dataframe(file_rows, width="stretch", hide_index=True, height=260)
 
     picked_idx = st.selectbox(
         "개별로 내려받을 파일 선택", list(range(len(files))),

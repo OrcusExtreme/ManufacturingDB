@@ -87,6 +87,12 @@ def parse_xml(file_path, job_id):
                 part.material_code = material_code
         part_code = part.part_code
 
+        # 이 아래에서 만드는 Vault 경로·source_folder 는 전부 여기 이름을 따라간다.
+        # 들어온 표기를 그대로 쓰면 같은 부품인데도 대소문자만 다른 폴더가 새로 생기므로,
+        # 이미 등록된 Part 가 있으면 그쪽 표기로 통일한다.
+        project_code = part.project_code or project_code
+        part_name = part.part_name or part_name
+
         # 2. Workplan Upsert (부품 + 프로그램 + NC 해시 조합으로 동일성 판단.
         #    이름만 같고 내용이 다른 NC 파일을 해시로 구분하는 기존 규칙은 그대로 유지된다.)
         workplan = db.query(Workplan).filter(
@@ -258,9 +264,15 @@ def parse_xml(file_path, job_id):
             # job_id PK 기반 문자열로 재구성하면 watchdog이 인식한 실제 폴더명과 어긋나서
             # (1) 같은 폴더의 다른 파일(NC/TDMS/Log)이 이 Job을 못 찾아 중복 Job을 만들고
             # (2) 다운로드/복구 기능이 존재하는 실제 폴더를 "유실됨"으로 오판하게 된다.
-            canonical_sf = job_id
-            if existing_job.source_folder != canonical_sf:
+            # 다만 '대소문자만 다른' 경우는 같은 폴더다(Windows·MySQL 모두 구분하지 않는다).
+            # 그때까지 덮어쓰면 업로드할 때마다 표기가 뒤집혀 Vault 폴더가 갈라지므로,
+            # 이미 등록된 부품 표기로 맞춘 값을 쓰고 대소문자 차이만 있을 때는 그대로 둔다.
+            canonical_sf = f"{project_code}/{part_name}/{job_id.split('/')[-1]}"
+            current_sf = existing_job.source_folder or ""
+            if current_sf.lower() != canonical_sf.lower():
                 existing_job.source_folder = canonical_sf
+            else:
+                canonical_sf = current_sf
 
             xml_vault_path = save_to_vault(file_path, "jobs", *canonical_sf.split('/'), "metadata.xml")
             print(f"    - 이미 존재하는 Job (PK: {existing_job.job_id} / 폴더: {existing_job.source_folder}) 발견. Job 정보를 업데이트합니다.")

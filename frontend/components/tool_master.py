@@ -95,7 +95,7 @@ def render_tool_master():
     st.markdown("#### :material/build: 전체 공구 목록")
     st.dataframe(
         tools_df,
-        use_container_width=True, hide_index=True,
+        width="stretch", hide_index=True,
         column_config={
             "tool_id": "ID",
             "tool_code": "공구 코드",

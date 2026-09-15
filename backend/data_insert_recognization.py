@@ -24,9 +24,19 @@ class MachiningDataHandler(FileSystemEventHandler):
         self.processed_files = OrderedDict()
         self.max_cache_size = max_cache_size
         self.file_queue = queue.Queue()
-        
+
         self.worker_thread = threading.Thread(target=self._process_queue, daemon=True)
         self.worker_thread.start()
+
+        # 삭제 감지도 수집과 같은 '큐 + 워커 하나' 구조로 처리한다.
+        # 예전에는 삭제 이벤트마다 스레드를 새로 띄웠는데, 폴더를 하나 지우면 그 안의 파일 수만큼
+        # 이벤트가 쏟아져 스레드가 그만큼 생기고 각자 DB 세션을 잡았다. 실측에서 파일 14개짜리
+        # Job 폴더를 지우자 15개가 한꺼번에 붙어 커넥션 풀(5+10)이 고갈되고
+        # "QueuePool limit ... connection timed out" 으로 대부분이 30초 대기 후 실패했다.
+        # 복원은 결국 한 스레드가 해냈지만, 더 큰 폴더였다면 복원 자체가 실패할 수 있었다.
+        self.delete_queue = queue.Queue()
+        self.delete_worker = threading.Thread(target=self._process_delete_queue, daemon=True)
+        self.delete_worker.start()
 
     def _mark_processed(self, file_path):
         self.processed_files[file_path] = True
@@ -36,21 +46,30 @@ class MachiningDataHandler(FileSystemEventHandler):
     def on_created(self, event):
         if event.is_directory:
             return
+        if job_layout.is_ignored_file(event.src_path):
+            return
         self.file_queue.put(event.src_path)
 
     def on_modified(self, event):
         if event.is_directory:
             return
+        if job_layout.is_ignored_file(event.src_path):
+            return
         file_path_norm = os.path.normpath(event.src_path)
         if file_path_norm in self.processed_files:
             del self.processed_files[file_path_norm]
         self.file_queue.put(event.src_path)
-        
+
     def on_deleted(self, event):
         path_norm = os.path.normpath(event.src_path)
         if path_norm in self.processed_files:
             del self.processed_files[path_norm]
-            
+
+        # 운영체제가 만들었다 지우는 부수 파일(desktop.ini 등)은 수집도 안 하므로
+        # 사라져도 복원할 것이 없다. 수집 쪽과 같은 기준으로 여기서도 먼저 거른다.
+        if not event.is_directory and job_layout.is_ignored_file(path_norm):
+            return
+
         # machining_raw_data 하위 경로 분석
         parts = path_norm.split(os.sep)
         try:
@@ -58,59 +77,69 @@ class MachiningDataHandler(FileSystemEventHandler):
             rel_parts = [p for p in parts[raw_idx + 1:] if p]
         except ValueError:
             return
-            
-        # 백그라운드 스레드에서 프로젝트/부품/Job/파일 단위 유실 검사 및 자동 복구 수행
-        threading.Thread(target=self._auto_restore_by_rel_parts, args=(rel_parts,), daemon=True).start()
 
-    def _auto_restore_by_rel_parts(self, rel_parts):
-        time.sleep(1.5)  # 디바운스 대기
+        # 아래 판단은 '경로 깊이'로 프로젝트/부품/Job 단계를 가른다. 그래서 지워진 것이
+        # 파일이면 파일 이름을 빼고 '그 파일이 들어 있던 폴더'를 기준으로 삼아야 한다.
+        # 예전에는 파일 이름을 그대로 한 단계로 세어서, 프로젝트 폴더에 떨어진 파일 하나가
+        # 'Part 폴더가 지워졌다'로 해석됐다 (예: Alchemist/desktop.ini -> Part 삭제로 오인).
+        if not event.is_directory and rel_parts:
+            rel_parts = rel_parts[:-1]
+            if not rel_parts:
+                return
+
+        # 워커 하나가 모아서 처리한다 (여기서 스레드를 띄우지 않는다)
+        self.delete_queue.put(tuple(rel_parts))
+
+    def _process_delete_queue(self):
+        """삭제 이벤트를 잠깐 모았다가 중복을 걷어내고 한 번에 처리한다."""
+        while True:
+            pending = {self.delete_queue.get()}
+
+            # 폴더 하나를 지우면 파일 수만큼 이벤트가 연달아 들어온다.
+            # 1.5초 동안 들어오는 것을 모두 모아 같은 대상을 한 번만 처리한다.
+            deadline = time.time() + 1.5
+            while True:
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    break
+                try:
+                    pending.add(self.delete_queue.get(timeout=remaining))
+                except queue.Empty:
+                    break
+
+            try:
+                self._auto_restore(pending)
+            except Exception as e:
+                print(f"[자동 복원 에러]: {e}")
+
+    def _auto_restore(self, pending_parts):
+        """모아 둔 삭제 대상들을 세션 하나로 판정하고, Job 당 한 번만 복원한다."""
         from DB.database import SessionLocal
         from DB.models import Job
         from recovery_engine import restore_single_job_to_raw_data
-        
+
         db = SessionLocal()
         try:
-            target_jobs = []
-            if len(rel_parts) == 0:
-                # machining_raw_data 폴더 자체가 통째로 삭제된 경우 -> 전체 복원
-                target_jobs = db.query(Job).all()
-            elif len(rel_parts) == 1:
-                # 프로젝트 단위 폴더 삭제 (예: TestProject, Alchemist)
-                proj = rel_parts[0]
-                target_jobs = db.query(Job).filter(
-                    (Job.research_project == proj) | (Job.source_folder.like(f"{proj}/%"))
-                ).all()
-            elif len(rel_parts) == 2:
-                # Part 단위 폴더 삭제 (예: Alchemist/Bracket)
-                prefix = f"{rel_parts[0]}/{rel_parts[1]}/"
-                target_jobs = db.query(Job).filter(Job.source_folder.like(f"{prefix}%")).all()
-            else:
-                # Job 단위 또는 개별 파일 삭제 (예: Alchemist/Bracket/1 또는 .../metadata.xml)
-                if rel_parts[2] == job_layout.CAD_DIR:
-                    # Part 레벨 CAD 파일 삭제 감지 시 Part에 속한 Job의 CAD 복원
-                    prefix = f"{rel_parts[0]}/{rel_parts[1]}/"
-                    target_jobs = db.query(Job).filter(Job.source_folder.like(f"{prefix}%")).all()
-                else:
-                    sf = f"{rel_parts[0]}/{rel_parts[1]}/{rel_parts[2]}"
-                    is_num = rel_parts[2].isdigit()
-                    target_jobs = db.query(Job).filter(
-                        (Job.source_folder == sf) | 
-                        ((Job.job_id == int(rel_parts[2])) if is_num else False)
-                    ).all()
-                    
+            target_jobs = {}
+            missing_targets = []
+            for rel_parts in pending_parts:
+                jobs = self._resolve_deleted_target(db, list(rel_parts))
+                if jobs:
+                    for job in jobs:
+                        target_jobs[job.job_id] = job
+                elif rel_parts:
+                    missing_targets.append('/'.join(rel_parts))
+
             if not target_jobs:
-                if len(rel_parts) > 0:
-                    deleted_target = '/'.join(rel_parts)
-                    print(f"\n[자동 복원 알림] 삭제 감지된 '{deleted_target}'는 DB에 등록된 가공 이력이 없어 복원 대상에서 제외됩니다.")
+                for name in sorted(set(missing_targets)):
+                    print(f"\n[자동 복원 알림] 삭제 감지된 '{name}'는 DB에 등록된 가공 이력이 없어 복원 대상에서 제외됩니다.")
                 return
-                
-            base_dir = os.path.dirname(os.path.abspath(__file__))
+
             watch_dir = RAW_DATA_ROOT
-            
-            for job in target_jobs:
+            for job in target_jobs.values():
                 sf = job.source_folder or f"Job_{job.job_id}"
                 dest_dir = os.path.join(watch_dir, *sf.split('/'))
-                
+
                 # 폴더가 없거나 파일이 유실된 경우 복원
                 if not os.path.exists(dest_dir) or len(os.listdir(dest_dir)) == 0:
                     print(f"\n[자동 복원 트리거] {sf} (Job ID: {job.job_id}) 유실 감지 -> Vault/DB에서 자동 복원을 진행합니다.")
@@ -121,10 +150,42 @@ class MachiningDataHandler(FileSystemEventHandler):
                             for root_d, _, files in os.walk(dest_dir):
                                 for f in files:
                                     self._mark_processed(os.path.normpath(os.path.join(root_d, f)))
-        except Exception as e:
-            print(f"[자동 복원 에러]: {e}")
         finally:
             db.close()
+
+    def _resolve_deleted_target(self, db, rel_parts):
+        """지워진 경로가 어떤 Job 들에 해당하는지 찾는다 (경로 깊이로 단계 판정)."""
+        from DB.models import Job
+
+        target_jobs = []
+        if len(rel_parts) == 0:
+            # machining_raw_data 폴더 자체가 통째로 삭제된 경우 -> 전체 복원
+            target_jobs = db.query(Job).all()
+        elif len(rel_parts) == 1:
+            # 프로젝트 단위 폴더 삭제 (예: TestProject, Alchemist)
+            proj = rel_parts[0]
+            target_jobs = db.query(Job).filter(
+                (Job.research_project == proj) | (Job.source_folder.like(f"{proj}/%"))
+            ).all()
+        elif len(rel_parts) == 2:
+            # Part 단위 폴더 삭제 (예: Alchemist/Bracket)
+            prefix = f"{rel_parts[0]}/{rel_parts[1]}/"
+            target_jobs = db.query(Job).filter(Job.source_folder.like(f"{prefix}%")).all()
+        else:
+            # Job 단위 또는 개별 파일 삭제 (예: Alchemist/Bracket/1 또는 .../metadata.xml)
+            if rel_parts[2] == job_layout.CAD_DIR:
+                # Part 레벨 CAD 파일 삭제 감지 시 Part에 속한 Job의 CAD 복원
+                prefix = f"{rel_parts[0]}/{rel_parts[1]}/"
+                target_jobs = db.query(Job).filter(Job.source_folder.like(f"{prefix}%")).all()
+            else:
+                sf = f"{rel_parts[0]}/{rel_parts[1]}/{rel_parts[2]}"
+                is_num = rel_parts[2].isdigit()
+                target_jobs = db.query(Job).filter(
+                    (Job.source_folder == sf) | 
+                    ((Job.job_id == int(rel_parts[2])) if is_num else False)
+                ).all()
+
+        return target_jobs
         
     def _process_queue(self):
         while True:

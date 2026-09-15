@@ -24,7 +24,7 @@ def render_home_view(on_navigate, show_erd_dialog_fn):
 
     with col_title:
         st.markdown("<h1 style='margin:0; padding:0;'>공작기계지능화실험실 제조 DB 대시보드</h1>", unsafe_allow_html=True)
-        st.caption("데이터베이스 플랫폼 v3.0.0")
+        st.caption("데이터베이스 플랫폼 v3.0.3")
 
     st.divider()
 
@@ -39,28 +39,28 @@ def render_home_view(on_navigate, show_erd_dialog_fn):
         with st.container(border=True):
             st.markdown("##### :material/view_kanban: Job 워크스페이스")
             st.caption("가공 이력 검색, 센서 통계, Envelope & FFT 분석")
-            if st.button("바로가기 →", key="qa_job_workspace", use_container_width=True):
+            if st.button("바로가기 →", key="qa_job_workspace", width="stretch"):
                 on_navigate("Job 워크스페이스")
 
     with r1_c2:
         with st.container(border=True):
             st.markdown("##### :material/account_tree: 계층형 마스터 데이터")
             st.caption("ISO 14649 공정 트리 및 3D CAD 모델 뷰어")
-            if st.button("바로가기 →", key="qa_master_tree", use_container_width=True):
+            if st.button("바로가기 →", key="qa_master_tree", width="stretch"):
                 on_navigate("계층형 마스터 데이터")
 
     with r1_c3:
         with st.container(border=True):
             st.markdown("##### :material/build: 공구 마스터")
             st.caption("공구 18종 카탈로그, 엑셀 일괄 등록 및 형상 관리")
-            if st.button("바로가기 →", key="qa_tool_master", use_container_width=True):
+            if st.button("바로가기 →", key="qa_tool_master", width="stretch"):
                 on_navigate("공구 마스터")
 
     with r1_c4:
         with st.container(border=True):
             st.markdown("##### :material/cloud_upload: 데이터 삽입")
             st.caption("XML, NC, TDMS, Log, 조도 CSV 수동 업로드")
-            if st.button("바로가기 →", key="qa_data_upload", use_container_width=True):
+            if st.button("바로가기 →", key="qa_data_upload", width="stretch"):
                 on_navigate("데이터 삽입")
 
     # Row 2
@@ -69,26 +69,26 @@ def render_home_view(on_navigate, show_erd_dialog_fn):
         with st.container(border=True):
             st.markdown("##### :material/table_chart: DB 테이블")
             st.caption("14개 테이블 그리드 조회, 다중 필터링 및 직접 수정")
-            if st.button("바로가기 →", key="qa_db_explorer", use_container_width=True):
+            if st.button("바로가기 →", key="qa_db_explorer", width="stretch"):
                 on_navigate("DB 테이블")
 
     with r2_c2:
         with st.container(border=True):
             st.markdown("##### :material/download: 데이터 다운로드")
             st.caption("프로젝트/Part/Job 3단계 드릴다운 ZIP 일괄 조달")
-            if st.button("바로가기 →", key="qa_download_center", use_container_width=True):
+            if st.button("바로가기 →", key="qa_download_center", width="stretch"):
                 on_navigate("데이터 다운로드")
 
     with r2_c3:
         with st.container(border=True):
             st.markdown("##### :material/security: 시스템 백업/복구")
             st.caption("Vault 및 BLOB 무손실 재해 복구 아카이브 생성")
-            if st.button("바로가기 →", key="qa_recovery", use_container_width=True):
+            if st.button("바로가기 →", key="qa_recovery", width="stretch"):
                 on_navigate("시스템 백업/복구")
 
     with r2_c4:
         with st.container(border=True):
             st.markdown("##### :material/schema: DB 관계도 (ERD)")
             st.caption("14개 테이블 인터랙티브 ERD 관계도 다이얼로그")
-            if st.button("관계도 열기 →", key="qa_show_erd", use_container_width=True):
+            if st.button("관계도 열기 →", key="qa_show_erd", width="stretch"):
                 show_erd_dialog_fn()

@@ -25,7 +25,13 @@ def parse_cad(file_path, project_name, part_name):
             db.add(part)
             db.flush()
         part_code = part.part_code
-            
+
+        # 아래 Vault 경로(cad_models/Part_{이름})가 이 이름을 그대로 쓴다.
+        # 들어온 표기를 쓰면 같은 부품인데 Part_DB_Test 와 Part_DB_TEST 가 따로 생기므로
+        # 이미 등록된 Part 의 표기로 통일한다.
+        part_name = part.part_name or part_name
+
+
         # 2. 이미 등록된 동일한 파일명의 CAD 파일이 해당 Part에 있는지 확인
         existing = db.query(CadFileArchive).filter(
             CadFileArchive.part_code == part_code,
