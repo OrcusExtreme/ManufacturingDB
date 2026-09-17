@@ -219,7 +219,7 @@ def _render_analysis_tab(target_job_id, job_info, sr_df):
     import plotly.express as px
     from backend.vault_manager import get_abs_raw_data_path
 
-    part_name = job_info['custom_part_name']
+    part_name = job_info['part_name']
     job_time = job_info['start_time']
 
     part_jobs_query = '''
@@ -227,7 +227,7 @@ def _render_analysis_tab(target_job_id, job_info, sr_df):
         FROM job j
         LEFT JOIN workplan w ON j.workplan_id = w.workplan_id
         LEFT JOIN part p ON w.part_code = p.part_code
-        WHERE COALESCE(j.custom_part_name, p.part_name) = :part_name
+        WHERE p.part_name = :part_name
         ORDER BY j.start_time ASC
     '''
     part_jobs_df = load_data(part_jobs_query, params={"part_name": part_name})
@@ -238,22 +238,22 @@ def _render_analysis_tab(target_job_id, job_info, sr_df):
                 iteration = idx + 1
                 break
 
-    proj_name = str(job_info['research_project'])
+    proj_name = str(job_info['project_code'])
     part_display = str(part_name)
     date_str = "알 수 없음"
     if pd.notnull(job_info['start_time']):
         date_str = str(job_info['start_time']).split('.')[0]
     else:
-        for p_candidate in [job_info['log_file_path'], job_info['tdms_file_path']]:
+        for p_candidate in [job_info['log_raw_path'], job_info['tdms_raw_path']]:
             if p_candidate and pd.notnull(p_candidate):
                 m = re.search(r'__(\d{12})(?:_ext)?\.(?:log|tdms)', str(p_candidate))
                 if m:
                     ts = m.group(1)
                     date_str = f"20{ts[0:2]}-{ts[2:4]}-{ts[4:6]} {ts[6:8]}:{ts[8:10]}:{ts[10:12]}"
                     break
-        if date_str == "알 수 없음" and pd.notnull(job_info['tdms_parquet_path']):
+        if date_str == "알 수 없음" and pd.notnull(job_info['tdms_parquet_raw_path']):
             try:
-                pq_p = resolve_parquet_file(job_info['tdms_parquet_path'], f"job_{target_job_id}_viz.parquet")
+                pq_p = resolve_parquet_file(job_info['tdms_parquet_raw_path'], f"job_{target_job_id}_viz.parquet")
                 if pq_p and os.path.exists(pq_p):
                     df_temp = pd.read_parquet(pq_p, columns=['Time Channel CNC'])
                     if not df_temp.empty and 'Time Channel CNC' in df_temp.columns:
@@ -268,7 +268,7 @@ def _render_analysis_tab(target_job_id, job_info, sr_df):
     ins_row = ins_df.iloc[0] if not ins_df.empty else None
 
     # CNC 로그는 '요약' 카드와 '추이' 그래프 카드 두 곳에서 쓰이므로 한 번만 읽어 공유한다.
-    log_path_raw = job_info['log_file_path']
+    log_path_raw = job_info['log_raw_path']
     log_path = get_abs_raw_data_path(log_path_raw) if pd.notnull(log_path_raw) else None
     log_data = None
     log_error = None
@@ -415,7 +415,7 @@ def _render_analysis_tab(target_job_id, job_info, sr_df):
 
     with chart_col.container(border=True, height="stretch"):
         _card_header(":material/timeline:", "TDMS 그래프")
-        parquet_path = resolve_parquet_file(job_info['tdms_parquet_path'], f"job_{target_job_id}_viz.parquet")
+        parquet_path = resolve_parquet_file(job_info['tdms_parquet_raw_path'], f"job_{target_job_id}_viz.parquet")
         if parquet_path:
             try:
                 tdms_data = pd.read_parquet(parquet_path)
@@ -472,7 +472,7 @@ def _render_analysis_tab(target_job_id, job_info, sr_df):
                         _empty_note("DAQ 데이터 없음")
 
                 with tab3:
-                    fft_path = resolve_parquet_file(job_info['tdms_fft_parquet_path'], f"job_{target_job_id}_fft.parquet")
+                    fft_path = resolve_parquet_file(job_info['tdms_fft_parquet_raw_path'], f"job_{target_job_id}_fft.parquet")
                     if fft_path:
                         try:
                             fft_data = pd.read_parquet(fft_path)
@@ -490,7 +490,7 @@ def _render_analysis_tab(target_job_id, job_info, sr_df):
                         _empty_note("FFT 데이터 없음")
             except Exception as e:
                 st.error(f"TDMS 데이터 오류: {e}")
-        elif pd.notnull(job_info['tdms_file_path']):
+        elif pd.notnull(job_info['tdms_raw_path']):
             st.info("TDMS 데이터는 존재하나 현재 서버에서 시각화 처리(Parquet 변환) 중입니다. 잠시 후 새로고침 해주세요.")
         else:
             _empty_note("연결된 TDMS 데이터 없음")
@@ -515,11 +515,11 @@ def _render_analysis_tab(target_job_id, job_info, sr_df):
 
     with curve_col.container(border=True, height="stretch"):
         _card_header(":material/waves:", "표면조도 프로파일 곡선")
-        curves_df = sr_df[sr_df['profile_parquet_path'].notnull()] if not sr_df.empty else pd.DataFrame()
+        curves_df = sr_df[sr_df['profile_parquet_raw_path'].notnull()] if not sr_df.empty else pd.DataFrame()
         if not curves_df.empty:
             selected_curve = st.selectbox("단면 프로파일 선택", curves_df['measure_name'], key="ws_curve_sel")
             from backend.vault_manager import get_abs_raw_data_path as _get_abs2
-            curve_path = curves_df[curves_df['measure_name'] == selected_curve].iloc[0]['profile_parquet_path']
+            curve_path = curves_df[curves_df['measure_name'] == selected_curve].iloc[0]['profile_parquet_raw_path']
             curve_path = _get_abs2(curve_path) if pd.notnull(curve_path) else None
             try:
                 if curve_path and os.path.exists(curve_path):
@@ -539,14 +539,16 @@ def _render_edit_tab(target_job_id, job_row):
     with tab1:
         st.write(f"**Job ID: {job_row['job_id']} / 폴더: {job_row['source_folder']} / 시작시간: {job_row['start_time']}**")
         with st.form("ws_job_meta_form"):
-            cpn_input = st.text_input("사용자 지정 Part 명", value=job_row['custom_part_name'] if pd.notnull(job_row['custom_part_name']) else "")
-            rp_input = st.text_input("연구 프로젝트 명", value=job_row['research_project'] if pd.notnull(job_row['research_project']) else "")
+            # 부품명·프로젝트명은 part 테이블 하나가 정답이다. Job 마다 덮어쓰던 사본을
+            # 없앴으므로 여기서는 수정하지 않는다. (부품 정보는 계층형 마스터 화면에서 관리)
+            st.caption(f"부품 **{job_row['part_name']}** · 프로젝트 **{job_row['project_code']}** "
+                       "— 부품 정보는 계층형 마스터 데이터 화면에서 관리합니다.")
             mt_input = st.text_input("가공 종류", value=job_row['machining_type'] if pd.notnull(job_row['machining_type']) else "")
 
             if st.form_submit_button("메타데이터 저장"):
                 with engine.connect() as conn:
-                    stmt = text("UPDATE job SET custom_part_name=:cpn, research_project=:rp, machining_type=:mt WHERE job_id=:jid")
-                    conn.execute(stmt, {"cpn": cpn_input or None, "rp": rp_input or None, "mt": mt_input or None, "jid": target_job_id})
+                    stmt = text("UPDATE job SET machining_type=:mt WHERE job_id=:jid")
+                    conn.execute(stmt, {"mt": mt_input or None, "jid": target_job_id})
                     conn.commit()
                 st.success("메타데이터가 업데이트되었습니다.")
                 st.cache_data.clear()
@@ -685,16 +687,18 @@ def render_job_workspace():
     target_job_id = st.session_state['ws_target_job_id']
 
     job_detail_query = '''
-        SELECT j.job_id, j.source_folder, j.research_project, j.machining_type,
-               COALESCE(j.custom_part_name, p.part_name) as custom_part_name,
-               p.part_name AS registry_part_name, p.material_code,
+        SELECT j.job_id, j.source_folder, p.project_code, j.machining_type,
+               p.part_name, p.part_name AS registry_part_name, p.material_code,
                j.workplan_id, j.machine_code, j.start_time, j.end_time, j.is_finish, j.is_error,
-               j.tdms_file_path, j.log_file_path, j.tdms_parquet_path, j.tdms_fft_parquet_path,
+               jfa.tdms_raw_path, lfa.log_raw_path,
+               jfa.tdms_parquet_raw_path, jfa.tdms_fft_parquet_raw_path,
                j.cutting_seconds, j.moving_distance, j.cutting_moving_distance,
                j.machining_window, w.program_code,
                m.max_spindle_load, m.avg_spindle_rpm, m.alarm_count
         FROM job j
         LEFT JOIN machine_log m ON j.job_id = m.job_id
+        LEFT JOIN log_file_archive lfa ON lfa.log_id = m.log_id
+        LEFT JOIN job_file_archive jfa ON jfa.job_id = j.job_id
         LEFT JOIN workplan w ON j.workplan_id = w.workplan_id
         LEFT JOIN part p ON w.part_code = p.part_code
         WHERE j.job_id = :jid
@@ -707,7 +711,10 @@ def render_job_workspace():
 
     job_info = job_detail_df.iloc[0]
     sr_df = load_data(
-        "SELECT measure_name, ra, rq, rz, profile_parquet_path FROM surface_roughness WHERE job_id = :jid",
+        """SELECT s.measure_name, s.ra, s.rq, s.rz, a.profile_parquet_raw_path
+             FROM surface_roughness s
+             LEFT JOIN surface_roughness_archive a ON a.roughness_id = s.roughness_id
+             WHERE s.job_id = :jid""",
         params={"jid": target_job_id},
     )
 

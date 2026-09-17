@@ -102,7 +102,7 @@ def _part_cad_files(scoped):
 
     # 원본 폴더가 없거나 비었으면 아카이브에서 조달한다.
     from sqlalchemy import text as _text
-    from vault_manager import get_abs_vault_path
+    import vault_layout
 
     from .common import engine
     collected = []
@@ -115,14 +115,16 @@ def _part_cad_files(scoped):
             return []
 
         rows = conn.execute(_text(
-            "SELECT cad_id, file_name, file_path, file_content FROM cad_file_archive "
-            "WHERE part_code = :pc ORDER BY cad_id"
+            "SELECT c.cad_id, c.file_name, c.file_content, p.part_name "
+            "FROM cad_file_archive c JOIN part p ON p.part_code = c.part_code "
+            "WHERE c.part_code = :pc ORDER BY c.cad_id"
         ), {"pc": part_code}).fetchall()
 
-    for cad_id, file_name, file_path, file_content in rows:
+    for cad_id, file_name, file_content, part_nm in rows:
         name = file_name or f"Part{part_code}_{cad_id}.step"
-        abs_vault = get_abs_vault_path(file_path) if file_path else None
-        if abs_vault and os.path.exists(abs_vault):
+        # 보관소 경로는 저장하지 않고 규칙으로 계산한다 (vault_layout).
+        abs_vault = vault_layout.find_part_cad(part_nm, file_name)
+        if abs_vault:
             collected.append((abs_vault, f"{job_layout.CAD_DIR}/{name}"))
         elif file_content:
             temp = tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(name)[1])
@@ -135,8 +137,8 @@ def _part_cad_files(scoped):
 @st.cache_data(ttl=60)
 def _job_catalog():
     df = load_data("""
-        SELECT j.job_id, j.source_folder, j.start_time, j.machining_type, j.research_project,
-               COALESCE(j.custom_part_name, p.part_name) AS part_name
+        SELECT j.job_id, j.source_folder, j.start_time, j.machining_type, p.project_code,
+               p.part_name AS part_name
         FROM job j
         LEFT JOIN workplan w ON j.workplan_id = w.workplan_id
         LEFT JOIN part p ON w.part_code = p.part_code
@@ -146,7 +148,7 @@ def _job_catalog():
         return df
 
     folder_parts = df['source_folder'].fillna("").str.replace("\\", "/", regex=False).str.split("/")
-    df['project_name'] = df['research_project'].fillna(folder_parts.str[0]).replace("", pd.NA).fillna("(프로젝트 미지정)")
+    df['project_name'] = df['project_code'].fillna(folder_parts.str[0]).replace("", pd.NA).fillna("(프로젝트 미지정)")
     df['part_name'] = df['part_name'].fillna(folder_parts.str[1]).replace("", pd.NA).fillna("(Part 미지정)")
     return df
 

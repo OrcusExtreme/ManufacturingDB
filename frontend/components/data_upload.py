@@ -122,8 +122,8 @@ def render_data_upload():
             FROM job j
             LEFT JOIN workplan w ON j.workplan_id = w.workplan_id
             LEFT JOIN part p ON w.part_code = p.part_code
-            WHERE j.research_project = :project
-              AND COALESCE(j.custom_part_name, p.part_name) = :part
+            WHERE p.project_code = :project
+              AND p.part_name = :part
         """
         job_df = load_data(job_query, params={"project": target_project_name,
                                               "part": target_part_name})

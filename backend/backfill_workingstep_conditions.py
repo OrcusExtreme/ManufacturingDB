@@ -20,7 +20,10 @@ def backfill_workingstep_conditions():
     updated_count = 0
     total_workplans = 0
     try:
-        rows = db.execute(text("SELECT workplan_id, nc_file_path, program_code FROM workplan")).fetchall()
+        # NC 경로는 workplan_file_archive 로 옮겨졌다.
+        rows = db.execute(text(
+            "SELECT w.workplan_id, a.nc_raw_path, w.program_code FROM workplan w "
+            "LEFT JOIN workplan_file_archive a ON a.workplan_id = w.workplan_id")).fetchall()
         total_workplans = len(rows)
         print(f"[백필 시작] 총 {total_workplans}개의 Workplan을 대상으로 NC 가공조건 백필을 진행합니다...")
 

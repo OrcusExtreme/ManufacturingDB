@@ -87,10 +87,14 @@ def run_e2e_verification():
         test_part_code = part.part_code
 
         # Workplan 생성
-        wp = Workplan(part_code=test_part_code, program_code="O0911.nc", nc_file_path=nc_path)
+        wp = Workplan(part_code=test_part_code, program_code="O0911.nc")
         db.add(wp)
         db.flush()
         test_wp_id = wp.workplan_id
+        # NC 경로는 workplan_file_archive 에 기록한다.
+        from DB.models import WorkplanFileArchive
+        db.add(WorkplanFileArchive(workplan_id=test_wp_id, nc_raw_path=nc_path))
+        db.flush()
         db.commit()
 
         # NC 가공 조건 동기화 함수 실행

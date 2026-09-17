@@ -24,7 +24,7 @@ def render_home_view(on_navigate, show_erd_dialog_fn):
 
     with col_title:
         st.markdown("<h1 style='margin:0; padding:0;'>공작기계지능화실험실 제조 DB 대시보드</h1>", unsafe_allow_html=True)
-        st.caption("데이터베이스 플랫폼 v3.0.3")
+        st.caption("데이터베이스 플랫폼 v3.0.5")
 
     st.divider()
 

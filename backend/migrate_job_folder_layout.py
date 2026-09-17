@@ -5,8 +5,9 @@
     {JobID}/xxx.tdms  ->  {JobID}/TDMS/xxx.tdms
     {JobID}/xxx.nc    ->  {JobID}/NC/xxx.nc
 
-DB에 저장된 경로 참조(job.tdms_file_path / job.log_file_path / workplan.nc_file_path /
-workplan_file_archive.nc_file_path)도 옮긴 위치로 함께 고친다.
+DB에 저장된 경로 참조도 옮긴 위치로 함께 고친다. 경로는 전부 *_file_archive 테이블의
+*_raw_path 칸에 있다 (job_file_archive.tdms_raw_path / log_file_archive.log_raw_path /
+workplan_file_archive.nc_raw_path / surface_roughness_archive.profile_parquet_raw_path).
 
     python backend/migrate_job_folder_layout.py            # 무엇을 옮길지 확인만
     python backend/migrate_job_folder_layout.py --apply    # 실제 이동 + DB 갱신
@@ -23,7 +24,8 @@ if _here not in sys.path:
 
 import job_layout  # noqa: E402
 from DB.database import SessionLocal  # noqa: E402
-from DB.models import Job, Workplan, WorkplanFileArchive  # noqa: E402
+from DB.models import (Job, Workplan, WorkplanFileArchive, JobFileArchive,  # noqa: E402
+                       LogFileArchive, SurfaceRoughnessArchive)
 from vault_manager import get_abs_raw_data_path, get_rel_raw_data_path  # noqa: E402
 
 from vault_manager import PROJECT_ROOT, RAW_DATA_ROOT as RAW_DATA_DIR  # noqa: E402
@@ -78,31 +80,26 @@ def update_db_paths(moved_rel, apply_changes):
     db = SessionLocal()
     changes = []
     try:
-        for job in db.query(Job).all():
-            for attr in ("tdms_file_path", "log_file_path"):
-                new_rel = _remap(getattr(job, attr), moved_rel)
-                if new_rel and new_rel != getattr(job, attr):
-                    changes.append((f"job[{job.job_id}].{attr}", getattr(job, attr), new_rel))
-                    if apply_changes:
-                        setattr(job, attr, new_rel)
-
-        for wp in db.query(Workplan).all():
-            new_rel = _remap(wp.nc_file_path, moved_rel)
-            if new_rel and new_rel != wp.nc_file_path:
-                changes.append((f"workplan[{wp.workplan_id}].nc_file_path", wp.nc_file_path, new_rel))
-                if apply_changes:
-                    wp.nc_file_path = new_rel
-
-        # 아카이브는 절대경로로 저장돼 있어 상대경로를 다시 절대경로로 바꿔 넣는다.
-        for arch in db.query(WorkplanFileArchive).all():
-            new_rel = _remap(arch.nc_file_path, moved_rel)
-            if new_rel:
-                new_abs = get_abs_raw_data_path(new_rel)
-                if new_abs and new_abs != arch.nc_file_path:
-                    changes.append((f"workplan_file_archive[{arch.workplan_id}].nc_file_path",
-                                    arch.nc_file_path, new_abs))
-                    if apply_changes:
-                        arch.nc_file_path = new_abs
+        # 원본 폴더 기준 경로(*_raw_path)만 옮긴 위치로 고친다.
+        # 보관소 기준 경로(*_vault_path)는 Vault 안에서 움직이지 않으므로 그대로 둔다.
+        TARGETS = [
+            (JobFileArchive, "job_id", ["tdms_raw_path",
+                                        "tdms_parquet_raw_path",
+                                        "tdms_fft_parquet_raw_path"]),
+            (WorkplanFileArchive, "workplan_id", ["nc_raw_path"]),
+            (LogFileArchive, "log_id", ["log_raw_path"]),
+            (SurfaceRoughnessArchive, "roughness_id", ["profile_parquet_raw_path"]),
+        ]
+        for model, pk, attrs in TARGETS:
+            for arch in db.query(model).all():
+                for attr in attrs:
+                    old = getattr(arch, attr)
+                    new_rel = _remap(old, moved_rel)
+                    if new_rel and new_rel != old:
+                        label = f"{model.__tablename__}[{getattr(arch, pk)}].{attr}"
+                        changes.append((label, old, new_rel))
+                        if apply_changes:
+                            setattr(arch, attr, new_rel)
 
         if apply_changes and changes:
             db.commit()

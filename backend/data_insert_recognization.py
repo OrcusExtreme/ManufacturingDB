@@ -164,9 +164,14 @@ class MachiningDataHandler(FileSystemEventHandler):
         elif len(rel_parts) == 1:
             # 프로젝트 단위 폴더 삭제 (예: TestProject, Alchemist)
             proj = rel_parts[0]
-            target_jobs = db.query(Job).filter(
-                (Job.research_project == proj) | (Job.source_folder.like(f"{proj}/%"))
-            ).all()
+            # 프로젝트 이름은 part 테이블 하나에서만 읽는다 (Job 쪽 사본 제거).
+            from DB.models import Part, Workplan
+            target_jobs = (db.query(Job)
+                           .outerjoin(Workplan, Workplan.workplan_id == Job.workplan_id)
+                           .outerjoin(Part, Part.part_code == Workplan.part_code)
+                           .filter((Part.project_code == proj)
+                                   | (Job.source_folder.like(f"{proj}/%")))
+                           .all())
         elif len(rel_parts) == 2:
             # Part 단위 폴더 삭제 (예: Alchemist/Bracket)
             prefix = f"{rel_parts[0]}/{rel_parts[1]}/"

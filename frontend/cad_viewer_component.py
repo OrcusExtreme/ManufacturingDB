@@ -14,6 +14,7 @@ import job_layout
 from DB.database import SessionLocal
 from DB.models import CadFileArchive, Part
 from vault_manager import get_abs_vault_path, VAULT_ROOT, RAW_DATA_ROOT
+import vault_layout
 
 def get_cad_file_data(part_name):
     """
@@ -39,9 +40,10 @@ def get_cad_file_data(part_name):
             
             if cad_record.file_content:
                 file_bytes = cad_record.file_content
-            elif cad_record.file_path:
-                abs_p = get_abs_vault_path(cad_record.file_path)
-                if abs_p and os.path.exists(abs_p):
+            else:
+                # 보관소 경로는 저장하지 않고 규칙으로 계산한다 (vault_layout).
+                abs_p = vault_layout.find_part_cad(part_name, cad_record.file_name)
+                if abs_p:
                     with open(abs_p, "rb") as f:
                         file_bytes = f.read()
                         
@@ -90,7 +92,8 @@ def find_cad_file_name(part_name):
         part_row = session.query(Part).filter_by(part_name=part_name).first()
         if part_row:
             cad_record = session.query(CadFileArchive).filter_by(part_code=part_row.part_code).first()
-            if cad_record and (cad_record.file_content is not None or cad_record.file_path):
+            if cad_record and (cad_record.file_content is not None
+                               or vault_layout.find_part_cad(part_name, cad_record.file_name)):
                 return cad_record.file_name or f"{part_name}.step"
 
     cad_vault_dir = os.path.join(VAULT_ROOT, "cad_models", f"Part_{part_name}")

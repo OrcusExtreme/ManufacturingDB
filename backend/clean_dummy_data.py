@@ -84,12 +84,14 @@ def _contentless_workplans(db, used_ids):
     """
     targets = []
     for wp in db.query(Workplan).filter(Workplan.nc_hash == "NOHASH").all():
-        if wp.workplan_id in used_ids or wp.nc_file_path:
+        if wp.workplan_id in used_ids:
             continue
         if db.query(Workingstep).filter(Workingstep.workplan_id == wp.workplan_id).count() > 0:
             continue
-        if db.query(WorkplanFileArchive).filter(
-                WorkplanFileArchive.workplan_id == wp.workplan_id).first() is not None:
+        # NC 경로와 원본은 모두 workplan_file_archive 에 있다.
+        arc = db.query(WorkplanFileArchive).filter(
+            WorkplanFileArchive.workplan_id == wp.workplan_id).first()
+        if arc is not None and (arc.nc_raw_path or arc.nc_file_content):
             continue
         targets.append(wp)
     return targets

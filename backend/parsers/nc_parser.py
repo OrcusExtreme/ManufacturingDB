@@ -13,6 +13,7 @@ from sqlalchemy import text
 from DB.database import get_db
 from DB.models import Workingstep, WorkplanFileArchive
 from job_manager import get_or_create_job, adopt_workplan_identity
+from file_archive import get_or_create_workplan_archive
 
 
 def parse_nc_cutting_conditions(nc_input):
@@ -133,11 +134,11 @@ def sync_workplan_nc_cutting_conditions(db: Session, workplan_id: str, nc_file_p
                 archive = db.query(WorkplanFileArchive).filter(WorkplanFileArchive.workplan_id == workplan_id).first()
                 if archive and archive.nc_file_content:
                     content_to_parse = archive.nc_file_content
-                elif archive and archive.nc_file_path:
+                elif archive and archive.nc_raw_path:
                     # 저장된 경로는 RAW_DATA_ROOT 기준 상대경로라 그대로 열 수 없다.
                     # (get_abs_raw_data_path 는 절대경로가 들어와도 그대로 돌려주므로 옛 데이터도 안전하다)
                     from vault_manager import get_abs_raw_data_path
-                    abs_nc = get_abs_raw_data_path(archive.nc_file_path)
+                    abs_nc = get_abs_raw_data_path(archive.nc_raw_path)
                     if abs_nc and os.path.exists(abs_nc):
                         content_to_parse = abs_nc
                     
@@ -247,10 +248,8 @@ def parse_nc(file_path, job_id_str=None):
             prev_workplan_id = job.workplan_id
             adopt_workplan_identity(db, job, program_code=fallback_program,
                                     nc_file_path=nc_rel_for_workplan)
-            if job.workplan_id == prev_workplan_id:
-                # 합쳐지지 않은 경우에만 경로를 최신 파일로 갱신한다.
-                # 기존 Workplan 에 흡수됐다면 먼저 등록된 NC 경로를 그대로 둔다.
-                job.workplan.nc_file_path = nc_rel_for_workplan
+            # 경로는 아래 workplan_file_archive 기록부에서 한 번만 쓴다.
+            # (예전에는 workplan.nc_file_path 에도 같은 값을 또 적었다)
 
             # NC 파일 바이너리 데이터 읽기 및 저장
             nc_binary_data = None
@@ -284,19 +283,10 @@ def parse_nc(file_path, job_id_str=None):
             # 같은 DB 를 열었을 때 이 한 칸만 깨진다 (다른 경로 컬럼은 전부 상대경로다).
             nc_rel_path = get_rel_raw_data_path(file_path)
 
-            wp_archive = db.query(WorkplanFileArchive).filter(WorkplanFileArchive.workplan_id == job.workplan_id).first()
-            if wp_archive:
-                wp_archive.nc_file_path = nc_rel_path
-                wp_archive.nc_file_content = nc_binary_data
-                wp_archive.nc_file_sha256 = nc_sha256
-            else:
-                wp_archive = WorkplanFileArchive(
-                    workplan_id=job.workplan_id,
-                    nc_file_path=nc_rel_path,
-                    nc_file_content=nc_binary_data,
-                    nc_file_sha256=nc_sha256
-                )
-                db.add(wp_archive)
+            wp_archive = get_or_create_workplan_archive(db, job.workplan_id)
+            wp_archive.nc_raw_path = nc_rel_path
+            wp_archive.nc_file_content = nc_binary_data
+            wp_archive.nc_file_sha256 = nc_sha256
                 
             db.commit()
 

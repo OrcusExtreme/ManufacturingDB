@@ -160,7 +160,6 @@ def parse_roughness(job_folder_path, job_id=None):
                         # Insert DB record
                         existing = session.query(SurfaceRoughness).filter_by(job_id=job_pk, measure_name=measure_name).first()
                         if existing:
-                            existing.profile_parquet_path = rel_parquet_path
                             existing.ra = ra_val
                             existing.rq = rq_val
                             existing.rz = rz_val
@@ -170,7 +169,7 @@ def parse_roughness(job_folder_path, job_id=None):
                             sr = SurfaceRoughness(
                                 job_id=job_pk,
                                 measure_name=measure_name,
-                                profile_parquet_path=rel_parquet_path,
+
                                 ra=ra_val,
                                 rq=rq_val,
                                 rz=rz_val
@@ -179,18 +178,23 @@ def parse_roughness(job_folder_path, job_id=None):
                             session.flush()
                             target_sr_id = sr.roughness_id
                         
+                        # 곡선 Parquet 의 '원본 위치'도 archive 에 적는다.
+                        # 예전에는 surface_roughness.profile_parquet_path 에 따로 두어,
+                        # 한 파일의 위치를 알려면 두 테이블을 봐야 했다.
                         archive = session.query(SurfaceRoughnessArchive).filter_by(roughness_id=target_sr_id).first()
                         if not archive:
                             archive = SurfaceRoughnessArchive(roughness_id=target_sr_id)
                             session.add(archive)
+                        archive.profile_parquet_raw_path = rel_parquet_path
+
                             
                         if os.path.exists(parquet_path):
-                            profile_vault_path = save_to_vault(parquet_path, "surface_roughness", f"Job_{job_pk}", os.path.basename(parquet_path))
-                            archive.profile_parquet_file_path = profile_vault_path
+                            # 보관소 경로는 vault_layout 규칙으로 계산되므로 저장하지 않는다.
+                            save_to_vault(parquet_path, "surface_roughness", f"Job_{job_pk}", os.path.basename(parquet_path))
                                 
                         if os.path.exists(cf):
-                            curve_vault_path = save_to_vault(cf, "surface_roughness", f"Job_{job_pk}", os.path.basename(cf))
-                            archive.curve_csv_file_path = curve_vault_path
+                            # 보관소 경로는 저장하지 않는다 (vault_layout 로 계산).
+                            save_to_vault(cf, "surface_roughness", f"Job_{job_pk}", os.path.basename(cf))
             except Exception as e:
                 print(f"[Roughness Parser] 곡선 파싱 에러 ({cf}): {e}")
                 

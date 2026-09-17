@@ -15,7 +15,7 @@ def render_master_tree():
     st.subheader("계층형 구조 조회 (ISO 14649)")
 
     part_query = """
-        SELECT DISTINCT COALESCE(j.custom_part_name, p.part_name) AS display_part
+        SELECT DISTINCT p.part_name AS display_part
         FROM part p
         LEFT JOIN workplan w ON p.part_code = w.part_code
         LEFT JOIN job j ON w.workplan_id = j.workplan_id
@@ -40,7 +40,7 @@ def render_master_tree():
         with st.expander(f"Part: {p_code}", expanded=True):
             # part_code는 숫자 키가 되었으므로 이름으로 부품을 찾은 뒤 그 키로 CAD를 조회한다.
             cad_query = """
-                SELECT c.file_name, c.file_type, LENGTH(c.file_content) as file_size, c.file_path
+                SELECT c.file_name, c.file_type, LENGTH(c.file_content) as file_size
                 FROM cad_file_archive c
                 JOIN part p ON c.part_code = p.part_code
                 WHERE p.part_name = :part
@@ -62,11 +62,12 @@ def render_master_tree():
                 st.divider()
 
             wp_query = """
-                SELECT DISTINCT w.workplan_id, w.program_code, w.nc_file_path
+                SELECT DISTINCT w.workplan_id, w.program_code, wfa.nc_raw_path
                 FROM workplan w
                 JOIN job j ON w.workplan_id = j.workplan_id
                 JOIN part p ON w.part_code = p.part_code
-                WHERE COALESCE(j.custom_part_name, p.part_name) = :part
+                LEFT JOIN workplan_file_archive wfa ON wfa.workplan_id = w.workplan_id
+                WHERE p.part_name = :part
             """
             part_wps = load_data(wp_query, params={"part": p_code})
 
@@ -77,7 +78,7 @@ def render_master_tree():
             for _, wp_row in part_wps.iterrows():
                 wp_id = wp_row['workplan_id']
                 with st.expander(f"Workplan: {p_code} - {wp_row['program_code']} (ID: {wp_id})", expanded=False):
-                    st.write(f"**NC File Path:** `{wp_row['nc_file_path']}`")
+                    st.write(f"**NC File Path:** `{wp_row['nc_raw_path']}`")
 
                     ws_query = """
                         SELECT ws.step_order AS '순서', ws.operation_type AS '작업(Op)',

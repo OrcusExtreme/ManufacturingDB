@@ -10,7 +10,7 @@
   <a href="https://www.sqlalchemy.org/"><img src="https://img.shields.io/badge/SQLAlchemy-2.0%2B-red.svg" alt="ORM" /></a>
   <a href="https://streamlit.io/"><img src="https://img.shields.io/badge/Streamlit-1.61%2B-FF4B4B.svg" alt="Frontend" /></a>
   <a href="https://www.iso.org/"><img src="https://img.shields.io/badge/Standard-ISO%2014649%20(STEP--NC)-green.svg" alt="Standard" /></a>
-  <a href="https://github.com/OrcusExtreme/ManufacturingDB"><img src="https://img.shields.io/badge/Release-V3.0.4-brightgreen.svg" alt="Release" /></a>
+  <a href="https://github.com/OrcusExtreme/ManufacturingDB"><img src="https://img.shields.io/badge/Release-V3.0.5-brightgreen.svg" alt="Release" /></a>
 </p>
 
 공작기계지능화실험실(Machine Tool Intelligence Lab)의 **통합 스마트 제조 데이터베이스 및 실시간 분석 플랫폼**입니다.  
@@ -57,33 +57,56 @@ DB 테이블 조회/편집, 재난 복구(ZIP)까지 하나의 화면 흐름에�
 
 ## 🏗️ 시스템 아키텍처 (System Architecture)
 
+사람이 켜는 창은 **제조 DB Controller 하나**이고, 그 아래 **3개의 독립 프로세스**가 돕니다.
+세 프로세스는 서로 직접 통신하지 않고 **MySQL · 파일시스템 · `pipeline_config.json`** 으로만 이어집니다.
+
 ```text
-[제조 DB Controller (system_controller.exe)]
-       │  세 프로세스를 켜고 끄고, 로그를 모아 보여주고, 파서를 토글한다
-       │  ├─ pipeline_config.json ─▶ 파서 6종 On/Off · 파이프라인 일시정지
-       │  └─ Job Object 로 묶어 비정상 종료 시 자식까지 회수
-       ▼
-[Raw Data / Network Drive]
-       │ (File Drop: XML, NC, TDMS, LOG, CAD, CSV)
-       ▼
-[Watchdog Observer (data_insert_recognization.py)]
-       │ (Queue & Stability Check: 파일 접근 권한 및 무변동 검사)
-       │ (Job 폴더에 섞여 들어온 파일은 job_layout 규칙에 따라 하위 폴더로 자동 정리)
-       ▼
-[Parsing Engine (parsers/)]
-  ├─ xml_parser.py       : 메타데이터 추출, Part/Workplan/Job 구조 매핑, 공구 런타임 상태 추출 (공구 마스터는 읽기 전용)
-  ├─ tdms_parser.py      : 초고속 메타데이터(nptdms) 추출 및 가공 시작 시간 보완
-  ├─ log_parser.py       : CNC 1Hz 로그 통계(Max/Avg Load, RPM, Feed) 요약 및 알람 수집
-  ├─ roughness_parser.py : 조도 측정 결과(Ra, Rq, Rz) 자동 계산 및 2D 단면 Parquet 변환
-  ├─ cad_parser.py       : 3D 모델(STEP, STL) 파트 매핑 및 원본 아카이빙
-  └─ nc_parser.py        : NC 프로그램 코드 추출, 공구별 절삭조건(Feed Rate / Spindle Speed) 파싱 및 MD5 해시 식별자 생성
-       │
-       ▼
-[MySQL Database (SQLAlchemy ORM)]  ◄═══►  [Vault System (vault_manager.py)]
-       │
-       ▼
-[Streamlit Frontend UI]
-  └─ 통합 대시보드 (Port 8501) : Job 검색·분석, 메타데이터/환경/품질 수정, 데이터 삽입, DB 조회/편집, 복구 ZIP 생성
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  제조 DB Controller  (system_controller.exe · C++ Win32)                      │
+│  · 3개 프로세스 기동/중지 · 실시간 로그 통합 · 파서 6종 On/Off · 일시정지       │
+│  · backend/pipeline_config.json (파일 기반 전달, IPC 없음)                    │
+│  · Job Object 로 비정상 종료 시 자식 프로세스 일괄 회수                        │
+└────────┬─────────────────────────┬──────────────────────────┬────────────────┘
+         │ 기동·감시                │ 기동·감시                 │ 기동·감시
+         ▼                         ▼                          ▼
+  ① Watchdog 수집기         ② TDMS 변환 데몬            ③ Streamlit UI
+                              (5초 폴링)                   (localhost:8501)
+
+[장비 / 계측 PC] ──폴더째 복사(File Drop)──┐
+                                          ▼
+   data/machining_raw_data/{Project}/{Part}/
+        ├─ CAD_Files/                      ← Part 레벨 (Job 폴더와 같은 깊이)
+        └─ {JobID}/ XML · Log · TDMS · NC · Surface_Roughness · etc · processed_parquet
+                                          │
+                                          ▼
+ ① Watchdog 수집기  (data_insert_recognization.py)
+    ├─ Queue & Stability Check — 파일 전송 완료(Lock 해제) 검사
+    ├─ job_layout.py — 확장자 보고 하위 폴더 자동 정리 / 부수 파일 무시
+    ├─ pipeline_control.py — 파서 On/Off · 일시정지 확인
+    ├─ Parsing Engine [parsers/]
+    │    xml · nc · tdms · log · roughness · cad  (+ job_manager · tool_inserter)
+    ├─ integrity_monitor — 데몬 스레드, 30분 주기 SHA-256 전수 재검증(3-상태)
+    └─ 파싱 실패 ─▶ data/failed_data (DLQ)
+         │
+         ├──▶ MySQL DB (SQLAlchemy ORM)     정규화 적재
+         ├──▶ Archive Vault                 원본 사본 (프로젝트 밖)
+         └──▶ MySQL LONGBLOB                XML·NC·CAD 원본 (15MB 이하)
+
+ ② TDMS 변환 데몬  (tdms_visualizer.py)
+    └─ tdms_alignment.py — NC 대조 실가공 구간 판별 · CNC/DAQ 시간축 정렬 · FFT
+         ├──▶ Parquet 저장 계층 (3중 저장)
+         │      data/processed_data → Job폴더/processed_parquet → Vault/processed_parquet
+         └──▶ MySQL  (tdms_parquet_path · machining_window)
+
+ ③ Streamlit UI (:8501)  — 사이드바 8개 메뉴 + ERD 모달
+    ├─ Read  ◀── MySQL · Parquet 저장 계층 · Archive Vault · 원본 폴더
+    ├─ Write ──▶ MySQL     (메타데이터 편집 · Cascade 삭제 · 공구 마스터 전량 교체)
+    ├─ Write ──▶ raw_data  (데이터 삽입 → ① 수집기로 재진입)        ◀ 순환
+    └─ recovery_engine.py ──▶ 복구 ZIP 생성 / Job 단위 로컬 복원
+
+  ※ MySQL 과 Archive Vault 는 직접 주고받지 않습니다.
+     DB 에는 보관소 루트 기준 **상대경로 문자열만** 저장되고, 실제 파일 입출력은
+     파서 · recovery_engine · Streamlit 이 수행합니다.
 ```
 
 ---
@@ -111,7 +134,14 @@ erDiagram
 | :--- | :--- | :--- |
 | **마스터 & 계획** | `part`, `workplan`, `tool`, `workingstep`, `cad_file_archive` | 가공 대상 부품(숫자 PK + `part_name`), NC 공정 계획(숫자 PK + 부품·프로그램·NC해시 유일 제약), 공구 제원, 단위 공정 순서 및 절삭 가공조건(Feed/Spindle), 3D 도면 관리 |
 | **가공 실행 & 품질** | `job`, `machine_log`, `surface_roughness`, `inspection`, `env_memo` | 가공 이력(시간,거리,에러), CNC 1Hz 부하 요약, 다지점 표면조도, 공차/합부(PASS/FAIL), 온습도/메모 |
-| **아카이브 & 백업** | `workplan_file_archive`, `job_file_archive`, `surface_roughness_archive`, `log_file_archive` | 원본 파일 Vault 저장 경로 및 LONGBLOB 이중화 백업 데이터 |
+| **아카이브 & 백업** | `workplan_file_archive`, `job_file_archive`, `surface_roughness_archive`, `log_file_archive` | 장비 원본 경로(`*_raw_path`) 및 LONGBLOB 이중화 백업 데이터 |
+
+> **파일 경로는 전부 아카이브 테이블에 둡니다.** 주 테이블(`job`·`workplan`·`surface_roughness`)에는
+> 경로 컬럼이 없습니다. 그리고 **보관소(Vault) 안의 경로는 아예 저장하지 않습니다** — 그 자리는
+> 레코드로부터 계산되는 규칙이라 `backend/vault_layout.py` 한 곳에만 두고 필요할 때 계산합니다.
+> (`jobs/{source_folder}/metadata.xml` · `workplan_nc/WP{id}.nc` · `tdms_files/Job_{id}/…` 등)
+> 다운로드·복원의 **원본 폴더 → 보관소 → LONGBLOB** 폴백은 그대로이며, 가운데 단계의 경로를
+> 읽는 대신 계산할 뿐입니다.
 
 ---
 
@@ -142,6 +172,8 @@ ManufacturingDB/
 │   ├── data_insert_recognization.py  #   Watchdog 파일 감시 및 큐 분배기
 │   ├── job_layout.py                 #   Job 폴더 하위 분류(XML/Log/TDMS/NC) 규칙 단일 출처
 │   ├── vault_manager.py              #   경로 기준(PROJECT_ROOT·DATA_ROOT 등) 및 Vault 아카이빙
+│   ├── vault_layout.py               #   보관소 안의 파일 배치 규칙 단일 출처 (경로를 DB 에 저장하지 않고 계산)
+│   ├── file_archive.py               #   아카이브 행 조회/생성 및 경로 읽기 헬퍼
 │   ├── job_manager.py                #   Job 생성 및 중복 확인 유틸리티
 │   ├── recovery_engine.py            #   Vault/DB 기반 복원 및 재난 복구 ZIP 생성
 │   ├── tdms_visualizer.py            #   백그라운드 TDMS Parquet/FFT 변환 데몬
@@ -201,7 +233,7 @@ ManufacturingDB/
 │   └── failed_data/                  #   파싱 실패 격리 (DLQ)
 │
 │   ※ 원본 백업 보관소(archive_vault)는 프로젝트 밖에 둡니다.
-│     .env 의 ORCUS_DB_DATA_DIR 로 DB 설치 폴더를 가리키면
+│     .env 의 ORCUS_VAULT_ROOT 로 프로젝트 밖을 가리키면
 │     프로젝트 폴더가 사라져도 백업은 남습니다.
 │
 ├── tools/                            # 개발·운영 도구
@@ -244,8 +276,8 @@ DB_NAME=orcus
 PYTHONPATH=backend
 
 # 원본 백업 보관소(archive_vault)를 프로젝트 밖에 둡니다.
-# 그 아래 archive_vault/ 폴더가 자동으로 만들어집니다.
-ORCUS_DB_DATA_DIR=C:\ProgramData\MySQL\MySQL Server 8.0\Data\orcus
+# MySQL 스키마 폴더 안은 피하세요 (DROP DATABASE 시 함께 삭제됨).
+ORCUS_VAULT_ROOT=D:\Orcus\archive_vault
 ```
 
 #### 백업 보관소를 프로젝트 밖에 두는 이유
@@ -294,11 +326,15 @@ DB 테이블과 프로젝트 폴더의 `data/` 만 비우고 보관소는 손대
 | 초기화 | DB 테이블 전체 · `data/machining_raw_data` · `data/processed_data` · `data/failed_data` |
 | 보존 | 원본 백업 보관소 `archive_vault` |
 
-> **주의** 보관소를 MySQL 스키마 폴더(`...\Data\orcus`) 안에 두면, 나중에
-> `DROP DATABASE orcus` 를 실행할 때 MySQL 이 폴더를 지우지 못해 오류가 납니다.
-> 이 프로젝트의 초기화 도구는 `DROP TABLE` 만 사용하므로 평소에는 문제가 없지만,
-> 스키마를 통째로 재생성할 계획이라면 `ORCUS_VAULT_ROOT` 로 스키마 폴더 바깥
-> (예: `C:\ProgramData\Orcus\archive_vault`)을 가리키는 편이 안전합니다.
+> ⚠️ **보관소를 MySQL 스키마 폴더(`...\Data\orcus`) 안에 두지 마세요.**
+> `DROP DATABASE orcus` 는 스키마 폴더를 **통째로 삭제**하므로 그 안의 `archive_vault` 까지
+> 함께 사라집니다. 이 프로젝트의 초기화 버튼은 `DROP TABLE` 만 쓰고 보관소를 이중으로
+>보호하지만, MySQL Workbench 등에서 스키마를 직접 재생성하면 보호 장치가 소용없습니다.
+> **2026-09-15 에 실제로 이 경로에서 보관소가 통째로 소실된 사례가 있습니다.**
+> 반드시 스키마 폴더 **바깥**을 가리키세요 (예: `D:\Orcus\archive_vault`).
+
+> **디스크 분리 권장** — 원본(`machining_raw_data`)과 보관소가 같은 물리 디스크에 있으면
+> 디스크 고장 시 둘 다 잃습니다. 가능하면 서로 다른 디스크에 두세요.
 
 ### 4. 시스템 실행 (Run System)
 
@@ -395,6 +431,22 @@ XML/NC/CAD 원본이 저장 시점과 바이트 단위로 동일한지에 대한
 ## 🚀 릴리즈 노트 (Release Notes)
 
 각 버전의 핵심만 적습니다. 세부 동작과 판단 근거는 [`docs/gemini.md`](docs/gemini.md)를 참고하세요.
+
+### [V3.0.5] - 2026-09-16
+- **보관소를 MySQL 스키마 폴더 밖으로 이전** (`ORCUS_VAULT_ROOT=D:\Orcus\archive_vault`):
+  - 기존 위치(`...\Data\orcus\archive_vault`)는 `DROP DATABASE orcus` 실행 시 스키마 폴더와 함께
+    **통째로 삭제**됩니다. 초기화 버튼의 이중 보호는 스키마 직접 재생성에는 소용이 없습니다.
+  - 2026-09-15 해당 경로에서 보관소가 소실된 사례가 있어 경로를 옮기고 README·gemini.md 에 경고 강화
+  - 원본과 보관소를 서로 다른 물리 디스크에 두도록 권장 문구 추가
+- **시스템 아키텍처 다이어그램 전면 수정**: 실제 구조와 어긋나 있던 부분을 바로잡음
+  - 3개 독립 프로세스(Watchdog 수집기 / TDMS 변환 데몬 / Streamlit)를 Controller 하위에 명시.
+    TDMS 변환은 수집기의 일부가 아니라 **별도 프로세스**(5초 폴링)
+  - **Parquet 저장 계층**(3중 저장: processed_data → Job폴더 → Vault) 추가 —
+    시계열 시각화는 MySQL 이 아니라 Parquet 에서 읽음
+  - `MySQL ◄═► Vault` 직접 연결선 **삭제** — DB 에는 보관소 상대경로 문자열만 저장되며
+    실제 파일 입출력은 파서·recovery_engine·Streamlit 이 수행
+  - `job_layout` · `pipeline_control` · `integrity_monitor` · `failed_data(DLQ)` ·
+    `tdms_alignment` 표기 추가, Streamlit → raw_data 순환(데이터 삽입) 경로 추가
 
 ### [V3.0.4] - 2026-09-15
 - **TDMS 변환 성능 5.4배 개선** (464MB 파일 실측 54.9초 → 10.1초, 폴더 투입부터 UI 전체 노출까지 148초 → 43.2초):

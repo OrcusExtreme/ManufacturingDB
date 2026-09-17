@@ -43,7 +43,8 @@ def parse_tdms(file_path, job_id):
         #    Workplan program_code 보완이 uq_workplan_identity 에 걸리면 except 의 rollback 이
         #    이 매핑까지 되돌려서 Job 의 TDMS 경로·Parquet·가공구간이 통째로 비었다.
         from vault_manager import get_rel_raw_data_path
-        job.tdms_file_path = get_rel_raw_data_path(file_path)
+        from file_archive import set_job_paths
+        set_job_paths(db, job.job_id, tdms_raw_path=get_rel_raw_data_path(file_path))
         db.commit()
 
         # 3. 메타데이터 초고속 추출 로직 (선택 작업)
@@ -107,7 +108,8 @@ def parse_tdms(file_path, job_id):
         # 동시에 변환했다(464MB 파일 기준 76초 -> 110초로 늘어남). 게다가 이쪽은 processed_data
         # 절대경로를, 데몬은 raw_data 상대경로를 저장해서 Job 마다 경로 형식까지 달라졌다.
         # 변환 주체를 데몬 하나로 모아 중복과 경로 불일치를 함께 없앤다.
-        # (데몬은 tdms_file_path 가 채워진 Job 을 폴링하므로, 위 commit 시점에 이미 대상이 된다.)
+        # (데몬은 job_file_archive.tdms_raw_path 가 채워진 Job 을 폴링하므로,
+        #  위 commit 시점에 이미 대상이 된다.)
         return True
 
     except Exception as e:

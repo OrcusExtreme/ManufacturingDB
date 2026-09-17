@@ -7,7 +7,8 @@ from DB.database import SessionLocal
 # 공구 마스터(tool 테이블)는 공구 마스터 엑셀 업로드(tool_inserter.py)만이 생성/수정/삭제한다.
 # XML 파서가 실수로 공구 행을 만들거나 바꾸지 못하도록 Tool 모델 자체를 import하지 않는다.
 from DB.models import Part, Workplan, Workingstep, Job, WorkplanFileArchive, JobFileArchive
-from vault_manager import save_to_vault
+from vault_manager import save_to_vault, get_rel_raw_data_path
+from file_archive import get_or_create_workplan_archive
 from integrity import sha256_bytes
 from job_manager import discard_orphan_workplan
 
@@ -113,8 +114,10 @@ def parse_xml(file_path, job_id):
             ).first()
             if workplan:
                 workplan.nc_hash = nc_hash
-                if nc_file_path and not workplan.nc_file_path:
-                    workplan.nc_file_path = nc_file_path
+                if nc_file_path:
+                    wp_arc = get_or_create_workplan_archive(db, workplan.workplan_id)
+                    if not wp_arc.nc_raw_path:
+                        wp_arc.nc_raw_path = get_rel_raw_data_path(nc_file_path)
                 db.flush()
                 print(f"    - 뒤늦게 확보한 NC 해시({nc_hash})를 기존 Workplan({workplan.workplan_id})에 반영했습니다.")
 
@@ -124,17 +127,15 @@ def parse_xml(file_path, job_id):
                 part_code=part_code,
                 program_code=program_code,
                 nc_hash=nc_hash,
-                nc_file_path=nc_file_path
             )
             db.add(workplan)
             db.flush()   # 자동 증가 workplan_id 확보
             workplan_id = workplan.workplan_id
 
-            # Save NC file to Vault
-            nc_vault_path = None
+            # 보관소 사본. 자리는 vault_layout.workplan_nc_rel 로 계산하므로 경로를 남기지 않는다.
             nc_binary_data_to_save = None
             if nc_file_path:
-                nc_vault_path = save_to_vault(nc_file_path, "workplan_nc", f"WP{workplan_id}.nc")
+                save_to_vault(nc_file_path, "workplan_nc", f"WP{workplan_id}.nc")
                 if nc_binary_data and len(nc_binary_data) <= 15 * 1024 * 1024:
                     nc_binary_data_to_save = nc_binary_data
                 elif nc_binary_data:
@@ -142,7 +143,7 @@ def parse_xml(file_path, job_id):
                 
             wp_archive = WorkplanFileArchive(
                 workplan_id=workplan_id,
-                nc_file_path=nc_vault_path,
+                nc_raw_path=get_rel_raw_data_path(nc_file_path) if nc_file_path else None,
                 nc_file_content=nc_binary_data_to_save,
                 nc_file_sha256=sha256_bytes(nc_binary_data_to_save) if nc_binary_data_to_save else None
             )
@@ -230,7 +231,8 @@ def parse_xml(file_path, job_id):
         start_time = start_time_text.replace('T', ' ') if start_time_text else None
         end_time = end_time_text.replace('T', ' ') if end_time_text else None
         
-        # Parse job_id (folder name) to extract research_project and custom_part_name
+        # 폴더 경로에서 프로젝트명·부품명을 읽는다. 이 값들은 part.project_code /
+        # part.part_name 을 만들 때만 쓰고, Job 에 따로 복사해 두지 않는다.
         parsed_rp = None
         parsed_cpn = None
         folder_parts = job_id.replace('\\', '/').split('/')
@@ -274,7 +276,7 @@ def parse_xml(file_path, job_id):
             else:
                 canonical_sf = current_sf
 
-            xml_vault_path = save_to_vault(file_path, "jobs", *canonical_sf.split('/'), "metadata.xml")
+            save_to_vault(file_path, "jobs", *canonical_sf.split('/'), "metadata.xml")
             print(f"    - 이미 존재하는 Job (PK: {existing_job.job_id} / 폴더: {existing_job.source_folder}) 발견. Job 정보를 업데이트합니다.")
             existing_job.start_time = start_time
             # XML 이 프로그램 코드의 최종 근거다. TDMS/NC 가 먼저 처리되면서 만들어 둔 임시
@@ -295,19 +297,17 @@ def parse_xml(file_path, job_id):
             existing_job.is_finish = (root.findtext('IsFinish') == 'true')
             existing_job.is_error = (root.findtext('IsError') == 'true')
             existing_job.tool_conditions = tool_conditions_list
-            if parsed_rp and not existing_job.research_project:
-                existing_job.research_project = parsed_rp
-            if parsed_cpn and not existing_job.custom_part_name:
-                existing_job.custom_part_name = parsed_cpn
-                
+            # 프로젝트명·부품명은 part 테이블 하나만 쓴다 (Job 별 사본을 두지 않는다).
+
             xml_sha256 = sha256_bytes(xml_binary_data_to_save) if xml_binary_data_to_save else None
             job_archive = db.query(JobFileArchive).filter(JobFileArchive.job_id == existing_job.job_id).first()
             if job_archive:
-                job_archive.xml_file_path = xml_vault_path
                 job_archive.xml_file_content = xml_binary_data_to_save
                 job_archive.xml_file_sha256 = xml_sha256
             else:
-                db.add(JobFileArchive(job_id=existing_job.job_id, xml_file_path=xml_vault_path, xml_file_content=xml_binary_data_to_save, xml_file_sha256=xml_sha256))
+                db.add(JobFileArchive(job_id=existing_job.job_id,
+                                      xml_file_content=xml_binary_data_to_save,
+                                      xml_file_sha256=xml_sha256))
         else:
             new_job = Job(
                 workplan_id=workplan_id,
@@ -322,8 +322,6 @@ def parse_xml(file_path, job_id):
                 is_finish=(root.findtext('IsFinish') == 'true'),
                 is_error=(root.findtext('IsError') == 'true'),
                 tool_conditions=tool_conditions_list,
-                research_project=parsed_rp,
-                custom_part_name=parsed_cpn
             )
             db.add(new_job)
             db.flush()
@@ -334,9 +332,9 @@ def parse_xml(file_path, job_id):
             new_job.source_folder = job_id
             db.flush()
 
-            xml_vault_path = save_to_vault(file_path, "jobs", *new_job.source_folder.split('/'), "metadata.xml")
+            save_to_vault(file_path, "jobs", *new_job.source_folder.split('/'), "metadata.xml")
             db.add(JobFileArchive(
-                job_id=new_job.job_id, xml_file_path=xml_vault_path, xml_file_content=xml_binary_data_to_save,
+                job_id=new_job.job_id, xml_file_content=xml_binary_data_to_save,
                 xml_file_sha256=sha256_bytes(xml_binary_data_to_save) if xml_binary_data_to_save else None
             ))
             

@@ -20,6 +20,8 @@ import numpy as np
 import job_layout
 from DB.database import SessionLocal
 from DB.models import Job, JobFileArchive, Workplan, WorkplanFileArchive
+from file_archive import archive_path, get_or_create_job_archive
+import vault_layout
 from vault_manager import (get_abs_raw_data_path, get_abs_vault_path,
                            get_rel_raw_data_path, save_to_vault)
 
@@ -85,17 +87,21 @@ def job_conversion_lock(job_id):
 def find_tdms_path(job):
     """
     Job의 TDMS 파일 경로를 찾습니다.
-    1. job.tdms_file_path 확인
+    1. job_file_archive.tdms_raw_path 확인
     2. 없으면 archive_vault 내의 백업 TDMS 탐색
     """
-    abs_tdms_path = get_abs_raw_data_path(job.tdms_file_path)
+    tdms_raw = archive_path(job, "tdms_raw_path")
+    abs_tdms_path = get_abs_raw_data_path(tdms_raw)
     if abs_tdms_path and os.path.exists(abs_tdms_path):
         return abs_tdms_path
 
     # Vault 탐색
+    # 보관소 경로는 저장하지 않고 규칙으로 계산한다 (vault_layout).
+    found = vault_layout.find_job_tdms(job.job_id, tdms_raw)
+    if found:
+        return found
+
     vault_rel_paths = [
-        f"tdms_files/Job_{job.job_id}/{os.path.basename(job.tdms_file_path)}" if job.tdms_file_path else None,
-        f"tdms/Job_{job.job_id}/{os.path.basename(job.tdms_file_path)}" if job.tdms_file_path else None,
         f"jobs/{job.source_folder}/data.tdms" if job.source_folder else None
     ]
     for vp in vault_rel_paths:
@@ -126,7 +132,7 @@ def find_nc_program(job, db=None):
             if arch is not None:
                 if arch.nc_file_content:
                     return parse_nc_blocks(arch.nc_file_content, name=name)
-                for cand in (arch.nc_file_path,):
+                for cand in (arch.nc_raw_path, vault_layout.workplan_nc_rel(job.workplan_id)):
                     for resolver in (get_abs_raw_data_path, get_abs_vault_path, lambda p: p):
                         try:
                             p = resolver(cand) if cand else None
@@ -136,9 +142,10 @@ def find_nc_program(job, db=None):
                             with open(p, "rb") as f:
                                 return parse_nc_blocks(f.read(), name=name or os.path.basename(p))
 
-        # 2) Workplan 에 기록된 경로
-        if workplan and workplan.nc_file_path:
-            p = get_abs_raw_data_path(workplan.nc_file_path)
+        # 2) Workplan 아카이브에 기록된 경로
+        wp_nc = archive_path(workplan, "nc_raw_path")
+        if wp_nc:
+            p = get_abs_raw_data_path(wp_nc)
             if p and os.path.exists(p):
                 with open(p, "rb") as f:
                     return parse_nc_blocks(f.read(), name=name or os.path.basename(p))
@@ -212,7 +219,7 @@ def process_tdms_file(job, db=None, target_points=TARGET_DATAPOINTS):
     tdms_path = find_tdms_path(job)
 
     if not tdms_path or not os.path.exists(tdms_path):
-        print(f"  - [오류] TDMS 파일을 찾을 수 없습니다: {job.tdms_file_path}")
+        print(f"  - [오류] TDMS 파일을 찾을 수 없습니다: {archive_path(job, 'tdms_raw_path')}")
         return None, None
 
     try:
@@ -279,9 +286,10 @@ def process_tdms_file(job, db=None, target_points=TARGET_DATAPOINTS):
 
 def _needs_processing(job):
     """Parquet 가 없거나 유실됐거나, NC 없이 만들어졌는데 이제 NC 가 생긴 경우 재처리 대상."""
-    if not job.tdms_parquet_path:
+    parquet_rel = archive_path(job, "tdms_parquet_raw_path")
+    if not parquet_rel:
         return True
-    abs_p = get_abs_raw_data_path(job.tdms_parquet_path)
+    abs_p = get_abs_raw_data_path(parquet_rel)
     if not abs_p or not os.path.exists(abs_p):
         return True
 
@@ -290,9 +298,22 @@ def _needs_processing(job):
         return True
     # NC 원본 없이 판별한 구간은, 이후 NC 가 업로드되면 한 번 더 판별한다.
     # (NC 를 참조해서 만든 결과라면 방식이 activity 여도 다시 돌리지 않는다 -> 재처리 루프 방지)
-    if not window.get("nc_reference") and find_nc_program(job) is not None:
+    reference = window.get("nc_reference")
+    if not reference and find_nc_program(job) is not None:
         print(f"  - Job {job.job_id}: NC 프로그램이 확보되어 가공 구간을 다시 판별합니다.")
         return True
+
+    # 참조는 했는데 프로그램 이름이 'Unknown' 인 구간은 XML 이 도착하기 전에 만들어진 것이다.
+    # TDMS 는 파일 하나만 떨어지면 바로 변환 대상이 되는 반면 program_code 와 가공 시작·종료
+    # 시각은 XML 이 들어와야 채워진다. 그 전에 돌면 시간 힌트가 없어 블록 커버리지가 0 이 되고,
+    # 'nc_reference 가 있다'는 이유로 다시 판별하지도 않아 activity 구간이 그대로 굳었다.
+    # 이름이 Unknown 이 아니게 되는 순간(=XML 반영 완료) 한 번 더 돌면 nc_block 으로 확정된다.
+    if reference and str(reference).startswith("Unknown"):
+        workplan = getattr(job, "workplan", None)
+        program = getattr(workplan, "program_code", None) if workplan else None
+        if program and program != "Unknown":
+            print(f"  - Job {job.job_id}: XML 메타데이터가 확보되어 가공 구간을 다시 판별합니다.")
+            return True
     return False
 
 
@@ -312,7 +333,11 @@ def run_visualizer_batch():
         db = SessionLocal()
         try:
             now = time.time()
-            candidate_jobs = db.query(Job).filter(Job.tdms_file_path.isnot(None)).all()
+            # TDMS 경로는 job_file_archive 에 있으므로 조인해서 고른다.
+            candidate_jobs = (db.query(Job)
+                              .join(JobFileArchive, JobFileArchive.job_id == Job.job_id)
+                              .filter(JobFileArchive.tdms_raw_path.isnot(None))
+                              .all())
             jobs = [j for j in candidate_jobs
                     if _needs_processing(j) and retry_after.get(j.job_id, (0.0, 0.0))[0] <= now]
 
@@ -348,20 +373,16 @@ def run_visualizer_batch():
                             raw_fft_path = os.path.join(raw_job_dir, f"job_{job.job_id}_fft.parquet")
                             shutil.copy2(fft_parquet_path, raw_fft_path)
 
-                    job.tdms_parquet_path = get_rel_raw_data_path(raw_parquet_path)
-                    job.tdms_fft_parquet_path = get_rel_raw_data_path(raw_fft_path) if raw_fft_path else None
-
                     # Vault에도 Parquet 이중 백업
                     tdms_parquet_vault = save_to_vault(parquet_path, "processed_parquet", f"job_{job.job_id}_viz.parquet")
                     tdms_fft_vault = save_to_vault(fft_parquet_path, "processed_parquet", f"job_{job.job_id}_fft.parquet") if fft_parquet_path else None
 
-                    job_archive = db.query(JobFileArchive).filter(JobFileArchive.job_id == job.job_id).first()
-                    if not job_archive:
-                        job_archive = JobFileArchive(job_id=job.job_id)
-                        db.add(job_archive)
-
-                    job_archive.tdms_parquet_file_path = tdms_parquet_vault
-                    job_archive.tdms_fft_parquet_file_path = tdms_fft_vault
+                    # 원본 위치와 보관소 위치를 같은 행에 나란히 적는다.
+                    job_archive = get_or_create_job_archive(db, job.job_id)
+                    job_archive.tdms_parquet_raw_path = get_rel_raw_data_path(raw_parquet_path)
+                    job_archive.tdms_fft_parquet_raw_path = (
+                        get_rel_raw_data_path(raw_fft_path) if raw_fft_path else None)
+                    # 보관소 경로는 vault_layout 규칙으로 계산되므로 저장하지 않는다.
 
                     db.commit()
                     print(f"  - DB, Vault 및 raw_data 동기화 완료 (Job ID: {job.job_id})")

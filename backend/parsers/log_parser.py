@@ -9,7 +9,7 @@ from vault_manager import save_to_vault
 # CNC 1Hz 로그를 구분하기 위한 헤더 표식.
 # 같은 Job 폴더에는 CNC 로그 말고도 .log 확장자를 쓰는 파일이 떨어질 수 있다
 # (실제로 NI TDMS 라이브러리가 "TDS Exception in Initialize..." 오류를 UTF-16 .log 로 남긴다).
-# 그런 파일을 그대로 받아들이면 job.log_file_path 가 엉뚱한 파일을 가리키고
+# 그런 파일을 그대로 받아들이면 log_file_archive.log_raw_path 가 엉뚱한 파일을 가리키고
 # machine_log 통계가 전부 0 으로 덮어써지므로, 헤더를 보고 아니면 건너뛴다.
 CNC_LOG_REQUIRED_COLUMNS = {'time'}
 CNC_LOG_SIGNATURE_COLUMNS = {'cls', 'crpm', 'cfr', 'ctime', 'cut'}
@@ -183,7 +183,7 @@ def parse_log(file_path, job_id):
 
         # Job 테이블에 원본 파일 경로 매핑
         from vault_manager import get_rel_raw_data_path
-        job.log_file_path = get_rel_raw_data_path(file_path)
+        log_raw_rel = get_rel_raw_data_path(file_path)
         
         # MachineLog 요약 정보 삽입 또는 업데이트
         existing_log = db.query(MachineLog).filter(MachineLog.job_id == job.job_id).first()
@@ -210,15 +210,15 @@ def parse_log(file_path, job_id):
             db.flush()
             target_log_id = m_log.log_id
             
-        # Save to Vault
-        log_vault_path = save_to_vault(file_path, "machine_logs", f"Job_{job.job_id}", os.path.basename(file_path))
+        # 보관소 사본. 자리는 vault_layout.log_dir_rel 로 계산하므로 경로를 남기지 않는다.
+        save_to_vault(file_path, "machine_logs", f"Job_{job.job_id}", os.path.basename(file_path))
             
         archive = db.query(LogFileArchive).filter_by(log_id=target_log_id).first()
         if not archive:
-            archive = LogFileArchive(log_id=target_log_id, log_file_path=log_vault_path)
+            archive = LogFileArchive(log_id=target_log_id, log_raw_path=log_raw_rel)
             db.add(archive)
         else:
-            archive.log_file_path = log_vault_path
+            archive.log_raw_path = log_raw_rel
             
         db.commit()
         print(f"    - Log 요약 파싱 완료. 통계 DB 저장 및 파일 매핑 성공 (Job ID: {job.job_id})")

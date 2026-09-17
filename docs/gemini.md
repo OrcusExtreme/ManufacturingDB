@@ -226,8 +226,8 @@ TDMS 를 옮길 때는 nptdms 가 만드는 `*.tdms_index` 사이드카도 함�
 ### 3.5 기존 데이터 이전
 
 `backend/migrate_job_folder_layout.py` 가 Job 루트에 흩어진 파일을 하위 폴더로 옮기고,
-DB에 저장된 경로 참조(`job.tdms_file_path`, `job.log_file_path`, `workplan.nc_file_path`,
-`workplan_file_archive.nc_file_path`)까지 함께 고칩니다.
+DB에 저장된 경로 참조(각 아카이브 테이블의 `*_raw_path`)까지 함께 고칩니다.
+보관소 기준 경로(`*_vault_path`)는 Vault 안에서 움직이지 않으므로 그대로 둡니다.
 
 ```bash
 python backend/migrate_job_folder_layout.py          # 무엇을 옮길지 확인만
@@ -293,7 +293,9 @@ workplan.workplan_id INT AUTO_INCREMENT  ← UNIQUE(part_code, program_code, nc_
 | `part_code` **FK** | INT | → `part`, ON DELETE CASCADE |
 | `program_code` | VARCHAR(50) | XML `ProgramCode` / `ProgramName` |
 | `nc_hash` | VARCHAR(32) | NC 내용 MD5 앞 8자리 |
-| `nc_file_path` | VARCHAR(255) | NC 파일 상대 경로 |
+
+NC 파일 경로는 `workplan_file_archive` 로 옮겼습니다. `nc_hash` 는 경로가 아니라
+아래 유일 제약을 이루는 **신원 값**이라 여기 남습니다.
 
 제약: `UNIQUE(part_code, program_code, nc_hash)`
 
@@ -342,9 +344,7 @@ workplan.workplan_id INT AUTO_INCREMENT  ← UNIQUE(part_code, program_code, nc_
 | `cutting_seconds` | DOUBLE | 실절삭 시간 |
 | `moving_distance` / `cutting_moving_distance` | DOUBLE | 총·절삭 이동거리 |
 | `is_finish` / `is_error` | BOOLEAN | 완주 / 에러 |
-| `research_project` / `machining_type` / `custom_part_name` | VARCHAR | 수기 입력 |
-| `tdms_file_path` / `log_file_path` | VARCHAR(500) | 원본 상대 경로 |
-| `tdms_parquet_path` / `tdms_fft_parquet_path` | VARCHAR(500) | 변환 산출물 경로 |
+| `machining_type` | VARCHAR(100) | 가공 종류 (수기 입력) |
 | `machining_window` | JSON | 실가공 구간 판별 결과 ([7장](#7-tdms-정렬-엔진)) |
 | `tool_conditions` | JSON | 런타임 공구 상태 (사용횟수·오프셋) |
 
@@ -372,14 +372,80 @@ workplan.workplan_id INT AUTO_INCREMENT  ← UNIQUE(part_code, program_code, nc_
 
 | 테이블 | 키 | 내용 |
 | :--- | :--- | :--- |
-| `workplan_file_archive` | `workplan_id` PK/FK | NC Vault 경로 + LONGBLOB + SHA-256 |
-| `job_file_archive` | `job_id` PK/FK | XML Vault 경로 + LONGBLOB + SHA-256, Parquet 경로 |
-| `cad_file_archive` | `cad_id` PK, `part_code` FK | CAD 파일명/확장자/경로 + LONGBLOB + SHA-256 |
-| `surface_roughness_archive` | `roughness_id` PK/FK | 통계 CSV · 곡선 CSV · Parquet 경로 |
-| `log_file_archive` | `log_id` PK/FK | 로그 Vault 경로 |
+| `workplan_file_archive` | `workplan_id` PK/FK | `nc_raw_path` + LONGBLOB + SHA-256 |
+| `job_file_archive` | `job_id` PK/FK | LONGBLOB + SHA-256, `tdms_raw_path`, `tdms_parquet_raw_path`, `tdms_fft_parquet_raw_path` |
+| `cad_file_archive` | `cad_id` PK, `part_code` FK | 파일명/확장자 + LONGBLOB + SHA-256 |
+| `surface_roughness_archive` | `roughness_id` PK/FK | `profile_parquet_raw_path` |
+| `log_file_archive` | `log_id` PK/FK | `log_raw_path` |
+
+#### 파일 경로는 전부 아카이브 테이블에 둔다
+
+예전에는 같은 파일을 가리키는 칸이 주 테이블과 아카이브 테이블에 나뉘어 있었습니다.
+이름만 보면 중복 같지만 담긴 값은 서로 달랐습니다.
+
+```
+job.tdms_parquet_path            Alchemist/DB_test/1/processed_parquet/job_1_viz.parquet
+job_file_archive.tdms_parquet_*  processed_parquet/job_1_viz.parquet
+```
+
+앞은 `RAW_DATA_ROOT` 기준(장비가 떨군 원본이 놓인 자리), 뒤는 `VAULT_ROOT` 기준(보관소
+사본)이었습니다. 지금은 **원본 경로만 아카이브 테이블에 남깁니다.**
+
+| 접미사 | 기준 | 뜻 | DB 저장 |
+| :--- | :--- | :--- | :--- |
+| `*_raw_path` | `RAW_DATA_ROOT` | 장비가 원본을 떨군 자리 — **사실** | 저장함 |
+| (보관소 경로) | `VAULT_ROOT` | 보관소 사본의 자리 — **규칙** | 저장하지 않고 계산 |
+
+#### 보관소 경로는 저장하지 않고 계산한다
+
+보관소 안의 자리는 자유로운 값이 아니라 **레코드로부터 계산되는 규칙**입니다.
+
+```
+XML      jobs/{source_folder}/metadata.xml
+NC       workplan_nc/WP{workplan_id}.nc
+TDMS     tdms_files/Job_{job_id}/{파일명}
+로그     machine_logs/Job_{job_id}/{파일명}
+조도     surface_roughness/Job_{job_id}/{파일명}
+Parquet  processed_parquet/job_{job_id}_viz.parquet · _fft.parquet
+CAD      cad_models/Part_{부품명}/{파일명}
+```
+
+같은 규칙을 DB 컬럼에도 적어 두면 규칙이 **코드와 데이터 두 곳**에 살게 됩니다. 배치를 한 번
+바꾸면 이미 쌓인 행이 전부 옛 규칙을 가리키고 어느 쪽이 맞는지 알 수 없습니다. 그래서 규칙은
+`backend/vault_layout.py` **한 곳**에만 두고 필요할 때 계산합니다.
+
+```python
+import vault_layout
+vault_layout.find_job_xml(job)              # jobs/{source_folder}/metadata.xml
+vault_layout.find_workplan_nc(workplan_id)  # workplan_nc/WP{id}.nc
+vault_layout.find_job_tdms(job_id, raw)     # 원본 파일명 우선, 없으면 폴더 훑기
+vault_layout.find_part_cad(part_name, name)
+vault_layout.list_in_dir(vault_layout.roughness_dir_rel(job_id))
+```
+
+보관소 파일명은 대개 원본 파일명과 같으므로, 이름이 필요한 자리에서는 `*_raw_path` 의
+basename 을 쓰고 그래도 모르면 폴더를 훑습니다(`resolve_in_dir`). 다운로드·복원의
+**원본 폴더 → 보관소 → LONGBLOB** 폴백은 그대로입니다 — 가운데 단계의 경로를 읽는 대신
+계산할 뿐입니다.
+
+읽고 쓸 때는 `backend/file_archive.py` 의 헬퍼를 씁니다.
+
+```python
+from file_archive import archive_path, set_job_paths
+set_job_paths(db, job.job_id, tdms_raw_path=rel)   # 행이 없으면 만들어 준다
+tdms = archive_path(job, "tdms_raw_path")          # job.file_archive 관계를 타고 읽는다
+```
+
+부품명·프로젝트명은 사정이 다릅니다. `job.custom_part_name` / `job.research_project` 는
+`part.part_name` / `part.project_code` 와 **같은 사실을 두 곳에 적어 둔 진짜 중복**이라
+제거했습니다. 조회는 `Job → Workplan → Part` 조인으로 한 곳에서만 읽습니다.
+
+이전 DB 는 `backend/migrate_paths_to_archive.py` 로 옮깁니다(기본 미리보기, `--apply` 로 실행).
+새 컬럼 추가 → 값 복사 → 검증 → 옛 컬럼 삭제 순서이고, 검증에 실패하면 삭제하지 않습니다.
 
 LONGBLOB 컬럼은 `LargeBinary(length=(2**32)-1)` 로 선언되어 최대 4GB까지 담을 수 있지만,
-파서는 **15MB를 넘으면 저장을 생략**하고 Vault 경로만 남깁니다.
+파서는 **15MB를 넘으면 저장을 생략**합니다. 그래도 보관소에는 사본이 있고 그 자리는
+`vault_layout` 으로 계산되므로 복원에는 지장이 없습니다.
 
 ### 4.4 연쇄 삭제
 
@@ -690,7 +756,7 @@ NC 정규화: 주석 제거 → 공백 제거 → 대문자 → 헤더/끝 표�
 
 ### 7.6 변환 데몬 (`tdms_visualizer.py`)
 
-5초 주기로 `tdms_file_path` 가 있고 변환이 필요한 Job 을 찾아 처리합니다.
+5초 주기로 `job_file_archive.tdms_raw_path` 가 있고 변환이 필요한 Job 을 찾아 처리합니다.
 
 **읽기 전략 — 채널별 지연 로딩이 아니라 단일 패스**
 
@@ -796,7 +862,8 @@ VAULT_ROOT     = resolve_vault_root()   # 프로젝트 밖으로 뺄 수 있다
 
 ```ini
 # .env
-ORCUS_DB_DATA_DIR=C:\ProgramData\MySQL\MySQL Server 8.0\Data\orcus
+# MySQL 스키마 폴더 안은 피한다 (DROP DATABASE 시 함께 삭제됨)
+ORCUS_VAULT_ROOT=D:\Orcus\archive_vault
 ```
 
 OS 환경변수가 이미 있으면 `.env` 보다 그쪽이 우선합니다(`load_dotenv` 기본 동작).
@@ -1110,7 +1177,7 @@ Three.js 를 `components.html` 로 임베드합니다. STEP/STL 을 base64 로 �
 | 0.9s | CAD 파서 → `cad_file_archive` |
 | 1.7s | 파일들이 확장자에 맞는 하위 폴더로 이동 → XML 파싱 → **Part·Workplan·Workingstep·Job 생성**, NC 절삭조건 반영, XML·NC 원본 BLOB 보관 |
 | 2.5s | 로그 파싱 → `machine_log` 통계 + Vault |
-| 20s | TDMS 메타데이터 파싱 → `tdms_file_path` 매핑 + Vault 백업 |
+| 20s | TDMS 메타데이터 파싱 → `job_file_archive.tdms_raw_path` 매핑 + Vault 백업 |
 | 22s | 조도 CSV 4점 → `surface_roughness` + `inspection` 평균 + 곡선 Parquet |
 | 103s | TDMS 변환 데몬 완료 → 구간 판별(78.6초 소요) + viz/fft Parquet + `machining_window` |
 | +최대 60s | 대시보드 캐시 TTL 만료 → 화면 반영 |

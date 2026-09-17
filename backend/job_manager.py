@@ -89,8 +89,6 @@ def get_or_create_job(db, job_identifier):
     new_job = Job(
         workplan_id=workplan.workplan_id,
         work_id="UNKNOWN_WORKID",
-        research_project=parsed_rp,
-        custom_part_name=parsed_cpn
     )
     db.add(new_job)
     db.flush() # new_job.job_id 취득
@@ -128,6 +126,7 @@ def adopt_workplan_identity(db, job, program_code=None, nc_hash=None, nc_file_pa
     반환값: Job 이 최종적으로 참조하게 된 Workplan (없으면 None)
     """
     from DB.models import Job, Workingstep, WorkplanFileArchive
+    from file_archive import get_or_create_workplan_archive
 
     workplan = job.workplan if job is not None else None
     if workplan is None:
@@ -137,8 +136,10 @@ def adopt_workplan_identity(db, job, program_code=None, nc_hash=None, nc_file_pa
     target_hash = nc_hash if nc_hash else workplan.nc_hash
 
     if target_program == workplan.program_code and target_hash == workplan.nc_hash:
-        if nc_file_path and not workplan.nc_file_path:
-            workplan.nc_file_path = nc_file_path
+        if nc_file_path:
+            arc = get_or_create_workplan_archive(db, workplan.workplan_id)
+            if not arc.nc_raw_path:
+                arc.nc_raw_path = nc_file_path
         return workplan
 
     twin = db.query(Workplan).filter(
@@ -152,7 +153,9 @@ def adopt_workplan_identity(db, job, program_code=None, nc_hash=None, nc_file_pa
         workplan.program_code = target_program
         workplan.nc_hash = target_hash
         if nc_file_path:
-            workplan.nc_file_path = nc_file_path
+            arc = get_or_create_workplan_archive(db, workplan.workplan_id)
+            if not arc.nc_raw_path:
+                arc.nc_raw_path = nc_file_path
         db.flush()
         return workplan
 
@@ -161,10 +164,11 @@ def adopt_workplan_identity(db, job, program_code=None, nc_hash=None, nc_file_pa
     print(f"    - [Job Manager] 동일 신원 Workplan {twin.workplan_id} 발견. "
           f"임시 Workplan {stale_id} 을(를) 합칩니다. ({target_program} / {target_hash})")
 
-    if nc_file_path and not twin.nc_file_path:
-        twin.nc_file_path = nc_file_path
-    elif workplan.nc_file_path and not twin.nc_file_path:
-        twin.nc_file_path = workplan.nc_file_path
+    # NC 경로는 workplan_file_archive 로 옮겼다. 받는 쪽이 비어 있을 때만 채운다.
+    twin_arc = get_or_create_workplan_archive(db, twin.workplan_id)
+    stale_arc = db.query(WorkplanFileArchive).filter_by(workplan_id=workplan.workplan_id).first()
+    if not twin_arc.nc_raw_path:
+        twin_arc.nc_raw_path = nc_file_path or (stale_arc.nc_raw_path if stale_arc else None)
 
     # Workingstep: 받는 쪽이 비어 있을 때만 옮긴다.
     # 신원이 같다는 것은 NC 내용이 같다는 뜻이라, 양쪽 다 있으면 같은 공정의 사본이다.

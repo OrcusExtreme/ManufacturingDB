@@ -37,9 +37,13 @@ def render_search_filters(key_prefix="ws"):
     with st.container():
         c1, c2, c3 = st.columns(3)
         with c1:
-            proj_query = "SELECT DISTINCT research_project FROM job WHERE research_project IS NOT NULL AND research_project != ''"
+            proj_query = (
+                "SELECT DISTINCT p.project_code AS project_code FROM job j "
+                "JOIN workplan w ON j.workplan_id = w.workplan_id "
+                "JOIN part p ON w.part_code = p.part_code "
+                "WHERE p.project_code IS NOT NULL AND p.project_code != ''")
             projs_df = load_data(proj_query)
-            projs = projs_df['research_project'].tolist() if not projs_df.empty else []
+            projs = projs_df['project_code'].tolist() if not projs_df.empty else []
             selected_projs = st.multiselect(
                 "1. 연구 프로젝트 명", projs,
                 default=[p for p in st.session_state[k_projs] if p in projs],
@@ -49,7 +53,7 @@ def render_search_filters(key_prefix="ws"):
 
         with c2:
             part_query = """
-                SELECT DISTINCT COALESCE(j.custom_part_name, p.part_name) AS display_part
+                SELECT DISTINCT p.part_name AS display_part
                 FROM job j
                 JOIN workplan w ON j.workplan_id = w.workplan_id
                 JOIN part p ON w.part_code = p.part_code
@@ -59,7 +63,7 @@ def render_search_filters(key_prefix="ws"):
                 proj_keys = [f"p_proj_{i}" for i in range(len(selected_projs))]
                 for k, v in zip(proj_keys, selected_projs):
                     part_params[k] = v
-                part_query += f" WHERE j.research_project IN ({', '.join([':' + k for k in proj_keys])})"
+                part_query += f" WHERE p.project_code IN ({', '.join([':' + k for k in proj_keys])})"
             part_query += " ORDER BY display_part"
 
             part_codes_df = load_data(part_query, params=part_params)
@@ -73,7 +77,7 @@ def render_search_filters(key_prefix="ws"):
 
         with c3:
             job_iteration_query = """
-                SELECT j.job_id, COALESCE(j.custom_part_name, p.part_name) AS part_name, j.start_time
+                SELECT j.job_id, p.part_name AS part_name, j.start_time
                 FROM job j
                 JOIN workplan w ON j.workplan_id = w.workplan_id
                 JOIN part p ON w.part_code = p.part_code
@@ -84,16 +88,16 @@ def render_search_filters(key_prefix="ws"):
                 proj_keys = [f"i_proj_{i}" for i in range(len(selected_projs))]
                 for k, v in zip(proj_keys, selected_projs):
                     iter_params[k] = v
-                filters_sql.append(f"j.research_project IN ({', '.join([':' + k for k in proj_keys])})")
+                filters_sql.append(f"p.project_code IN ({', '.join([':' + k for k in proj_keys])})")
             if selected_parts:
                 part_keys = [f"i_part_{i}" for i in range(len(selected_parts))]
                 for k, v in zip(part_keys, selected_parts):
                     iter_params[k] = v
-                filters_sql.append(f"COALESCE(j.custom_part_name, p.part_name) IN ({', '.join([':' + k for k in part_keys])})")
+                filters_sql.append(f"p.part_name IN ({', '.join([':' + k for k in part_keys])})")
 
             if filters_sql:
                 job_iteration_query += " WHERE " + " AND ".join(filters_sql)
-            job_iteration_query += " ORDER BY COALESCE(j.custom_part_name, p.part_name), j.start_time ASC"
+            job_iteration_query += " ORDER BY p.part_name, j.start_time ASC"
             job_iter_df = load_data(job_iteration_query, params=iter_params)
 
             job_options = []
@@ -163,7 +167,7 @@ def render_search_filters(key_prefix="ws"):
         proj_keys = [f"m_proj_{i}" for i in range(len(selected_projs))]
         for k, v in zip(proj_keys, selected_projs):
             main_params[k] = v
-        conditions.append(f"j.research_project IN ({', '.join([':' + k for k in proj_keys])})")
+        conditions.append(f"p.project_code IN ({', '.join([':' + k for k in proj_keys])})")
 
     if selected_machs:
         mach_keys = [f"m_mach_{i}" for i in range(len(selected_machs))]
@@ -180,7 +184,7 @@ def render_search_filters(key_prefix="ws"):
         part_keys = [f"m_part_{i}" for i in range(len(selected_parts))]
         for k, v in zip(part_keys, selected_parts):
             main_params[k] = v
-        conditions.append(f"COALESCE(j.custom_part_name, p.part_name) IN ({', '.join([':' + k for k in part_keys])})")
+        conditions.append(f"p.part_name IN ({', '.join([':' + k for k in part_keys])})")
 
     if selected_dates and len(selected_dates) == 2:
         start_dt = selected_dates[0].strftime('%Y-%m-%d 00:00:00')
@@ -212,7 +216,7 @@ def render_search_filters(key_prefix="ws"):
 
     job_query = f"""
         SELECT
-            j.job_id, j.start_time, j.research_project, COALESCE(j.custom_part_name, p.part_name) as part_name, j.machining_type,
+            j.job_id, j.start_time, p.project_code, p.part_name as part_name, j.machining_type,
             j.cutting_seconds, j.is_finish,
             i.surface_roughness_ra, i.surface_roughness_rz, i.pass_fail,
             e.worker_name, e.temperature, e.humidity, e.free_memo,
@@ -242,7 +246,7 @@ def render_search_filters(key_prefix="ws"):
 JOB_TABLE_COLUMN_CONFIG = {
     "job_id": "Job ID",
     "start_time": "시작 시간",
-    "research_project": "프로젝트",
+    "project_code": "프로젝트",
     "part_name": "Part 명",
     "machining_type": "가공 종류",
     "cutting_seconds": "가공 시간(초)",
@@ -282,7 +286,7 @@ def render_job_table(job_df, key=None, selectable=False, show_all_columns=True):
     column_config = {
         "job_id": st.column_config.NumberColumn("Job ID", format="%d"),
         "start_time": st.column_config.DatetimeColumn("시작 시간", format="YYYY-MM-DD HH:mm"),
-        "research_project": "프로젝트",
+        "project_code": "프로젝트",
         "part_name": "Part 명",
         "machining_type": "가공 종류",
         "cutting_seconds": st.column_config.NumberColumn("가공 시간(초)", format="%.1f"),

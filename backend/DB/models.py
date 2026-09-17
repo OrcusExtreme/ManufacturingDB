@@ -30,11 +30,15 @@ class Workplan(Base):
     part_code = Column(Integer, ForeignKey("part.part_code", ondelete="CASCADE"), nullable=False)
     program_code = Column(String(50), comment='XML: ProgramCode / ProgramName')
     nc_hash = Column(String(32), comment='NC 원본 내용 MD5 앞 8자리 (같은 이름·다른 내용 구분용)')
-    nc_file_path = Column(String(255), comment='NC 코드 파일 경로')
+    # NC 원본 경로는 workplan_file_archive.nc_raw_path 로 옮겼다.
+    # 보관소 안의 자리는 vault_layout.workplan_nc_rel() 로 계산한다.
+    # nc_hash 는 경로가 아니라 uq_workplan_identity 를 이루는 신원 값이라 여기 남는다.
 
     part = relationship("Part", back_populates="workplans")
     workingsteps = relationship("Workingstep", back_populates="workplan", cascade="all, delete-orphan")
     jobs = relationship("Job", back_populates="workplan", cascade="all, delete-orphan")
+    file_archive = relationship("WorkplanFileArchive", back_populates="workplan",
+                                cascade="all, delete-orphan", uselist=False)
 
 class Tool(Base):
     __tablename__ = "tool"
@@ -94,14 +98,16 @@ class Job(Base):
     is_finish = Column(Boolean, comment='XML: IsFinish')
     is_error = Column(Boolean, comment='XML: IsError')
     
-    research_project = Column(String(100), nullable=True) # 연구 프로젝트 명 (수기 입력)
     machining_type = Column(String(100), nullable=True)   # 가공 종류 (수기 입력)
-    custom_part_name = Column(String(100), nullable=True) # 사용자 지정 Part 명 (수기 입력)
-    
-    tdms_file_path = Column(String(500), nullable=True) # 매핑된 TDMS 파일 절대 경로
-    log_file_path = Column(String(500), nullable=True)  # 매핑된 Log 파일 절대 경로
-    tdms_parquet_path = Column(String(500), nullable=True) # TDMS Time-domain Parquet 절대 경로
-    tdms_fft_parquet_path = Column(String(500), nullable=True) # TDMS Frequency-domain(FFT) Parquet 절대 경로
+
+    # 프로젝트명·부품명은 part.project_code / part.part_name 하나만 쓴다.
+    # 예전에는 Job 마다 덮어쓸 수 있는 사본(research_project / custom_part_name)을 따로 들고
+    # 조회할 때마다 COALESCE 로 둘을 합쳤는데, 같은 사실이 두 곳에 적히니 어느 쪽이 맞는지
+    # 알 수 없었다. 이제 Workplan -> Part 를 조인해 한 곳에서만 읽는다.
+
+    # 파일 경로는 전부 job_file_archive 로 옮겼다.
+    # (tdms_raw_path / tdms_parquet_raw_path / tdms_fft_parquet_raw_path 와 각 *_vault_path)
+    # machining_window 는 경로가 아니라 판별 결과(JSON)라 여기 남는다.
     machining_window = Column(JSON, comment='TDMS 실가공 구간 판별 결과 (구간/근거/DAQ 시계 보정값)')
     
     tool_conditions = Column(JSON, comment='런타임 공구 상태 (사용횟수, 오프셋, 마모도 등)')
@@ -111,6 +117,9 @@ class Job(Base):
     inspection = relationship("Inspection", back_populates="job", cascade="all, delete-orphan", uselist=False)
     env_memo = relationship("EnvMemo", back_populates="job", cascade="all, delete-orphan", uselist=False)
     surface_roughnesses = relationship("SurfaceRoughness", back_populates="job", cascade="all, delete-orphan")
+    # 파일 경로는 전부 이쪽에 있다. job.file_archive.tdms_raw_path 처럼 읽는다.
+    file_archive = relationship("JobFileArchive", back_populates="job",
+                                cascade="all, delete-orphan", uselist=False)
 
 
 class MachineLog(Base):
@@ -127,6 +136,8 @@ class MachineLog(Base):
     critical_alarm_msg = Column(Text, comment='주요 알람 메시지 (존재 시)')
 
     job = relationship("Job", back_populates="machine_log")
+    file_archive = relationship("LogFileArchive", back_populates="machine_log",
+                                cascade="all, delete-orphan", uselist=False)
 
 
 class SurfaceRoughness(Base):
@@ -141,9 +152,12 @@ class SurfaceRoughness(Base):
     rq = Column(Float, comment='제곱평균제곱근거칠기 (Rq, μm)')
     rz = Column(Float, comment='십점평균거칠기 (Rz, μm)')
     
-    profile_parquet_path = Column(String(500), nullable=True, comment='평가곡선 Parquet 파일 경로')
-    
+    # 평가곡선 Parquet 경로는 surface_roughness_archive 로 옮겼다
+    # (profile_parquet_raw_path). 보관소 자리는 vault_layout 로 계산한다.
+
     job = relationship("Job", back_populates="surface_roughnesses")
+    file_archive = relationship("SurfaceRoughnessArchive", back_populates="surface_roughness",
+                                cascade="all, delete-orphan", uselist=False)
 
 
 class Inspection(Base):
@@ -183,7 +197,11 @@ class WorkplanFileArchive(Base):
     __table_args__ = {'comment': 'Workplan 관련 대용량 파일 경로 및 원본 아카이브'}
     
     workplan_id = Column(Integer, ForeignKey("workplan.workplan_id", ondelete="CASCADE"), primary_key=True)
-    nc_file_path = Column(String(1000), comment='NC 원본 파일 Vault 경로')
+    # 예전에는 nc_file_path 한 칸에 xml_parser 가 Vault 경로를, nc_parser 가 원본 폴더 경로를
+    # 섞어 넣어서 읽는 쪽이 어느 기준인지 알 수 없었다. 기준별로 칸을 나눈다.
+    nc_raw_path = Column(String(1000), comment='NC 원본 파일 경로 (RAW_DATA_ROOT 기준 상대경로)')
+
+    workplan = relationship("Workplan", back_populates="file_archive")
     nc_file_content = Column(LargeBinary(length=(2**32)-1), nullable=True, comment='NC 원본 바이너리 (최대 4GB LONGBLOB)')
     nc_file_sha256 = Column(String(64), nullable=True, comment='nc_file_content 저장 시점의 SHA-256 (복원 검증 기준값)')
 
@@ -193,11 +211,19 @@ class JobFileArchive(Base):
     __table_args__ = {'comment': 'Job 관련 대용량 파일 경로 및 원본 아카이브 (XML, TDMS Parquet 등)'}
     
     job_id = Column(Integer, ForeignKey("job.job_id", ondelete="CASCADE"), primary_key=True)
-    xml_file_path = Column(String(1000), comment='XML 원본 파일 Vault 경로')
+
+    # *_raw_path 만 둔다. 장비가 어디에 떨궜는지는 '사실'이라 저장해야 하지만,
+    # 보관소 안의 자리는 레코드로부터 계산되는 '규칙'이라 저장하지 않는다.
+    # 규칙은 backend/vault_layout.py 한 곳에만 있다.
     xml_file_content = Column(LargeBinary(length=(2**32)-1), nullable=True, comment='XML 원본 바이너리 (최대 4GB LONGBLOB)')
     xml_file_sha256 = Column(String(64), nullable=True, comment='xml_file_content 저장 시점의 SHA-256 (복원 검증 기준값)')
-    tdms_parquet_file_path = Column(String(1000), comment='TDMS Time-domain Parquet 원본 파일 Vault 경로')
-    tdms_fft_parquet_file_path = Column(String(1000), comment='TDMS Frequency-domain(FFT) Parquet 원본 파일 Vault 경로')
+
+    tdms_raw_path = Column(String(1000), comment='TDMS 원본 파일 경로')
+    tdms_parquet_raw_path = Column(String(1000), comment='TDMS Time-domain Parquet 원본 경로')
+    tdms_fft_parquet_raw_path = Column(String(1000), comment='TDMS FFT Parquet 원본 경로')
+
+    job = relationship("Job", back_populates="file_archive")
+
     
 class CadFileArchive(Base):
     __tablename__ = "cad_file_archive"
@@ -207,7 +233,6 @@ class CadFileArchive(Base):
     part_code = Column(Integer, ForeignKey("part.part_code", ondelete="CASCADE"), nullable=False)
     file_name = Column(String(255), comment='파일 원본명')
     file_type = Column(String(20), comment='파일 확장자 (step, stp, stl)')
-    file_path = Column(String(1000), comment='Vault 경로')
     file_content = Column(LargeBinary(length=(2**32)-1), nullable=True, comment='CAD 원본 바이너리 (15MB 제한)')
     file_sha256 = Column(String(64), nullable=True, comment='file_content 저장 시점의 SHA-256 (복원 검증 기준값)')
 
@@ -219,9 +244,9 @@ class SurfaceRoughnessArchive(Base):
     __table_args__ = {'comment': '표면조도 측정 결과 파일 경로 아카이브'}
     
     roughness_id = Column(Integer, ForeignKey("surface_roughness.roughness_id", ondelete="CASCADE"), primary_key=True)
-    profile_parquet_file_path = Column(String(1000), nullable=True, comment='평가곡선 원본 파일 Vault 경로')
-    stat_csv_file_path = Column(String(1000), nullable=True, comment='통계 CSV 파일 Vault 경로')
-    curve_csv_file_path = Column(String(1000), nullable=True, comment='평가곡선 CSV 파일 Vault 경로')
+    profile_parquet_raw_path = Column(String(1000), nullable=True, comment='평가곡선 Parquet 원본 경로')
+
+    surface_roughness = relationship("SurfaceRoughness", back_populates="file_archive")
 
 
 class LogFileArchive(Base):
@@ -229,4 +254,6 @@ class LogFileArchive(Base):
     __table_args__ = {'comment': 'MachineLog 관련 파일 경로 아카이브 (로그/CSV)'}
     
     log_id = Column(Integer, ForeignKey("machine_log.log_id", ondelete="CASCADE"), primary_key=True)
-    log_file_path = Column(String(1000), comment='원시 로그/CSV 파일 Vault 경로')
+    log_raw_path = Column(String(1000), comment='원시 로그/CSV 원본 경로')
+
+    machine_log = relationship("MachineLog", back_populates="file_archive")

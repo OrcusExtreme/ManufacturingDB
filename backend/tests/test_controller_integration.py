@@ -52,7 +52,7 @@ def _purge_test_rows():
     try:
         parts = db.query(Part).filter(Part.project_code == TEST_PROJECT).all()
         part_codes = {p.part_code for p in parts}
-        for job in db.query(Job).filter(Job.research_project == TEST_PROJECT).all():
+        for job in db.query(Job).filter(Job.source_folder.like(f"{TEST_PROJECT}/%")).all():
             db.delete(job)
         db.flush()
         for wp in db.query(Workplan).all():
