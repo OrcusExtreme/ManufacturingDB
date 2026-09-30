@@ -8,7 +8,7 @@ from tdms_alignment import open_tdms
 
 from job_manager import get_or_create_job, adopt_workplan_identity
 
-from vault_manager import save_to_vault
+from vault_manager import archive_file
 
 def parse_tdms(file_path, job_id):
     """
@@ -69,9 +69,8 @@ def parse_tdms(file_path, job_id):
                             except Exception:
                                 pass
                                 
-                        # ProgramName, MaterialCode 추출 및 Workplan/Part 보완
+                        # ProgramName 추출 및 Workplan 보완 (소재 정보는 XML에서 전담 파싱)
                         prog_name = props.get('ProgramName')
-                        mat_code = props.get('MaterialCode')
                         
                         if job.workplan_id is not None:
                             workplan = db.query(Workplan).filter_by(workplan_id=job.workplan_id).first()
@@ -82,12 +81,6 @@ def parse_tdms(file_path, job_id):
                                     # 것이므로 기존 Workplan 으로 Job 을 옮기는 것이 맞다.
                                     adopt_workplan_identity(db, job, program_code=prog_name)
                                     workplan = job.workplan
-
-                                if mat_code and workplan is not None and workplan.part_code:
-                                    from DB.models import Part
-                                    part = db.query(Part).filter_by(part_code=workplan.part_code).first()
-                                    if part and (not part.material_code or part.material_code == 'Unknown'):
-                                        part.material_code = mat_code
             db.commit()
         except Exception as meta_e:
             # 여기서 실패해도 위에서 이미 커밋한 경로 매핑은 살아남는다.
@@ -95,8 +88,8 @@ def parse_tdms(file_path, job_id):
             print(f"    - [경고] TDMS 메타데이터 보완을 건너뜁니다: {meta_e}")
         # -------------------------------------------
 
-        # 4. Vault에 TDMS 원본 백업
-        tdms_vault_rel = save_to_vault(file_path, "tdms_files", f"Job_{job.job_id}", os.path.basename(file_path))
+        # 4. Vault에 TDMS 원본 백업 (원본과 같은 자리·같은 이름)
+        tdms_vault_rel = archive_file(file_path)
 
         db.commit()
         print(f"    - TDMS 메타데이터 파싱, Vault 백업({tdms_vault_rel}) 및 파일 참조 매핑 완료 (내부 PK: {job.job_id})")

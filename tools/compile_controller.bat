@@ -39,7 +39,7 @@ echo [2/2] Compiling C++ Win32 application...
 g++.exe -std=c++17 -O2 -municode -mwindows ^
     "controller\system_controller.cpp" %RES_OBJ% ^
     -o "system_controller.exe" ^
-    -lcomctl32 -lshlwapi -lgdiplus -lgdi32 -luser32 -lole32 ^
+    -lcomctl32 -lshlwapi -lgdiplus -lgdi32 -luser32 -lole32 -liphlpapi ^
     -static -static-libgcc -static-libstdc++
 
 if %ERRORLEVEL% equ 0 (

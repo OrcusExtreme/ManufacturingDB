@@ -18,12 +18,15 @@
 #define WIN32_LEAN_AND_MEAN
 
 #include <windows.h>
+#include <winsock2.h>     // AF_INET — iphlpapi 보다 먼저 와야 한다
+#include <iphlpapi.h>     // GetExtendedTcpTable (포트 점유 조회)
 #include <commctrl.h>
 #include <shellapi.h>
 #include <shlwapi.h>
 #include <objidl.h>
 #include <gdiplus.h>
 
+#include <algorithm>
 #include <atomic>
 #include <memory>
 #include <mutex>
@@ -57,6 +60,8 @@ enum ControlIDs {
 
     IDC_BTN_CLEAN_DUMMY = 1051,
     IDC_BTN_RESET_STORAGE,
+    IDC_BTN_RESTORE_VAULT,
+    IDC_BTN_USER_MANAGER,
 
     IDC_EDIT_LOG = 2001,
     IDC_CHK_AUTOSCROLL,
@@ -70,6 +75,9 @@ enum ControlIDs {
 
 // --- 모듈 ---
 enum ModuleIndex { MOD_UI = 0, MOD_WATCHDOG, MOD_TDMS, MOD_COUNT };
+
+// 대시보드가 쓰는 포트. 아래 기동 명령과 사전 점검이 같은 값을 보게 한 곳에 둔다.
+const unsigned short UI_PORT = 8501;
 
 // 프로세스 핸들의 수명은 전부 UI 스레드가 쥔다. 리더 스레드는 읽기 파이프만
 // 소유하고, 끝나면 WM_USER_PROC_EXITED 를 보내 UI 스레드가 정리하게 한다.
@@ -241,12 +249,75 @@ void LoadLogo() {
 
 // ============================ 프로세스 제어 ============================
 
+// 이미 그 포트를 듣고 있는 프로세스의 PID (없으면 0).
+//
+// 왜 필요한가: Streamlit 은 포트가 막혀 있으면 "Port 8501 is not available" 한 줄을 남기고
+// 1초 안에 코드 1 로 죽는다. 그러면 컨트롤러 화면에서는 버튼이 켜졌다 곧바로 꺼지고
+// 로그에는 '예기치 않은 종료' 만 남아, 무엇이 문제인지 알 수 없었다.
+// 띄우기 전에 미리 보고 누가 잡고 있는지 이름과 PID 로 알려 준다.
+DWORD FindPortListenerPid(unsigned short port) {
+    ULONG size = 0;
+    if (GetExtendedTcpTable(NULL, &size, FALSE, AF_INET,
+                            TCP_TABLE_OWNER_PID_LISTENER, 0) != ERROR_INSUFFICIENT_BUFFER) {
+        return 0;   // 조회 자체가 안 되면 점검을 건너뛴다 (기동을 막지는 않는다)
+    }
+    std::vector<char> buf(size);
+    if (GetExtendedTcpTable(buf.data(), &size, FALSE, AF_INET,
+                            TCP_TABLE_OWNER_PID_LISTENER, 0) != NO_ERROR) {
+        return 0;
+    }
+    MIB_TCPTABLE_OWNER_PID* table = reinterpret_cast<MIB_TCPTABLE_OWNER_PID*>(buf.data());
+    for (DWORD i = 0; i < table->dwNumEntries; i++) {
+        const MIB_TCPROW_OWNER_PID& row = table->table[i];
+        if (row.dwState != MIB_TCP_STATE_LISTEN) continue;
+        // dwLocalPort 는 네트워크 바이트 순서가 DWORD 에 담겨 있다.
+        unsigned short p = (unsigned short)(((row.dwLocalPort & 0xFF) << 8) |
+                                            ((row.dwLocalPort >> 8) & 0xFF));
+        if (p == port) return row.dwOwningPid;
+    }
+    return 0;
+}
+
+// PID 로 실행 파일 이름을 얻는다 (권한이 없으면 빈 문자열).
+std::wstring GetProcessNameByPid(DWORD pid) {
+    if (!pid) return L"";
+    HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (!h) return L"";
+    wchar_t path[MAX_PATH] = {0};
+    DWORD len = MAX_PATH;
+    std::wstring name;
+    if (QueryFullProcessImageNameW(h, 0, path, &len)) {
+        std::wstring full(path, len);
+        size_t slash = full.find_last_of(L"\\/");
+        name = (slash == std::wstring::npos) ? full : full.substr(slash + 1);
+    }
+    CloseHandle(h);
+    return name;
+}
+
 void UpdateModuleUI(int idx);
 
 void StartModule(int idx) {
     if (idx < 0 || idx >= MOD_COUNT) return;
     ManagedProcess& proc = g_modules[idx];
     if (proc.isRunning) return;
+
+    // 대시보드는 포트를 잡아야 뜬다. 막혀 있으면 띄워 봐야 바로 죽으므로 먼저 알린다.
+    if (idx == MOD_UI) {
+        DWORD holder = FindPortListenerPid(UI_PORT);
+        if (holder) {
+            std::wstring who = GetProcessNameByPid(holder);
+            PostLogMessage(GetTimestamp() + L"[오류] 포트 " + std::to_wstring(UI_PORT) +
+                           L" 을(를) 이미 다른 프로세스가 쓰고 있어 [" + proc.name +
+                           L"] 을(를) 시작할 수 없습니다.\r\n"
+                           L"        점유 프로세스: " + (who.empty() ? L"(이름 확인 불가)" : who) +
+                           L" (PID " + std::to_wstring(holder) + L")\r\n"
+                           L"        그 프로세스를 끝낸 뒤 다시 시작하세요. "
+                           L"(이전에 수동으로 띄운 Streamlit 이 남아 있는 경우가 많습니다)\r\n");
+            UpdateModuleUI(idx);
+            return;
+        }
+    }
 
     if (!g_python.found) {
         PostLogMessage(GetTimestamp() + L"[오류] 파이썬 인터프리터를 찾지 못해 [" + proc.name +
@@ -490,7 +561,8 @@ void ComputeLayout(int cw, int ch) {
     y = L.cardModules.bottom + gap;
     L.cardParsers = {L.leftX, y, L.leftX + L.leftW, y + 286};
     y = L.cardParsers.bottom + gap;
-    L.cardUtils = {L.leftX, y, L.leftX + L.leftW, y + 130};
+    // 유틸리티 카드 높이 = 제목(46) + 버튼 4줄(4*38) + 아래 여백(8).
+    L.cardUtils = {L.leftX, y, L.leftX + L.leftW, y + 206};
 
     int rx = L.leftX + L.leftW + 24;
     int rw = cw - rx - 24;
@@ -537,11 +609,15 @@ void ApplyLayout() {
     }
     MoveCtl(g_hChkPause, L.cardParsers.left + 18, L.cardParsers.top + 246, cw, 26);
 
-    // 유틸리티 카드
-    MoveCtl(GetDlgItem(g_hWndMain, IDC_BTN_CLEAN_DUMMY), L.cardUtils.left + 18,
+    // 유틸리티 카드 (파괴적인 초기화는 맨 아래)
+    MoveCtl(GetDlgItem(g_hWndMain, IDC_BTN_USER_MANAGER), L.cardUtils.left + 18,
             L.cardUtils.top + 46, cw, 32);
-    MoveCtl(GetDlgItem(g_hWndMain, IDC_BTN_RESET_STORAGE), L.cardUtils.left + 18,
+    MoveCtl(GetDlgItem(g_hWndMain, IDC_BTN_CLEAN_DUMMY), L.cardUtils.left + 18,
             L.cardUtils.top + 84, cw, 32);
+    MoveCtl(GetDlgItem(g_hWndMain, IDC_BTN_RESTORE_VAULT), L.cardUtils.left + 18,
+            L.cardUtils.top + 122, cw, 32);
+    MoveCtl(GetDlgItem(g_hWndMain, IDC_BTN_RESET_STORAGE), L.cardUtils.left + 18,
+            L.cardUtils.top + 160, cw, 32);
 
     // 로그 패널
     MoveCtl(g_hEditLog, L.logEdit.left, L.logEdit.top,
@@ -611,7 +687,9 @@ void CreateUIControls(HWND hWnd) {
     }
     g_hChkPause = MakeButton(hWnd, IDC_CHK_PAUSE, L"파이프라인 일시 정지", STYLE_TOGGLE);
 
+    MakeButton(hWnd, IDC_BTN_USER_MANAGER, L"유저 관리", STYLE_GHOST);
     MakeButton(hWnd, IDC_BTN_CLEAN_DUMMY, L"더미 데이터 청소", STYLE_GHOST);
+    MakeButton(hWnd, IDC_BTN_RESTORE_VAULT, L"보관소에서 원본 복원", STYLE_GHOST);
     MakeButton(hWnd, IDC_BTN_RESET_STORAGE, L"DB · 스토리지 초기화", STYLE_DANGER);
 
     g_hEditLog = CreateWindowExW(0, L"EDIT", L"",
@@ -873,7 +951,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     case WM_GETMINMAXINFO: {
         MINMAXINFO* mmi = (MINMAXINFO*)lParam;
         mmi->ptMinTrackSize.x = 1060;
-        mmi->ptMinTrackSize.y = 880;   // 왼쪽 카드 3개가 잘리지 않는 최소 높이
+        mmi->ptMinTrackSize.y = 920;   // 왼쪽 카드 3개가 잘리지 않는 최소 높이
         break;
     }
 
@@ -1006,7 +1084,9 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         }
 
         case IDC_BTN_OPEN_BROWSER:
-            ShellExecuteW(NULL, L"open", L"http://localhost:8501", NULL, NULL, SW_SHOWNORMAL);
+            ShellExecuteW(NULL, L"open",
+                          (L"http://localhost:" + std::to_wstring(UI_PORT)).c_str(),
+                          NULL, NULL, SW_SHOWNORMAL);
             break;
 
         case IDC_BTN_START_ALL:
@@ -1033,9 +1113,37 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             InvalidateRect(g_hChkAutoScroll, NULL, TRUE);
             break;
 
+        case IDC_BTN_USER_MANAGER:
+            // 유저 관리 창은 파이썬(tkinter)이 따로 띄우는 독립 프로세스다. 컨트롤러는 실행만
+            // 하고 가입 승인·거절, 멤버 조회·삭제는 전부 그쪽이 DB 에 직접 한다. 두 번 눌러도
+            // 창은 하나만 뜨고(파이썬 쪽이 이미 열린 창을 앞으로 가져온다), 창이 찍는 승인·
+            // 거절·삭제 기록은 다른 유틸리티처럼 이 로그 패널로 들어온다.
+            RunUtilityScript(L"backend\\user_manager.py", L"유저 관리");
+            break;
+
         case IDC_BTN_CLEAN_DUMMY:
             RunUtilityScript(L"backend\\clean_dummy_data.py", L"더미 데이터 청소");
             break;
+
+        case IDC_BTN_RESTORE_VAULT: {
+            // 보관소는 프로젝트 폴더와 DB 를 모두 잃어도 남는 유일한 원본 사본이다.
+            // 거기서 raw_data 로 파일을 되돌려 놓으면 수집기가 그것을 다시 읽어 DB 까지
+            // 복구된다. 덮어쓰지 않고 없는 것만 채우므로 여러 번 눌러도 결과가 같다.
+            std::wstring vaultLine = ResolveVaultRootForDisplay();
+            std::wstring msg =
+                L"백업 보관소의 원본을 프로젝트 data\\machining_raw_data 로 되돌립니다.\n\n"
+                L"[읽는 곳] " + vaultLine + L"\n\n"
+                L"[쓰는 곳] data\\machining_raw_data\n\n"
+                L"이미 있는 파일은 건드리지 않고 없는 것만 채웁니다.\n"
+                L"수집기가 켜져 있으면 복원된 파일을 자동으로 다시 읽어 DB 를 채웁니다.\n\n"
+                L"진행하시겠습니까?";
+            int ret = MessageBoxW(hWnd, msg.c_str(),
+                L"보관소에서 원본 복원", MB_YESNO | MB_ICONINFORMATION);
+            if (ret == IDYES) {
+                RunUtilityScript(L"backend\\restore_from_vault.py --apply", L"보관소 원본 복원");
+            }
+            break;
+        }
 
         case IDC_BTN_RESET_STORAGE: {
             // 백업 보관소는 프로젝트를 지워도 남으라고 밖으로 뺀 폴더이고,
@@ -1152,7 +1260,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow) {
     }
 
     g_modules[MOD_UI].name = L"Streamlit UI";
-    g_modules[MOD_UI].scriptArgs = L"-m streamlit run frontend\\dashboard.py --server.port 8501";
+    g_modules[MOD_UI].scriptArgs = L"-m streamlit run frontend\\dashboard.py --server.port " +
+                                   std::to_wstring(UI_PORT);
     g_modules[MOD_WATCHDOG].name = L"Watchdog";
     g_modules[MOD_WATCHDOG].scriptArgs = L"-u backend\\data_insert_recognization.py";
     g_modules[MOD_TDMS].name = L"TDMS Visualizer";
@@ -1190,13 +1299,21 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow) {
         return 1;
     }
 
-    RECT want = {0, 0, 1280, 840};
+    RECT want = {0, 0, 1280, 880};
     AdjustWindowRect(&want, WS_OVERLAPPEDWINDOW, FALSE);
+    int winW = want.right - want.left, winH = want.bottom - want.top;
+
+    // 작업 영역(작업표시줄을 뺀 화면) 가운데에 띄운다. CW_USEDEFAULT 는 창을 계단식으로
+    // 아래로 밀어 놓아서, 높이가 화면에 들어가는데도 아래쪽 버튼이 작업표시줄에 가려졌다.
+    RECT work = {0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)};
+    SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0);
+    int winX = work.left + (std::max)(0L, ((work.right - work.left) - winW) / 2);
+    int winY = work.top + (std::max)(0L, ((work.bottom - work.top) - winH) / 2);
+
     HWND hWnd = CreateWindowExW(0, wc.lpszClassName,
                                 L"공작기계지능화실험실 제조 DB Controller",
                                 WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
-                                CW_USEDEFAULT, CW_USEDEFAULT,
-                                want.right - want.left, want.bottom - want.top,
+                                winX, winY, winW, winH,
                                 NULL, NULL, hInstance, NULL);
     if (!hWnd) {
         MessageBoxW(NULL, L"윈도우 생성에 실패했습니다.", L"오류", MB_OK | MB_ICONERROR);

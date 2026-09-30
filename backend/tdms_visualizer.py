@@ -22,8 +22,7 @@ from DB.database import SessionLocal
 from DB.models import Job, JobFileArchive, Workplan, WorkplanFileArchive
 from file_archive import archive_path, get_or_create_job_archive
 import vault_layout
-from vault_manager import (get_abs_raw_data_path, get_abs_vault_path,
-                           get_rel_raw_data_path, save_to_vault)
+from vault_manager import archive_file, get_abs_raw_data_path, get_rel_raw_data_path
 
 from tdms_alignment import (TARGET_DATAPOINTS, build_aligned_frames,
                             detect_machining_window, merge_for_parquet,
@@ -95,22 +94,8 @@ def find_tdms_path(job):
     if abs_tdms_path and os.path.exists(abs_tdms_path):
         return abs_tdms_path
 
-    # Vault 탐색
-    # 보관소 경로는 저장하지 않고 규칙으로 계산한다 (vault_layout).
-    found = vault_layout.find_job_tdms(job.job_id, tdms_raw)
-    if found:
-        return found
-
-    vault_rel_paths = [
-        f"jobs/{job.source_folder}/data.tdms" if job.source_folder else None
-    ]
-    for vp in vault_rel_paths:
-        if vp:
-            abs_p = get_abs_vault_path(vp)
-            if abs_p and os.path.exists(abs_p):
-                return abs_p
-
-    return None
+    # 보관소 탐색. 보관소는 원본 트리를 그대로 비추므로 Job 폴더의 TDMS 분류를 본다.
+    return vault_layout.find_job_tdms(job, tdms_raw)
 
 
 def find_nc_program(job, db=None):
@@ -132,15 +117,13 @@ def find_nc_program(job, db=None):
             if arch is not None:
                 if arch.nc_file_content:
                     return parse_nc_blocks(arch.nc_file_content, name=name)
-                for cand in (arch.nc_raw_path, vault_layout.workplan_nc_rel(job.workplan_id)):
-                    for resolver in (get_abs_raw_data_path, get_abs_vault_path, lambda p: p):
-                        try:
-                            p = resolver(cand) if cand else None
-                        except Exception:
-                            p = None
-                        if p and os.path.exists(p):
-                            with open(p, "rb") as f:
-                                return parse_nc_blocks(f.read(), name=name or os.path.basename(p))
+                # 원본 폴더 -> 보관소 순으로 찾아 내려간다. 보관소는 원본 트리를 그대로
+                # 비추므로 Job 폴더의 NC 분류를 보면 된다 (원래 파일명 그대로).
+                for p in (get_abs_raw_data_path(arch.nc_raw_path) if arch.nc_raw_path else None,
+                          vault_layout.find_job_nc(job, arch.nc_raw_path)):
+                    if p and os.path.exists(p):
+                        with open(p, "rb") as f:
+                            return parse_nc_blocks(f.read(), name=name or os.path.basename(p))
 
         # 2) Workplan 아카이브에 기록된 경로
         wp_nc = archive_path(workplan, "nc_raw_path")
@@ -250,9 +233,14 @@ def process_tdms_file(job, db=None, target_points=TARGET_DATAPOINTS):
             print("  - [경고] 가공 구간에서 추출된 데이터가 없습니다.")
             return None, None
 
-        parquet_path = os.path.join(PROCESSED_DIR, f"job_{job.job_id}_viz.parquet")
-        fft_parquet_path = os.path.join(PROCESSED_DIR, f"job_{job.job_id}_fft.parquet")
-        window_json_path = os.path.join(PROCESSED_DIR, f"job_{job.job_id}_window.json")
+        # 작업 폴더도 Job 계층으로 나눈다. 파일 이름에서 job_id 를 뺐기 때문에
+        # 평면 폴더에 그대로 두면 Job 끼리 서로 덮어쓴다.
+        work_dir = os.path.join(PROCESSED_DIR, *job.source_folder.split('/')) \
+            if job.source_folder else os.path.join(PROCESSED_DIR, f"job_{job.job_id}")
+        os.makedirs(work_dir, exist_ok=True)
+        parquet_path = os.path.join(work_dir, "viz.parquet")
+        fft_parquet_path = os.path.join(work_dir, "fft.parquet")
+        window_json_path = os.path.join(work_dir, "window.json")
 
         merged = merge_for_parquet(result.cnc, result.daq)
         merged.to_parquet(parquet_path, engine='pyarrow')
@@ -367,15 +355,18 @@ def run_visualizer_batch():
                                                    *job.source_folder.split('/'), job_layout.PARQUET_DIR)
                         os.makedirs(raw_job_dir, exist_ok=True)
                         import shutil
-                        raw_parquet_path = os.path.join(raw_job_dir, f"job_{job.job_id}_viz.parquet")
+                        # 파일 이름에 job_id 를 쓰지 않는다. Job 폴더 안에 있으므로 이름으로
+                        # 구분할 필요가 없고, 재수집으로 id 가 바뀌어도 어긋나지 않는다.
+                        raw_parquet_path = os.path.join(raw_job_dir, "viz.parquet")
                         shutil.copy2(parquet_path, raw_parquet_path)
                         if fft_parquet_path:
-                            raw_fft_path = os.path.join(raw_job_dir, f"job_{job.job_id}_fft.parquet")
+                            raw_fft_path = os.path.join(raw_job_dir, "fft.parquet")
                             shutil.copy2(fft_parquet_path, raw_fft_path)
 
-                    # Vault에도 Parquet 이중 백업
-                    tdms_parquet_vault = save_to_vault(parquet_path, "processed_parquet", f"job_{job.job_id}_viz.parquet")
-                    tdms_fft_vault = save_to_vault(fft_parquet_path, "processed_parquet", f"job_{job.job_id}_fft.parquet") if fft_parquet_path else None
+                    # 보관소에도 이중 백업 (원본과 같은 자리)
+                    archive_file(raw_parquet_path)
+                    if raw_fft_path:
+                        archive_file(raw_fft_path)
 
                     # 원본 위치와 보관소 위치를 같은 행에 나란히 적는다.
                     job_archive = get_or_create_job_archive(db, job.job_id)

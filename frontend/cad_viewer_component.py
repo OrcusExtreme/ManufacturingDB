@@ -13,7 +13,7 @@ if BACKEND_DIR not in sys.path:
 import job_layout
 from DB.database import SessionLocal
 from DB.models import CadFileArchive, Part
-from vault_manager import get_abs_vault_path, VAULT_ROOT, RAW_DATA_ROOT
+from vault_manager import RAW_DATA_ROOT
 import vault_layout
 
 def get_cad_file_data(part_name):
@@ -32,7 +32,9 @@ def get_cad_file_data(part_name):
         file_name = None
         file_bytes = None
         file_ext = None
-        
+        # 보관소는 원본 트리를 그대로 비추므로 도면 자리는 {Project}/{Part}/CAD_Files 다.
+        project_code = part_row.project_code if part_row else None
+
         # 1. DB 레코드 확인
         if cad_record:
             file_name = cad_record.file_name or f"{part_name}.step"
@@ -42,22 +44,21 @@ def get_cad_file_data(part_name):
                 file_bytes = cad_record.file_content
             else:
                 # 보관소 경로는 저장하지 않고 규칙으로 계산한다 (vault_layout).
-                abs_p = vault_layout.find_part_cad(part_name, cad_record.file_name)
+                abs_p = vault_layout.find_part_cad(project_code, part_name,
+                                                   cad_record.file_name)
                 if abs_p:
                     with open(abs_p, "rb") as f:
                         file_bytes = f.read()
                         
-        # 2. Vault 디렉토리 탐색
+        # 2. Vault 디렉토리 탐색 ({Project}/{Part}/CAD_Files)
         if not file_bytes:
-            cad_vault_dir = os.path.join(VAULT_ROOT, "cad_models", f"Part_{part_name}")
-            if os.path.exists(cad_vault_dir):
-                for f in os.listdir(cad_vault_dir):
-                    if f.lower().endswith(('.step', '.stp', '.stl')):
-                        file_name = f
-                        file_ext = os.path.splitext(f)[1].lower()
-                        with open(os.path.join(cad_vault_dir, f), "rb") as fp:
-                            file_bytes = fp.read()
-                        break
+            for p in vault_layout.list_part_cad(project_code, part_name):
+                if p.lower().endswith(('.step', '.stp', '.stl')):
+                    file_name = os.path.basename(p)
+                    file_ext = os.path.splitext(file_name)[1].lower()
+                    with open(p, "rb") as fp:
+                        file_bytes = fp.read()
+                    break
                         
         # 3. machining_raw_data 탐색
         if not file_bytes:
@@ -93,14 +94,16 @@ def find_cad_file_name(part_name):
         if part_row:
             cad_record = session.query(CadFileArchive).filter_by(part_code=part_row.part_code).first()
             if cad_record and (cad_record.file_content is not None
-                               or vault_layout.find_part_cad(part_name, cad_record.file_name)):
+                               or vault_layout.find_part_cad(part_row.project_code, part_name,
+                                                             cad_record.file_name)):
                 return cad_record.file_name or f"{part_name}.step"
+            proj_for_scan = part_row.project_code
+        else:
+            proj_for_scan = None
 
-    cad_vault_dir = os.path.join(VAULT_ROOT, "cad_models", f"Part_{part_name}")
-    if os.path.exists(cad_vault_dir):
-        for f in os.listdir(cad_vault_dir):
-            if f.lower().endswith(CAD_EXTENSIONS):
-                return f
+    for p in vault_layout.list_part_cad(proj_for_scan, part_name):
+        if p.lower().endswith(CAD_EXTENSIONS):
+            return os.path.basename(p)
 
     raw_dir = RAW_DATA_ROOT
     if os.path.exists(raw_dir):

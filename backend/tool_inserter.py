@@ -3,19 +3,20 @@ import re
 import shutil
 import pandas as pd
 from DB.database import SessionLocal, engine
-from DB.models import Tool
+from DB.models import Tool, Workingstep
 from sqlalchemy import text
 from vault_manager import get_vault_path
 
-# 공구 마스터 원본 엑셀 보관 위치: archive_vault/tool_master/tool_info.xlsx
-# (업로드/투입된 파일명과 무관하게 항상 이 이름으로 최신본 1개만 덮어써서 보관한다)
-TOOL_MASTER_VAULT_DIR = "tool_master"
-TOOL_MASTER_VAULT_FILENAME = "tool_info.xlsx"
-TOOL_MASTER_VAULT_REL_PATH = f"{TOOL_MASTER_VAULT_DIR}/{TOOL_MASTER_VAULT_FILENAME}"
+# 공구 마스터 원본 엑셀 보관 위치: archive_vault 루트.
+# 원본(machining_raw_data)에서도 공구 엑셀은 루트에 놓이므로 보관소도 같은 자리를 쓴다.
+# 업로드된 파일명과 무관하게 항상 이 이름으로 최신본 1개만 덮어쓴다.
+TOOL_MASTER_VAULT_FILENAME = "실험실 공구 정리.xlsx"
+TOOL_MASTER_VAULT_REL_PATH = TOOL_MASTER_VAULT_FILENAME
 
 # DB 적재를 허용하는 공구 코드 형식: T + 1~2자리 숫자 (예: T1, T29)
 # XML 런타임의 공구 호출(T번호)과 매핑 가능한 코드만 받아들인다.
-TOOL_CODE_PATTERN = re.compile(r'^T\d{1,2}$')
+# 공구 코드 표기·매칭 규칙은 backend/tool_codes.py 한 곳에만 둔다.
+from tool_codes import canonical_tool_code, index_by_number, tool_code_number
 
 # 공구 종류 영문 변환 매핑
 TOOL_TYPE_MAPPING = {
@@ -82,40 +83,31 @@ def clean_string(val):
 
 
 def normalize_tool_code(val):
+    """엑셀의 공구 코드를 표준 표기(두 자리 0 채움)로 정규화한다.
+
+    T4 / t4 / 'T 4' / 'T04' 는 모두 'T04' 로 통일하고,
+    T19-TIP·설명 문구처럼 형식에 맞지 않는 칸은 None 을 돌려준다.
     """
-    엑셀의 공구 코드를 'T숫자(1~2자리)' 형식으로 정규화한다.
-    T4 / t4 / 'T 4' 는 'T4'로 통일하고, T19-TIP·설명 문구 등 형식에 맞지 않는 값은 None을 반환한다.
-    """
-    code = clean_string(val)
-    if not code:
-        return None
-    code = code.upper().replace(' ', '').replace('　', '')
-    return code if TOOL_CODE_PATTERN.match(code) else None
+    return canonical_tool_code(clean_string(val))
 
 
 def archive_tool_excel(file_path):
     """
-    파싱에 사용한 원본 엑셀을 archive_vault/tool_master/tool_info.xlsx 로 복사 보관한다.
+    파싱에 사용한 원본 엑셀을 archive_vault/실험실 공구 정리.xlsx 로 복사 보관한다.
     보관 폴더에 남아 있던 이전 원본은 모두 지우고 새 파일만 남긴다(최신본 1개 유지).
     (파일이 삭제되어도 자동 복구하지 않는 단순 보관용이며, 실패해도 DB 동기화는 계속 진행한다)
     """
     try:
         if not file_path or not os.path.exists(file_path):
             return None
-        dest = get_vault_path(TOOL_MASTER_VAULT_DIR, TOOL_MASTER_VAULT_FILENAME)
+        dest = get_vault_path(TOOL_MASTER_VAULT_FILENAME)
         if os.path.abspath(file_path) == os.path.abspath(dest):
             return dest
 
-        # 이전 원본 제거: 보관 폴더는 공구 마스터 원본 전용이므로 안에 있는 파일을 모두 정리한다.
-        archive_dir = os.path.dirname(dest)
-        for name in os.listdir(archive_dir):
-            old_path = os.path.join(archive_dir, name)
-            if os.path.isfile(old_path):
-                try:
-                    os.remove(old_path)
-                except OSError as e:
-                    print(f"    - [경고] 이전 원본 삭제 실패({name}): {e}")
-
+        # 이름이 고정이라 그냥 덮어쓰면 된다.
+        #
+        # 예전에는 보관 폴더 안의 파일을 전부 지우고 새로 복사했다. 보관소 루트로 자리를
+        # 옮기면 그 순회가 보관소 전체를 쓸어버리므로, 목록 순회·삭제를 아예 없앤다.
         shutil.copy2(file_path, dest)
         return dest
     except Exception as e:
@@ -170,14 +162,28 @@ def relink_workingsteps(db):
     tool_number / xml_tool_code는 그대로 보존되므로, 나중에 엑셀에 그 공구를 추가하면 다시 연결된다.
     반환값: (연결된 Workingstep 수, 연결되지 않은 Workingstep 수)
     """
+    # 매칭은 표기가 아니라 **번호**로 한다.
+    #
+    # 예전에는 `t.tool_code = CONCAT('T', w.tool_number)` 처럼 문자열을 만들어 비교했다.
+    # 저장 표기를 T6 -> T06 으로 바꾸는 순간 그 비교는 전부 어긋나고, 연결이 조용히 끊겨
+    # 화면에서는 공구가 '미연결' 로 보인다. 번호로 비교하면 어느 쪽이 T6 이든 T06 이든
+    # 같은 공구로 이어진다 (옛 표기가 남아 있는 DB 에서도 그대로 동작한다).
     db.execute(text("UPDATE workingstep SET tool_id = NULL"))
-    db.execute(text(
-        "UPDATE workingstep w "
-        "JOIN tool t ON t.tool_code = COALESCE(w.xml_tool_code, CONCAT('T', w.tool_number)) "
-        "SET w.tool_id = t.tool_id"
-    ))
-    linked = db.execute(text("SELECT COUNT(*) FROM workingstep WHERE tool_id IS NOT NULL")).scalar()
-    unlinked = db.execute(text("SELECT COUNT(*) FROM workingstep WHERE tool_id IS NULL")).scalar()
+
+    tool_by_number = index_by_number(
+        db.execute(text("SELECT tool_code, tool_id FROM tool WHERE tool_code IS NOT NULL"))
+    )
+    linked = unlinked = 0
+    for ws in db.query(Workingstep).all():
+        # tool_number(정수)가 1순위, 그것이 비어 있으면 xml_tool_code 표기에서 번호를 뽑는다.
+        number = ws.tool_number if ws.tool_number else tool_code_number(ws.xml_tool_code)
+        tool_id = tool_by_number.get(number) if number is not None else None
+        ws.tool_id = tool_id
+        if tool_id is None:
+            unlinked += 1
+        else:
+            linked += 1
+    db.flush()
     return linked, unlinked
 
 

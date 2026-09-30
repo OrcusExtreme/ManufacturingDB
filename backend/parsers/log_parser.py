@@ -4,7 +4,7 @@ import re
 import datetime
 from DB.database import SessionLocal
 from DB.models import MachineLog, LogFileArchive
-from vault_manager import save_to_vault
+from vault_manager import archive_file
 
 # CNC 1Hz 로그를 구분하기 위한 헤더 표식.
 # 같은 Job 폴더에는 CNC 로그 말고도 .log 확장자를 쓰는 파일이 떨어질 수 있다
@@ -210,8 +210,8 @@ def parse_log(file_path, job_id):
             db.flush()
             target_log_id = m_log.log_id
             
-        # 보관소 사본. 자리는 vault_layout.log_dir_rel 로 계산하므로 경로를 남기지 않는다.
-        save_to_vault(file_path, "machine_logs", f"Job_{job.job_id}", os.path.basename(file_path))
+        # 보관소 사본 (원본과 같은 자리·같은 이름)
+        archive_file(file_path)
             
         archive = db.query(LogFileArchive).filter_by(log_id=target_log_id).first()
         if not archive:

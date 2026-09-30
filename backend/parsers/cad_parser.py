@@ -1,7 +1,7 @@
 import os
 from DB.database import SessionLocal
 from DB.models import Part, CadFileArchive
-from vault_manager import save_to_vault
+from vault_manager import archive_file
 from integrity import sha256_bytes
 
 
@@ -56,9 +56,8 @@ def parse_cad(file_path, project_name, part_name):
         else:
             print(f"    - [알림] CAD 파일({file_name}) 크기가 15MB를 초과하여 DB 내부 저장을 생략합니다.")
             
-        # 보관소에 사본을 둔다. 그 자리는 vault_layout.cad_dir_rel 규칙으로 계산되므로
-        # 돌려받은 경로를 DB 에 적어 두지 않는다.
-        save_to_vault(file_path, "cad_models", f"Part_{part_name}", file_name)
+        # 보관소 사본 (원본과 같은 자리 = {Project}/{Part}/CAD_Files/{파일명})
+        archive_file(file_path)
         
         # 기존 동일 파일이 있는지 확인 (동일 확장자, 파일명 기준)
         existing_cad = db.query(CadFileArchive).filter(

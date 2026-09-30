@@ -10,25 +10,25 @@ from .common import load_data
 def _archived_excel_path():
     """보관된 공구 마스터 원본 엑셀의 절대 경로 (없으면 None)."""
     try:
-        from tool_inserter import TOOL_MASTER_VAULT_DIR, TOOL_MASTER_VAULT_FILENAME
-        from vault_manager import VAULT_ROOT
+        from tool_inserter import TOOL_MASTER_VAULT_REL_PATH
+        from vault_manager import get_abs_vault_path
     except ImportError:
         return None
-    path = os.path.join(VAULT_ROOT, TOOL_MASTER_VAULT_DIR, TOOL_MASTER_VAULT_FILENAME)
-    return path if os.path.exists(path) else None
+    path = get_abs_vault_path(TOOL_MASTER_VAULT_REL_PATH)
+    return path if path and os.path.exists(path) else None
 
 
 def _archived_excel_section():
     path = _archived_excel_path()
     if not path:
-        st.caption(":material/folder_off: 보관된 원본 엑셀이 없습니다. 엑셀을 업로드하면 archive_vault/tool_master/tool_info.xlsx 로 보관됩니다.")
+        st.caption(":material/folder_off: 보관된 원본 엑셀이 없습니다. 엑셀을 업로드하면 archive_vault/실험실 공구 정리.xlsx 로 보관됩니다.")
         return
 
     updated_at = datetime.fromtimestamp(os.path.getmtime(path)).strftime("%Y-%m-%d %H:%M:%S")
     size_kb = os.path.getsize(path) / 1024
     col_info, col_btn = st.columns([4, 1], vertical_alignment="center")
     with col_info:
-        st.caption(f":material/folder_zip: 보관된 원본: `archive_vault/tool_master/tool_info.xlsx` · {size_kb:,.1f} KB · 최종 갱신 {updated_at}")
+        st.caption(f":material/folder_zip: 보관된 원본: `archive_vault/실험실 공구 정리.xlsx` · {size_kb:,.1f} KB · 최종 갱신 {updated_at}")
     with col_btn:
         with open(path, "rb") as f:
             st.download_button(
@@ -64,7 +64,7 @@ def _import_excel_section():
             with st.spinner("공구 마스터를 교체하는 중입니다..."):
                 parse_and_insert_tools(tmp_path)
             if _archived_excel_path():
-                st.success("공구 마스터를 업로드한 엑셀로 교체했습니다. 원본은 archive_vault/tool_master/tool_info.xlsx 로 보관했습니다.")
+                st.success("공구 마스터를 업로드한 엑셀로 교체했습니다. 원본은 archive_vault/실험실 공구 정리.xlsx 로 보관했습니다.")
             else:
                 st.warning("교체는 진행됐지만 원본 엑셀 보관에 실패했습니다. 서버 로그를 확인해주세요.")
             st.cache_data.clear()

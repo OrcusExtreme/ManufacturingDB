@@ -1,7 +1,109 @@
+import datetime
+
 from sqlalchemy import (Column, Integer, String, Float, Double, Boolean, DateTime, JSON, ForeignKey,
-                        LargeBinary, Text, UniqueConstraint)
-from sqlalchemy.orm import relationship
+                        LargeBinary, Text, UniqueConstraint, event)
+from sqlalchemy.orm import Session, relationship
 from .database import Base
+
+
+# 영어 요일 이름. weekday() 가 돌려주는 0~6 을 그대로 색인한다.
+#
+# strftime('%A') 나 calendar.day_name 을 쓰면 안 된다. 둘 다 **로케일에 따라 달라져서**
+# 한국어 Windows 에서는 '금요일' 이 나온다(실측 확인). 장비 PC 의 지역 설정에 따라 DB 에
+# 들어가는 값이 바뀌면 같은 컬럼에 영어와 한국어가 섞인다. weekday() 는 로케일과 무관하므로
+# 고정 표를 직접 색인해 언제 어디서 돌려도 같은 영어 이름이 나오게 한다.
+DAY_NAMES = ("Monday", "Tuesday", "Wednesday", "Thursday",
+             "Friday", "Saturday", "Sunday")
+
+
+def english_day_of_week(value):
+    """가공 시작시각에서 영어 요일을 뽑는다. 알 수 없으면 None.
+
+    value 는 datetime 일 수도, 'YYYY-MM-DD HH:MM:SS' 문자열일 수도 있다.
+    (xml_parser 는 XML 의 StartTime 문자열을 그대로 컬럼에 넣고 DB 가 변환한다)
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime.datetime):
+        dt = value
+    elif isinstance(value, datetime.date):
+        return DAY_NAMES[value.weekday()]
+    else:
+        text_value = str(value).strip().replace("T", " ")
+        if not text_value:
+            return None
+        dt = None
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d"):
+            try:
+                dt = datetime.datetime.strptime(text_value[:26], fmt)
+                break
+            except ValueError:
+                continue
+        if dt is None:
+            return None
+    return DAY_NAMES[dt.weekday()]
+
+class User(Base):
+    """대시보드 로그인 계정.
+
+    가공 데이터를 누가 넣었는지 남기기 위한 계정이다. 로그인한 사람의 `worker_name` 이
+    업로드 시 그 Job 의 env_memo.worker_name 으로 들어간다.
+
+    비밀번호는 절대 평문으로 두지 않는다. `backend/auth.py` 가 PBKDF2-HMAC-SHA256 으로
+    1회용 소금(salt)과 함께 해싱한 문자열만 여기 담는다.
+    """
+    __tablename__ = "app_user"
+    __table_args__ = {'comment': '대시보드 로그인 계정 (작업자 이름 포함)'}
+
+    user_id = Column(Integer, primary_key=True, autoincrement=True)
+    username = Column(String(50), nullable=False, unique=True, comment='로그인 아이디')
+    password_hash = Column(String(255), nullable=False, comment='PBKDF2 해시 (평문 저장 안 함)')
+    worker_name = Column(String(50), nullable=False, comment='작업자 이름 (env_memo 에 기록)')
+    created_at = Column(DateTime, comment='가입 시각')
+    last_login_at = Column(DateTime, comment='마지막 로그인 시각')
+
+
+class PendingSignup(Base):
+    """관리자 승인을 기다리는 가입 신청.
+
+    승인하기 전까지는 `app_user` 에 계정을 만들지 않는다. 미승인 계정을 먼저 만들어 두면
+    '계정은 있는데 로그인은 막힌' 상태가 생기고, 그 상태를 코드 곳곳에서 계속 구분해 다뤄야
+    한다. 대기 줄을 따로 두면 승인을 통과한 것만 계정이 된다.
+
+    승인·거절은 대시보드가 아니라 제조 DB Controller 의 '유저 관리' 창
+    (`backend/user_manager.py`)에서 한다. 승인하면 이 행이 `app_user` 로 옮겨지고,
+    거절하면 지워진다.
+    """
+    __tablename__ = "app_pending_signup"
+    __table_args__ = {'comment': '관리자 승인 대기 중인 가입 신청'}
+
+    pending_id = Column(Integer, primary_key=True, autoincrement=True)
+    username = Column(String(50), nullable=False, unique=True, comment='가입할 아이디')
+    worker_name = Column(String(50), nullable=False, comment='작업자 이름')
+    password_hash = Column(String(255), nullable=False, comment='PBKDF2 해시 (평문 저장 안 함)')
+    created_at = Column(DateTime, comment='신청 시각')
+
+
+class AppSession(Base):
+    """로그인 세션. 브라우저를 새로고침해도 로그인이 풀리지 않게 하는 근거다.
+
+    Streamlit 의 session_state 는 웹소켓 세션에 묶여 있어 새로고침하면 사라진다. 그래서
+    로그인할 때 난수 토큰을 만들어 URL 질의문자열로 넘기고, 그 토큰의 **해시**를 여기 둔다.
+
+    토큰 자체가 아니라 해시를 저장하는 이유는 비밀번호와 같다. DB 를 들여다본 사람이 그대로
+    로그인할 수 있으면 안 된다. 토큰은 256비트 난수라 사전 공격이 통하지 않으므로 느린
+    해시(PBKDF2)까지는 필요 없고 SHA-256 으로 충분하다.
+    """
+    __tablename__ = "app_session"
+    __table_args__ = {'comment': '로그인 세션 (새로고침 유지용)'}
+
+    session_id = Column(Integer, primary_key=True, autoincrement=True)
+    token_hash = Column(String(64), nullable=False, unique=True, comment='토큰 SHA-256')
+    user_id = Column(Integer, ForeignKey("app_user.user_id", ondelete="CASCADE"),
+                     nullable=False, comment='계정')
+    created_at = Column(DateTime, comment='발급 시각')
+    expires_at = Column(DateTime, nullable=False, comment='만료 시각')
+
 
 class Part(Base):
     __tablename__ = "part"
@@ -31,7 +133,7 @@ class Workplan(Base):
     program_code = Column(String(50), comment='XML: ProgramCode / ProgramName')
     nc_hash = Column(String(32), comment='NC 원본 내용 MD5 앞 8자리 (같은 이름·다른 내용 구분용)')
     # NC 원본 경로는 workplan_file_archive.nc_raw_path 로 옮겼다.
-    # 보관소 안의 자리는 vault_layout.workplan_nc_rel() 로 계산한다.
+    # 보관소 사본은 원본과 같은 자리에 있다 (backend/vault_layout.py).
     # nc_hash 는 경로가 아니라 uq_workplan_identity 를 이루는 신원 값이라 여기 남는다.
 
     part = relationship("Part", back_populates="workplans")
@@ -45,7 +147,9 @@ class Tool(Base):
     __table_args__ = {'comment': '공구 마스터 정보 테이블 (Excel에서 불러오기)'}
 
     tool_id = Column(Integer, primary_key=True, autoincrement=True)
-    tool_code = Column(String(50), nullable=False, comment='공구 세트 번호 (예: T4, T29)')
+    # 표준 표기는 두 자리 0 채움 (T01 · T06 · T29). 규칙은 backend/tool_codes.py 한 곳.
+    # 매칭은 이 문자열이 아니라 **번호**로 한다 (NC 는 T6 으로 적기 때문).
+    tool_code = Column(String(50), nullable=False, comment='공구 세트 번호 (표준 표기: T01, T06, T29)')
     company_name = Column(String(50), comment='제조사명')
     tool_type = Column(String(50), comment='공구 종류')
     cutter_diameter = Column(Double, comment='직경 (숫자값)')
@@ -68,7 +172,9 @@ class Workingstep(Base):
     
     step_order = Column(Integer, nullable=False, comment='공구 호출 순서 (Index)')
     tool_number = Column(Integer, nullable=False, comment='호출된 공구 번호 (예: 11, 15, 16, 17)')
-    xml_tool_code = Column(String(50), comment='XML: toolCode / toolName')
+    # 표준 표기로 적는다 (NC/XML 이 T6 으로 적어도 T06 으로 기록).
+    # 공구 마스터와의 연결은 아래 tool_number(정수)로 한다.
+    xml_tool_code = Column(String(50), comment='호출 공구 표준 표기 (T06 형태)')
     feed_rate = Column(Float, comment='가공 이송속도 (mm/min, NC코드 파싱)')
     spindle_speed = Column(Float, comment='스핀들 주축 회전수 (RPM, NC코드 파싱)')
 
@@ -169,7 +275,6 @@ class Inspection(Base):
     dimension_tolerance = Column(String(100), comment='치수 및 공차')
     surface_roughness_ra = Column(Float, comment='표면조도 Ra')
     surface_roughness_rz = Column(Float, comment='표면조도 Rz')
-    shape_accuracy = Column(String(100), comment='형상정밀도')
     pass_fail = Column(String(10), comment='합불 판정 (PASS/FAIL)')
 
     job = relationship("Job", back_populates="inspection")
@@ -184,7 +289,9 @@ class EnvMemo(Base):
     worker_name = Column(String(50), comment='작업자')
     temperature = Column(Float, comment='온도')
     humidity = Column(Float, comment='습도')
-    day_of_week = Column(String(10), comment='요일')
+    # 가공 시작시각(job.start_time)에서 자동으로 채운다 (영어: Monday~Sunday).
+    # 파생값이라 사람이 입력하지 않는다 — 아래 _sync_day_of_week 참고.
+    day_of_week = Column(String(10), comment='요일 (job.start_time 에서 자동 계산, 영어)')
     chip_shape = Column(String(100), comment='칩 형태')
     abnormal_noise = Column(String(100), comment='이상 소음')
     free_memo = Column(Text, comment='자유 메모')
@@ -257,3 +364,33 @@ class LogFileArchive(Base):
     log_raw_path = Column(String(1000), comment='원시 로그/CSV 원본 경로')
 
     machine_log = relationship("MachineLog", back_populates="file_archive")
+
+
+# ---------------------------------------------------------------------------
+# day_of_week 자동 채움
+# ---------------------------------------------------------------------------
+# job.start_time 을 채우는 곳이 8군데다 (xml/log/tdms 파서, 복구 backfill,
+# tdms_visualizer). 그 자리마다 요일 계산을 끼워 넣으면 언젠가 한 곳이 빠지고, 그러면
+# 같은 컬럼에 값이 있는 Job 과 없는 Job 이 섞인다. 그래서 '어디서 채우든' 한 번은 지나가는
+# flush 직전에 딱 한 곳에서 맞춘다.
+#
+# 요일은 날짜로부터 계산되는 파생값이므로 사람이 고칠 값이 아니다. start_time 이 바뀌면
+# 요일도 따라 바뀌어야 하니, 비어 있을 때만 채우는 게 아니라 **항상 동기화**한다.
+@event.listens_for(Session, "before_flush")
+def _sync_day_of_week(session, flush_context, instances):
+    for obj in list(session.new) + list(session.dirty):
+        if not isinstance(obj, Job):
+            continue
+        wanted = english_day_of_week(obj.start_time)
+        if wanted is None:
+            continue      # 시작시각을 아직 모르면 나중 flush 에서 다시 본다
+
+        memo = obj.env_memo
+        if memo is None:
+            # 아직 DB 에 없는 Job 이면 job_id 가 없다. 관계로 이어 두면 SQLAlchemy 가
+            # INSERT 순서를 맞춰 주므로 PK 를 몰라도 된다.
+            memo = EnvMemo()
+            obj.env_memo = memo
+            session.add(memo)
+        if memo.day_of_week != wanted:
+            memo.day_of_week = wanted

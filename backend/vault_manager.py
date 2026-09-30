@@ -3,6 +3,8 @@ import shutil
 
 from dotenv import load_dotenv
 
+import job_layout   # 분류 폴더 이름과 부수 파일 판정은 원본 쪽 규칙을 그대로 쓴다
+
 # 프로젝트 최상위 경로. 여러 모듈이 각자 dirname 을 몇 번 거슬러 올라가는지 세어가며
 # 같은 값을 다시 계산하고 있었는데, 폴더가 한 단계라도 바뀌면 전부 손봐야 해서
 # 경로 기준은 여기 한 곳에서만 정한다.
@@ -127,6 +129,34 @@ def ensure_vault_root():
     where = "프로젝트 밖" if VAULT_IS_EXTERNAL else "프로젝트 안"
     return True, f"백업 보관소({where}): {VAULT_ROOT}"
 
+def rel_under_raw_data(path):
+    """path 가 RAW_DATA_ROOT **안에** 있을 때만 그 기준 상대경로를 돌려준다. 아니면 None.
+
+    get_rel_raw_data_path 는 판정에 실패하면 받은 값을 그대로 돌려주는 관대한 함수라
+    '원본 트리 안인가'를 묻는 데는 쓸 수 없다. 보관소 자리를 정할 때 그 관대함이
+    사고가 됐다: 상대경로를 받으면 그대로 통과시켜 보관소 안에
+    `data/machining_raw_data/...` 라는 **중첩 트리**를 만들었고, 복원이 그것을
+    raw_data 로 되돌리자 수집기가 그 중첩 폴더를 별개 Job 으로 읽어
+    엉뚱한 Job/Part(`data` 프로젝트의 `machining_raw_data` 부품)가 생겼다.
+
+    그래서 자리를 정하는 쪽은 관대한 함수가 아니라 이 함수를 쓴다.
+    비교는 commonpath 로 한다(startswith 는 `machining_raw_data_old` 를 통과시킨다).
+    """
+    if not path:
+        return None
+    try:
+        full = os.path.realpath(os.path.abspath(path))
+        root = os.path.realpath(os.path.abspath(RAW_DATA_ROOT))
+        if os.path.commonpath([full, root]) != root:
+            return None
+        rel = os.path.relpath(full, root)
+    except (ValueError, OSError):
+        return None      # 다른 드라이브 등 비교 자체가 불가능한 경우
+    if rel == os.curdir or rel.startswith(os.pardir):
+        return None
+    return rel.replace("\\", "/")
+
+
 def get_rel_raw_data_path(abs_path):
     """
     Converts an absolute path to a relative path based on RAW_DATA_ROOT.
@@ -186,6 +216,30 @@ def save_to_vault(source_file_path, *vault_subpaths):
     
     # Return relative path for DB storage (using forward slashes for consistency)
     return "/".join(vault_subpaths)
+
+def archive_file(abs_raw_path):
+    """raw_data 안의 파일을 보관소의 **같은 자리**에 복사한다.
+
+    보관소 배치 규칙을 아는 유일한 쓰기 함수다. 예전에는 파서마다 폴더 이름을 문자열로
+    직접 들고 있어서(`"tdms_files", f"Job_{id}"` 같은 식) 규칙이 11곳에 복제돼 있었고,
+    읽는 쪽(vault_layout)과 쓰는 쪽이 조용히 어긋났다. 이제 쓰는 쪽은 여기 하나뿐이다.
+
+    원본 트리 기준 상대경로를 그대로 보관소 상대경로로 쓰므로 경로에 job_id 가 끼지 않는다.
+    반환: 보관소 상대경로 (보관하지 않았으면 None)
+    """
+    if not abs_raw_path or not os.path.exists(abs_raw_path):
+        return None
+    if job_layout.is_ignored_file(abs_raw_path):
+        return None    # desktop.ini 같은 부수 파일은 보관소에 들이지 않는다
+
+    # 원본 트리 안에 있는 파일만 보관한다. 밖의 파일은 보관소 어디에 둘지 규칙이 없고,
+    # 억지로 두면 보관소 안에 중첩 트리가 생겨 복원·재수집이 통째로 어긋난다.
+    rel = rel_under_raw_data(abs_raw_path)
+    if not rel:
+        print(f"    - [보관 생략] 원본 폴더(machining_raw_data) 밖의 파일입니다: {abs_raw_path}")
+        return None
+    return save_to_vault(abs_raw_path, *rel.split("/"))
+
 
 def read_from_vault(relative_vault_path):
     """

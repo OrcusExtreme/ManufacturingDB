@@ -2,8 +2,8 @@ import os
 import pandas as pd
 import job_layout
 from DB.database import SessionLocal
-from DB.models import SurfaceRoughness, SurfaceRoughnessArchive, Inspection
-from vault_manager import save_to_vault
+from DB.models import Job, SurfaceRoughness, SurfaceRoughnessArchive, Inspection
+from vault_manager import archive_file
 
 from job_manager import get_or_create_job
 
@@ -92,7 +92,14 @@ def parse_roughness(job_folder_path, job_id=None):
             try:
                 measure_name = _measure_name_from(cf)
                     
-                parquet_path = os.path.join(PROCESSED_DIR, f"roughness_job_{job_pk}_{measure_name}.parquet")
+                # 파일 이름에 job_pk 를 쓰지 않는다. 재수집으로 id 가 바뀌면 이름이 실제 Job 과
+                # 어긋나기 때문이다. 대신 작업 폴더를 Job 계층으로 나눠 충돌을 막는다.
+                _job_rec = session.query(Job).filter_by(job_id=job_pk).first()
+                _sf = _job_rec.source_folder if _job_rec else None
+                work_dir = os.path.join(PROCESSED_DIR, *_sf.split('/')) if _sf \
+                    else os.path.join(PROCESSED_DIR, f"job_{job_pk}")
+                os.makedirs(work_dir, exist_ok=True)
+                parquet_path = os.path.join(work_dir, f"roughness_{measure_name}.parquet")
                 
                 # Parsing specific mitutoyo curve CSV
                 # We skip lines until DATANUM: is found
@@ -142,10 +149,9 @@ def parse_roughness(job_folder_path, job_id=None):
                         
                         # Copy to machining_raw_data
                         from vault_manager import get_rel_raw_data_path
-                        from DB.models import Job
                         raw_parquet_path = parquet_path
                         try:
-                            job_record = session.query(Job).filter_by(job_id=job_pk).first()
+                            job_record = _job_rec
                             if job_record and job_record.source_folder:
                                 import shutil
                                 raw_job_dir = os.path.join(RAW_DATA_ROOT, *job_record.source_folder.split('/'), job_layout.PARQUET_DIR)
@@ -189,12 +195,13 @@ def parse_roughness(job_folder_path, job_id=None):
 
                             
                         if os.path.exists(parquet_path):
-                            # 보관소 경로는 vault_layout 규칙으로 계산되므로 저장하지 않는다.
-                            save_to_vault(parquet_path, "surface_roughness", f"Job_{job_pk}", os.path.basename(parquet_path))
+                            # 보관소에는 raw_data 쪽 사본을 넣는다. archive_file 은 원본 트리
+                            # 기준 상대경로로 자리를 정하므로, 작업 폴더(processed_data)에
+                            # 있는 parquet_path 를 주면 보관 대상이 되지 못한다.
+                            archive_file(raw_parquet_path)
                                 
                         if os.path.exists(cf):
-                            # 보관소 경로는 저장하지 않는다 (vault_layout 로 계산).
-                            save_to_vault(cf, "surface_roughness", f"Job_{job_pk}", os.path.basename(cf))
+                            archive_file(cf)
             except Exception as e:
                 print(f"[Roughness Parser] 곡선 파싱 에러 ({cf}): {e}")
                 

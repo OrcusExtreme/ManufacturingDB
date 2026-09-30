@@ -1,97 +1,97 @@
 """보관소(archive_vault) 안의 파일 배치 규칙 — 단일 출처.
 
-왜 경로를 DB 에 저장하지 않나
------------------------------
-보관소 경로는 자유로운 값이 아니라 **레코드로부터 계산되는 규칙**이다.
+규칙은 한 줄이다: **보관소 상대경로 = machining_raw_data 상대경로.**
 
-    XML      jobs/{source_folder}/metadata.xml
-    NC       workplan_nc/WP{workplan_id}.nc
-    TDMS     tdms_files/Job_{job_id}/{파일명}
-    로그     machine_logs/Job_{job_id}/{파일명}
-    조도     surface_roughness/Job_{job_id}/{파일명}
-    Parquet  processed_parquet/job_{job_id}_viz.parquet · _fft.parquet
-    CAD      cad_models/Part_{부품명}/{파일명}
-    etc      etc_files/Job_{job_id}/{파일명}
+    machining_raw_data/Alchemist/DB_test/1/TDMS/foo.tdms
+    archive_vault/     Alchemist/DB_test/1/TDMS/foo.tdms
 
-같은 규칙을 DB 컬럼에도 적어 두면 규칙이 두 곳(코드 + 데이터)에 살게 된다. 그러면 배치를
-한 번 바꿀 때 이미 쌓인 행이 전부 옛 규칙을 가리키고, 어느 쪽이 맞는지 알 수 없다.
-규칙은 여기 한 곳에만 두고 필요할 때 계산한다.
+그래서 보관소 트리는 원본 트리를 그대로 비춘다.
 
-원본 경로(*_raw_path)는 이야기가 다르다. 장비가 어디에 떨궜는지는 규칙이 아니라 사실이라
-DB 에 남는다. 보관소 안의 파일 이름도 대개 그 원본의 파일명과 같으므로, 이름이 필요한
-자리에서는 *_raw_path 의 basename 을 쓰고, 그래도 모르면 폴더를 훑는다(resolve_in_dir).
+    archive_vault/
+      {Project}/{Part}/{JobID}/XML · NC · TDMS · Log · Surface_Roughness
+                              /processed_parquet · etc
+      {Project}/{Part}/CAD_Files/
+      실험실 공구 정리.xlsx
+
+왜 바꿨나
+---------
+예전에는 보관소가 파일을 **합성한 이름과 id 기반 폴더**에 담았다.
+
+    jobs/{source_folder}/metadata.xml       <- 원래 이름을 버림
+    workplan_nc/WP{workplan_id}.nc          <- 원래 이름을 버림
+    tdms_files/Job_{job_id}/...             <- job_id 에 의존
+
+job_id·workplan_id 는 대리키(surrogate key)라 재구축·수집순서·실패에 따라 값이 달라진다.
+실제로 auto-increment 가 한 번 밀리자 보관소의 Job_1 이 job2 로 복원됐고, 이름을 잃은
+`WP2.nc` 가 다시 program_code 로 읽히면서 신원이 또 어긋났다. 복원이 왕복하지 않았다.
+
+원본 경로를 그대로 쓰면 경로에 id 가 전혀 없으므로 id 가 어떻게 바뀌든 보관소는 멀쩡하고,
+복원은 단순 폴더 복사가 되어 파일명까지 원래대로 돌아온다.
+
+분류 폴더 이름(XML/Log/TDMS/...)은 원본과 같아야 하므로 job_layout 의 상수를 그대로 쓴다.
 """
 import os
 
-from vault_manager import VAULT_ROOT, get_abs_vault_path
-
-# 보관소 최상위 분류 폴더
-JOBS_DIR = "jobs"
-WORKPLAN_NC_DIR = "workplan_nc"
-TDMS_DIR = "tdms_files"
-LOG_DIR = "machine_logs"
-ROUGHNESS_DIR = "surface_roughness"
-PARQUET_DIR = "processed_parquet"
-CAD_DIR = "cad_models"
-ETC_DIR = "etc_files"
-TOOL_MASTER_DIR = "tool_master"
+import job_layout
+from vault_manager import get_abs_vault_path
 
 
-def _basename(path):
-    """경로에서 파일 이름만 뽑는다. 구분자가 섞여 있어도 안전하게."""
-    if not path:
-        return None
-    return os.path.basename(str(path).replace("\\", "/"))
+def _segments(source_folder):
+    """'Alchemist/DB_test/1' -> ['Alchemist', 'DB_test', '1']"""
+    if not source_folder:
+        return []
+    return [s for s in str(source_folder).replace("\\", "/").strip("/").split("/") if s]
 
 
 # ---------------------------------------------------------------------------
 # 경로 계산 (보관소 루트 기준 상대경로)
 # ---------------------------------------------------------------------------
-def xml_rel(source_folder):
-    """jobs/{프로젝트}/{부품}/{차수}/metadata.xml"""
-    if not source_folder:
+def vault_rel_for_raw(raw_rel_path):
+    """원본 상대경로를 보관소 상대경로로. 규칙의 전부 — 항등 함수다.
+
+    이 함수가 존재하는 이유는 변환이 필요해서가 아니라, '두 트리가 같다'는 규칙을
+    코드에 한 번 적어 두기 위해서다. 나중에 규칙이 달라지면 여기만 고치면 된다.
+    """
+    if not raw_rel_path:
         return None
-    return "/".join([JOBS_DIR, *str(source_folder).strip("/").split("/"), "metadata.xml"])
+    return str(raw_rel_path).replace("\\", "/").strip("/")
 
 
-def workplan_nc_rel(workplan_id):
-    """workplan_nc/WP{id}.nc"""
-    return f"{WORKPLAN_NC_DIR}/WP{workplan_id}.nc" if workplan_id else None
+def job_dir_rel(source_folder):
+    """'{Project}/{Part}/{JobID}'"""
+    seg = _segments(source_folder)
+    return "/".join(seg) if seg else None
 
 
-def tdms_dir_rel(job_id):
-    return f"{TDMS_DIR}/Job_{job_id}"
+def part_dir_rel(source_folder):
+    """'{Project}/{Part}' — CAD_Files 의 부모 (Job 폴더의 형제)."""
+    seg = _segments(source_folder)
+    return "/".join(seg[:-1]) if len(seg) >= 2 else None
 
 
-def log_dir_rel(job_id):
-    return f"{LOG_DIR}/Job_{job_id}"
+def cad_dir_rel(project_code, part_name):
+    """'{Project}/{Part}/CAD_Files' — 도면은 가공차수와 무관해 Part 레벨에 있다."""
+    if not project_code or not part_name:
+        return None
+    return f"{project_code}/{part_name}/{job_layout.CAD_DIR}"
 
 
-def roughness_dir_rel(job_id):
-    return f"{ROUGHNESS_DIR}/Job_{job_id}"
+def kind_dir_rel(source_folder, kind):
+    """'{Project}/{Part}/{JobID}/{분류}' — 분류 이름은 job_layout 상수를 쓴다."""
+    base = job_dir_rel(source_folder)
+    return f"{base}/{kind}" if base else None
 
 
-def etc_dir_rel(job_id):
-    return f"{ETC_DIR}/Job_{job_id}"
+def tool_master_rel(file_name=None):
+    """보관소 루트의 공구 마스터 엑셀 (raw_data 루트와 같은 자리)."""
+    return file_name or TOOL_MASTER_FILENAME
 
 
-def cad_dir_rel(part_name):
-    return f"{CAD_DIR}/Part_{part_name}" if part_name else None
-
-
-def parquet_rel(job_id, kind="viz"):
-    """processed_parquet/job_{id}_viz.parquet · _fft.parquet"""
-    return f"{PARQUET_DIR}/job_{job_id}_{kind}.parquet" if job_id else None
-
-
-def in_dir_rel(dir_rel, file_name):
-    """분류 폴더 안의 파일 한 개를 가리키는 상대경로."""
-    name = _basename(file_name)
-    return f"{dir_rel}/{name}" if (dir_rel and name) else None
+TOOL_MASTER_FILENAME = "실험실 공구 정리.xlsx"
 
 
 # ---------------------------------------------------------------------------
-# 실제 파일 찾기
+# 절대경로로 바꾸기
 # ---------------------------------------------------------------------------
 def abs_if_exists(rel_path):
     """상대경로를 절대경로로 바꾸고, 실제로 있을 때만 돌려준다."""
@@ -101,43 +101,48 @@ def abs_if_exists(rel_path):
     return p if p and os.path.exists(p) else None
 
 
-def resolve_in_dir(dir_rel, preferred_name=None, suffixes=None):
-    """분류 폴더에서 파일 하나를 찾는다.
+def job_dir_abs(source_folder):
+    """보관소 안의 Job 폴더 절대경로 (없어도 경로는 돌려준다)."""
+    rel = job_dir_rel(source_folder)
+    return get_abs_vault_path(rel) if rel else None
 
-    1) preferred_name(대개 원본 파일명)이 그 폴더에 있으면 그것
-    2) 없으면 폴더를 훑어 조건에 맞는 첫 파일
-       (보관소 파일명이 원본과 다를 수 있어 — 예: 측정기가 이름을 바꿔 내보낸 조도 CSV)
 
-    반환: 절대경로 또는 None
+# ---------------------------------------------------------------------------
+# 파일 찾기 — 분류 폴더 우선, 없으면 Job 루트 (job_layout.find_files 와 같은 규칙)
+# ---------------------------------------------------------------------------
+def find_in_job(source_folder, kind, extensions, preferred_name=None):
+    """보관소의 Job 폴더에서 해당 분류의 파일 하나를 찾는다.
+
+    preferred_name(대개 원본 파일명)이 있으면 그것을 먼저 고른다. 보관소가 원본 이름을
+    그대로 쓰므로 대개 바로 맞지만, 못 찾으면 분류 폴더를 훑어 첫 파일을 돌려준다.
     """
-    direct = abs_if_exists(in_dir_rel(dir_rel, preferred_name)) if preferred_name else None
-    if direct:
-        return direct
-
-    folder = get_abs_vault_path(dir_rel) if dir_rel else None
-    if not folder or not os.path.isdir(folder):
+    job_dir = job_dir_abs(source_folder)
+    if not job_dir or not os.path.isdir(job_dir):
         return None
-    lowered = tuple(s.lower() for s in suffixes) if suffixes else None
-    for name in sorted(os.listdir(folder)):
-        full = os.path.join(folder, name)
-        if not os.path.isfile(full):
-            continue
-        if lowered and not name.lower().endswith(lowered):
-            continue
-        return full
-    return None
+    found = job_layout.find_files(job_dir, kind, extensions)
+    if not found:
+        return None
+    if preferred_name:
+        wanted = os.path.basename(str(preferred_name).replace("\\", "/")).lower()
+        for p in found:
+            if os.path.basename(p).lower() == wanted:
+                return p
+    return found[0]
 
 
-def list_in_dir(dir_rel, suffixes=None):
-    """분류 폴더 안의 파일 전부를 절대경로로 돌려준다 (이름순)."""
-    folder = get_abs_vault_path(dir_rel) if dir_rel else None
-    if not folder or not os.path.isdir(folder):
+def list_in_job(source_folder, kind, extensions=None):
+    """보관소 Job 폴더의 한 분류에 든 파일 전부 (이름순)."""
+    job_dir = job_dir_abs(source_folder)
+    if not job_dir or not os.path.isdir(job_dir):
         return []
-    lowered = tuple(s.lower() for s in suffixes) if suffixes else None
+    folder = os.path.join(job_dir, kind)
+    if not os.path.isdir(folder):
+        return []
+    suffixes = tuple(e.lower() for e in extensions) if extensions else None
     out = []
     for name in sorted(os.listdir(folder)):
         full = os.path.join(folder, name)
-        if os.path.isfile(full) and (not lowered or name.lower().endswith(lowered)):
+        if os.path.isfile(full) and (not suffixes or name.lower().endswith(suffixes)):
             out.append(full)
     return out
 
@@ -145,26 +150,69 @@ def list_in_dir(dir_rel, suffixes=None):
 # ---------------------------------------------------------------------------
 # 레코드에서 바로 찾기 (호출부가 규칙을 몰라도 되도록)
 # ---------------------------------------------------------------------------
-def find_job_xml(job):
-    return abs_if_exists(xml_rel(getattr(job, "source_folder", None)))
+def _sf(job_or_sf):
+    """Job 객체든 source_folder 문자열이든 받아 준다."""
+    return getattr(job_or_sf, "source_folder", job_or_sf)
 
 
-def find_workplan_nc(workplan_id):
-    return abs_if_exists(workplan_nc_rel(workplan_id))
+def find_job_xml(job_or_sf, raw_path=None):
+    return find_in_job(_sf(job_or_sf), job_layout.XML_DIR, (".xml",), raw_path)
 
 
-def find_job_tdms(job_id, raw_path=None):
-    return resolve_in_dir(tdms_dir_rel(job_id), _basename(raw_path), (".tdms",))
+def find_job_nc(job_or_sf, raw_path=None):
+    return find_in_job(_sf(job_or_sf), job_layout.NC_DIR, (".nc",), raw_path)
 
 
-def find_job_log(job_id, raw_path=None):
-    return resolve_in_dir(log_dir_rel(job_id), _basename(raw_path))
+def find_job_tdms(job_or_sf, raw_path=None):
+    return find_in_job(_sf(job_or_sf), job_layout.TDMS_DIR, (".tdms",), raw_path)
 
 
-def find_job_parquet(job_id, kind="viz"):
-    return abs_if_exists(parquet_rel(job_id, kind))
+def find_job_log(job_or_sf, raw_path=None):
+    return find_in_job(_sf(job_or_sf), job_layout.LOG_DIR, (".log", ".csv"), raw_path)
 
 
-def find_part_cad(part_name, file_name=None):
-    return resolve_in_dir(cad_dir_rel(part_name), _basename(file_name),
-                          (".step", ".stp", ".stl"))
+def find_job_parquet(job_or_sf, kind="viz"):
+    """processed_parquet/viz.parquet · fft.parquet — 이름에 id 를 쓰지 않는다."""
+    rel = kind_dir_rel(_sf(job_or_sf), job_layout.PARQUET_DIR)
+    return abs_if_exists(f"{rel}/{kind}.parquet") if rel else None
+
+
+def list_job_roughness(job_or_sf, extensions=None):
+    return list_in_job(_sf(job_or_sf), job_layout.ROUGHNESS_DIR, extensions)
+
+
+def list_job_etc(job_or_sf):
+    return list_in_job(_sf(job_or_sf), job_layout.ETC_DIR)
+
+
+def find_part_cad(project_code, part_name, file_name=None):
+    """도면은 Part 레벨({Project}/{Part}/CAD_Files)에 있다."""
+    rel = cad_dir_rel(project_code, part_name)
+    if not rel:
+        return None
+    folder = get_abs_vault_path(rel)
+    if not folder or not os.path.isdir(folder):
+        return None
+    suffixes = (".step", ".stp", ".stl")
+    names = sorted(n for n in os.listdir(folder)
+                   if os.path.isfile(os.path.join(folder, n)))
+    if file_name:
+        wanted = os.path.basename(str(file_name).replace("\\", "/")).lower()
+        for n in names:
+            if n.lower() == wanted:
+                return os.path.join(folder, n)
+    for n in names:
+        if n.lower().endswith(suffixes):
+            return os.path.join(folder, n)
+    return None
+
+
+def list_part_cad(project_code, part_name):
+    rel = cad_dir_rel(project_code, part_name)
+    if not rel:
+        return []
+    folder = get_abs_vault_path(rel)
+    if not folder or not os.path.isdir(folder):
+        return []
+    return [os.path.join(folder, n) for n in sorted(os.listdir(folder))
+            if os.path.isfile(os.path.join(folder, n))]

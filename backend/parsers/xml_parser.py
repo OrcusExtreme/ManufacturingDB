@@ -7,10 +7,12 @@ from DB.database import SessionLocal
 # 공구 마스터(tool 테이블)는 공구 마스터 엑셀 업로드(tool_inserter.py)만이 생성/수정/삭제한다.
 # XML 파서가 실수로 공구 행을 만들거나 바꾸지 못하도록 Tool 모델 자체를 import하지 않는다.
 from DB.models import Part, Workplan, Workingstep, Job, WorkplanFileArchive, JobFileArchive
-from vault_manager import save_to_vault, get_rel_raw_data_path
+from vault_manager import archive_file, get_rel_raw_data_path
 from file_archive import get_or_create_workplan_archive
 from integrity import sha256_bytes
-from job_manager import discard_orphan_workplan
+from tool_codes import format_tool_code, index_by_number, tool_number_from_label
+from job_manager import (discard_orphan_workplan, ensure_env_memo,
+                         _same_part_scope as job_manager_same_part)
 
 def safe_float(val, default=0.0):
     try:
@@ -71,7 +73,10 @@ def parse_xml(file_path, job_id):
 
         work_id = root.findtext('WorkID') or 'UNKNOWN_WORKID'
         project_code = project_code_from_path
-        material_code = root.findtext('MaterialCode') or 'Unknown'
+        raw_mat = root.findtext('MaterialCode')
+        if not raw_mat:
+            raw_mat = root.findtext('materialCode') or root.findtext('Material')
+        material_code = raw_mat.strip() if raw_mat and raw_mat.strip() else 'Unknown'
         part_name = part_code_from_path
         program_code = root.findtext('ProgramCode') or 'Unknown'
 
@@ -82,9 +87,9 @@ def parse_xml(file_path, job_id):
             db.add(part)
             db.flush()
         else:
-            if part.project_code == "Unknown" and project_code != "Unknown":
+            if project_code != "Unknown":
                 part.project_code = project_code
-            if part.material_code == "Unknown" and material_code != "Unknown":
+            if material_code != "Unknown":
                 part.material_code = material_code
         part_code = part.part_code
 
@@ -132,10 +137,10 @@ def parse_xml(file_path, job_id):
             db.flush()   # 자동 증가 workplan_id 확보
             workplan_id = workplan.workplan_id
 
-            # 보관소 사본. 자리는 vault_layout.workplan_nc_rel 로 계산하므로 경로를 남기지 않는다.
+            # 보관소 사본은 원본과 같은 자리에 같은 이름으로 들어간다 (archive_file).
             nc_binary_data_to_save = None
             if nc_file_path:
-                save_to_vault(nc_file_path, "workplan_nc", f"WP{workplan_id}.nc")
+                archive_file(nc_file_path)
                 if nc_binary_data and len(nc_binary_data) <= 15 * 1024 * 1024:
                     nc_binary_data_to_save = nc_binary_data
                 elif nc_binary_data:
@@ -154,15 +159,19 @@ def parse_xml(file_path, job_id):
         # 신규/기존 어느 경로로 왔든 이후 로직이 쓰는 workplan_id를 일치시킨다.
         workplan_id = workplan.workplan_id
 
+        # 기존 Workplan 을 재사용한 갈래에서는 위에서 저장하지 않으므로 여기서 사본을 보장한다.
+        # (보관소 자리는 원본 경로와 같으므로 몇 번 불러도 같은 파일을 덮어쓸 뿐이다)
+        if nc_file_path:
+            archive_file(nc_file_path)
+
         # 공구 마스터 매핑 딕셔너리 구성 (tool_code -> tool_id)
         # 읽기 전용 조회만 수행한다. 엑셀에 없는 공구 번호가 XML에 나와도 마스터에 추가하지 않고,
         # workingstep.tool_id를 비워둔 채 tool_number / xml_tool_code만 남긴다.
-        tool_mapping = {
-            code: tool_id
-            for code, tool_id in db.execute(
-                text("SELECT tool_code, tool_id FROM tool WHERE tool_code IS NOT NULL")
-            )
-        }
+        # 공구 마스터를 **번호** 기준으로 색인한다. XML 은 T6 으로 적고 마스터는 T06 으로
+        # 저장되므로, 표기를 그대로 비교하면 연결되지 않는다.
+        tool_by_number = index_by_number(
+            db.execute(text("SELECT tool_code, tool_id FROM tool WHERE tool_code IS NOT NULL"))
+        )
         
         # <Tools> 에서 개별 공구의 제원/속성 정보 추출
         tool_properties = {}
@@ -177,9 +186,13 @@ def parse_xml(file_path, job_id):
                         val = any_type.findtext('Value')
                         if name:
                             props[name] = val
-                xml_tool_code = props.get('toolCode')
-                if xml_tool_code:
-                    tool_properties[xml_tool_code] = props
+                # <Tools> 의 toolCode 도 번호로 색인한다.
+                # 실측 XML 은 이 값을 'T6_10' 으로 적는데, 예전에는 그 문자열을 키로 담아
+                # 두고 'T6' 으로 찾아서 공구 제원(사용 횟수·오프셋)이 한 번도 붙지 않았다.
+                # 이름표에서 번호만 뽑아 색인하면 표기가 어떻든 연결된다.
+                tool_num_in_props = tool_number_from_label(props.get('toolCode'))
+                if tool_num_in_props is not None:
+                    tool_properties[tool_num_in_props] = props
                     
         # 3. Workingstep Insert & Job 런타임 상태(tool_conditions) 구성
         tool_conditions_list = []
@@ -189,9 +202,9 @@ def parse_xml(file_path, job_id):
                 if int_node.text is None:
                     continue
                 tool_num = safe_int(int_node.text)
-                target_tool_code = f"T{tool_num}" 
-                props = tool_properties.get(target_tool_code, {})
-                target_tool_id = tool_mapping.get(target_tool_code)
+                target_tool_code = format_tool_code(tool_num)   # 표시·저장용 (T06)
+                props = tool_properties.get(tool_num, {})       # 매칭은 번호로
+                target_tool_id = tool_by_number.get(tool_num)
 
                 # 새로운 Workplan일 경우에만 Workingstep을 생성(정적 계획이므로 1번만 생성)
                 if is_new_workplan:
@@ -242,15 +255,14 @@ def parse_xml(file_path, job_id):
             
         is_num = folder_parts[-1].isdigit() if folder_parts else False
         
-        # Check uniqueness by job_id PK or source_folder
-        if is_num:
-            existing_job = db.query(Job).filter(
-                (Job.job_id == int(folder_parts[-1])) | (Job.source_folder == job_id)
-            ).first()
-        else:
-            existing_job = db.query(Job).filter(
-                Job.source_folder == job_id
-            ).first()
+        # source_folder 가 1순위. 폴더 번호를 PK 로 해석하는 것은 보조 수단이고,
+        # 같은 프로젝트·부품일 때만 인정한다. 폴더 번호는 부품마다 1부터 다시 매겨지므로
+        # 무조건 PK 로 집으면 서로 다른 부품이 한 Job 으로 합쳐진다.
+        existing_job = db.query(Job).filter(Job.source_folder == job_id).first()
+        if existing_job is None and is_num:
+            cand = db.query(Job).filter(Job.job_id == int(folder_parts[-1])).first()
+            if cand is not None and job_manager_same_part(cand.source_folder, folder_parts):
+                existing_job = cand
         
         xml_binary_data_to_save = None
         if os.path.exists(file_path):
@@ -276,7 +288,9 @@ def parse_xml(file_path, job_id):
             else:
                 canonical_sf = current_sf
 
-            save_to_vault(file_path, "jobs", *canonical_sf.split('/'), "metadata.xml")
+            archive_file(file_path)
+            # 이 Job 이 예전 코드로 만들어졌다면 env_memo 가 없을 수 있으므로 여기서 보정한다.
+            ensure_env_memo(db, existing_job.job_id)
             print(f"    - 이미 존재하는 Job (PK: {existing_job.job_id} / 폴더: {existing_job.source_folder}) 발견. Job 정보를 업데이트합니다.")
             existing_job.start_time = start_time
             # XML 이 프로그램 코드의 최종 근거다. TDMS/NC 가 먼저 처리되면서 만들어 둔 임시
@@ -332,13 +346,16 @@ def parse_xml(file_path, job_id):
             new_job.source_folder = job_id
             db.flush()
 
-            save_to_vault(file_path, "jobs", *new_job.source_folder.split('/'), "metadata.xml")
+            archive_file(file_path)
             db.add(JobFileArchive(
                 job_id=new_job.job_id, xml_file_content=xml_binary_data_to_save,
                 xml_file_sha256=sha256_bytes(xml_binary_data_to_save) if xml_binary_data_to_save else None
             ))
+            # Job 과 1:1 인 env_memo 도 같이 만든다 (사람이 나중에 채우는 빈 행).
+            ensure_env_memo(db, new_job.job_id)
             
         db.commit()
+
         print(f"    - XML 파싱 완료. DB 저장 성공 (폴더명: {job_id})")
         
     except Exception as e:

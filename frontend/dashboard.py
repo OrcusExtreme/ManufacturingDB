@@ -12,6 +12,8 @@ from components.download_center import render_download_center
 from components.recovery import render_recovery
 from components.tool_master import render_tool_master
 from components.native_picker import render_native_file_picker
+from components.auth_view import (render_login_gate, render_sidebar_account,
+                                  sync_browser_token)
 from erd_component import render_interactive_erd
 
 # 앱 아이콘 및 페이지 설정
@@ -25,6 +27,15 @@ st.set_page_config(
 
 # 파일 선택창 한글 필터 활성화
 render_native_file_picker()
+
+# 로그인 관문. 로그인 전에는 어떤 화면도 그리지 않는다.
+# (작업자 이름이 정해져야 데이터 삽입 시 가공 이력에 기록할 수 있다)
+if not render_login_gate():
+    st.stop()
+
+# 로그인 토큰을 브라우저 쿠키에 남긴다(새로고침·새 탭 유지).
+# 로그인 직후가 아니라 여기서 하는 이유는 auth_view.sync_browser_token 설명 참고.
+sync_browser_token()
 
 # 기본 내비게이션 상태: 첫 진입 시 '홈'으로 설정
 if 'current_nav' not in st.session_state:
@@ -52,6 +63,11 @@ with st.sidebar:
     st.markdown("**공작기계지능화실험실 제조 DB**<br><span style='font-size:12px; opacity:0.75;'>v3.0.5</span>", unsafe_allow_html=True)
 
     st.write("")
+
+    # 로그인한 사람과 로그아웃.
+    # 사이드바 맨 아래에 두면 내비게이션이 길어 화면 밖으로 밀려 스크롤해야 보인다.
+    # 로그아웃은 언제든 눌러야 하는 것이라 접히지 않는 위쪽에 둔다.
+    render_sidebar_account()
 
     if st.button("DB 관계도(ERD) 보기", width="stretch", key="btn_show_erd", icon=":material/schema:"):
         show_erd_dialog()

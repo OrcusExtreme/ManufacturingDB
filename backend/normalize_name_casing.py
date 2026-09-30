@@ -83,43 +83,28 @@ def normalize(apply=False):
 
     changes, orphans = [], []
 
-    # 1) jobs/{프로젝트}/{부품}
-    jobs_root = os.path.join(VAULT_ROOT, "jobs")
-    if os.path.isdir(jobs_root):
-        for proj_name in list(os.listdir(jobs_root)):
-            proj_path = os.path.join(jobs_root, proj_name)
-            if not os.path.isdir(proj_path):
-                continue
-            wanted_proj = projects.get(proj_name.lower())
-            if wanted_proj:
-                if _rename_to(proj_path, wanted_proj, apply, changes):
-                    proj_path = os.path.join(jobs_root, wanted_proj)
-            else:
-                orphans.append(f"jobs/{proj_name}  (DB 에 없는 프로젝트)")
+    # 보관소는 원본 트리를 그대로 비추므로 루트 바로 아래가 {프로젝트}/{부품} 이다.
+    # (예전에는 jobs/ 와 cad_models/Part_ 두 갈래를 따로 훑어야 했다)
+    for proj_name in list(os.listdir(VAULT_ROOT)):
+        proj_path = os.path.join(VAULT_ROOT, proj_name)
+        if not os.path.isdir(proj_path):
+            continue      # 보관소 루트의 공구 마스터 엑셀 등
+        wanted_proj = projects.get(proj_name.lower())
+        if wanted_proj:
+            if _rename_to(proj_path, wanted_proj, apply, changes):
+                proj_path = os.path.join(VAULT_ROOT, wanted_proj)
+        else:
+            orphans.append(f"{proj_name}  (DB 에 없는 프로젝트)")
 
-            for part_name in list(os.listdir(proj_path)):
-                part_path = os.path.join(proj_path, part_name)
-                if not os.path.isdir(part_path):
-                    continue
-                row = by_lower.get(part_name.lower())
-                if row:
-                    _rename_to(part_path, row.part_name, apply, changes)
-                else:
-                    orphans.append(f"jobs/{os.path.basename(proj_path)}/{part_name}  (DB 에 없는 부품)")
-
-    # 2) cad_models/Part_{부품}
-    cad_root = os.path.join(VAULT_ROOT, "cad_models")
-    if os.path.isdir(cad_root):
-        for name in list(os.listdir(cad_root)):
-            full = os.path.join(cad_root, name)
-            if not os.path.isdir(full) or not name.startswith("Part_"):
+        for part_name in list(os.listdir(proj_path)):
+            part_path = os.path.join(proj_path, part_name)
+            if not os.path.isdir(part_path):
                 continue
-            bare = name[len("Part_"):]
-            row = by_lower.get(bare.lower())
+            row = by_lower.get(part_name.lower())
             if row:
-                _rename_to(full, f"Part_{row.part_name}", apply, changes)
+                _rename_to(part_path, row.part_name, apply, changes)
             else:
-                orphans.append(f"cad_models/{name}  (DB 에 없는 부품)")
+                orphans.append(f"{os.path.basename(proj_path)}/{part_name}  (DB 에 없는 부품)")
 
     print(f"\n[표기 변경] {len(changes)}건")
     for line in changes:

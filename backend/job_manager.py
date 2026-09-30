@@ -1,4 +1,40 @@
-from DB.models import Job, Part, Workplan
+from DB.models import EnvMemo, Job, Part, Workplan
+
+def ensure_env_memo(db, job_id):
+    """Job 과 1:1 인 env_memo 행이 반드시 있게 한다 (없으면 빈 행을 만든다).
+
+    env_memo 는 작업자·온습도·칩 형태처럼 **사람이 나중에 적어 넣는** 칸이라 수집 시점에는
+    값이 없다. 그래서 예전에는 행 자체를 만들지 않았고, 화면에서 메모를 처음 저장할 때야
+    생겼다. 그 결과 Job 은 있는데 env_memo 가 없는 상태가 정상이 되어, 1:1 이라는 스키마의
+    약속이 실제 데이터에서는 지켜지지 않았다(조회할 때마다 LEFT JOIN 과 None 처리가 필요).
+
+    Job 이 생기면 빈 env_memo 도 같이 만들어 관계를 항상 성립시킨다.
+    이미 있으면 그대로 돌려주므로 몇 번 불러도 안전하다.
+    """
+    if not job_id:
+        return None
+    memo = db.query(EnvMemo).filter_by(job_id=job_id).first()
+    if memo is None:
+        memo = EnvMemo(job_id=job_id)
+        db.add(memo)
+        db.flush()
+    return memo
+
+
+def _same_part_scope(source_folder, folder_parts):
+    """찾은 Job 이 요청과 같은 프로젝트·부품에 속하는지.
+
+    source_folder 가 비어 있으면(아직 채워지기 전) 판단할 근거가 없으므로 인정하지 않는다.
+    비교는 대소문자를 구분하지 않는다 — DB 콜레이션과 Windows 파일시스템이 그렇다.
+    """
+    if not source_folder:
+        return False
+    have = [p for p in str(source_folder).replace("\\", "/").strip("/").split("/") if p]
+    if len(have) < 3 or len(folder_parts) < 3:
+        return False
+    return (have[-3].lower() == folder_parts[-3].lower()
+            and have[-2].lower() == folder_parts[-2].lower())
+
 
 def get_or_create_job(db, job_identifier):
     """
@@ -20,12 +56,16 @@ def get_or_create_job(db, job_identifier):
         return job
         
     # 3. 'Project/Part/number' 형식에서 마지막이 숫자인 경우 PK로 2차 조회
+    #
+    # 폴더 번호는 부품마다 1부터 다시 매겨지므로 PK 만 보고 집으면 안 된다. 예전에는
+    # 프로젝트·부품을 무시하고 job_id == 그 숫자로 찾아서, 초기화 뒤 ProjX/PartB/1 이
+    # ProjX/PartA/1 의 Job 을 집어 source_folder 를 덮어써 **서로 다른 부품이 한 Job 으로
+    # 병합**됐다. 찾은 Job 이 같은 프로젝트·부품일 때만 인정한다.
     folder_parts = normalized_id.split('/')
     if len(folder_parts) >= 3 and folder_parts[-1].isdigit():
         target_pk = int(folder_parts[-1])
         job = db.query(Job).filter(Job.job_id == target_pk).first()
-        if job:
-            # source_folder 경로 동기화
+        if job and _same_part_scope(job.source_folder, folder_parts):
             canonical_sf = f"{folder_parts[-3]}/{folder_parts[-2]}/{job.job_id}"
             if job.source_folder != canonical_sf:
                 job.source_folder = canonical_sf
@@ -104,6 +144,19 @@ def get_or_create_job(db, job_identifier):
     else:
         new_job.source_folder = f"{parsed_rp}/{parsed_cpn}/{new_job.job_id}"
     db.flush()
+
+    # Job 과 1:1 인 env_memo 를 같이 만든다 (아래 커밋에 함께 실린다).
+    ensure_env_memo(db, new_job.job_id)
+
+    # 여기서 커밋한다.
+    #
+    # flush() 는 INSERT 를 MySQL 로 보내 auto-increment 를 **확정**시키는데, InnoDB 는
+    # 롤백해도 그 번호를 돌려주지 않는다. 예전에는 커밋을 호출자에게 맡겨 두어서,
+    # flush 와 호출자의 commit 사이에서 조기 return 하거나 예외가 나는 모든 경로가
+    # 조용히 번호를 태웠다. 그래서 폴더는 1인데 job_id 는 2가 되는 일이 생겼고,
+    # 그 어긋남을 메우려고 위의 PK 조회 같은 위험한 보정이 붙었다.
+    # Job 의 존재 자체는 다른 작업과 묶일 이유가 없으므로 여기서 확정한다.
+    db.commit()
 
     print(f"    - [Job Manager] 신규 Job 등록 완료: PK {new_job.job_id} -> source_folder: {new_job.source_folder}")
     return new_job

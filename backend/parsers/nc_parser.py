@@ -14,6 +14,8 @@ from DB.database import get_db
 from DB.models import Workingstep, WorkplanFileArchive
 from job_manager import get_or_create_job, adopt_workplan_identity
 from file_archive import get_or_create_workplan_archive
+from vault_manager import archive_file
+from tool_codes import format_tool_code, index_by_number
 
 
 def parse_nc_cutting_conditions(nc_input):
@@ -115,7 +117,8 @@ def parse_nc_cutting_conditions(nc_input):
     
     for idx, s in enumerate(steps, start=1):
         s['step_order'] = idx
-        s['xml_tool_code'] = f"T{s['tool_number']}" if s['tool_number'] is not None else None
+        # 표준 표기로 적는다 (T6 -> T06). 매칭은 tool_number 로 하므로 표기가 바뀌어도 안전하다.
+        s['xml_tool_code'] = format_tool_code(s['tool_number'])
         
     return steps
 
@@ -156,12 +159,11 @@ def sync_workplan_nc_cutting_conditions(db: Session, workplan_id: str, nc_file_p
         db.flush()
         existing_steps = db.query(Workingstep).filter(Workingstep.workplan_id == workplan_id).order_by(Workingstep.step_order).all()
 
-        tool_mapping = {
-            code: t_id
-            for code, t_id in db.execute(
-                text("SELECT tool_code, tool_id FROM tool WHERE tool_code IS NOT NULL")
-            )
-        }
+        # 공구 마스터를 **번호** 기준으로 색인한다. NC 는 T6 으로 적고 마스터는 T06 으로
+        # 저장되므로, 표기를 그대로 비교하면 연결되지 않는다.
+        tool_by_number = index_by_number(
+            db.execute(text("SELECT tool_code, tool_id FROM tool WHERE tool_code IS NOT NULL"))
+        )
 
         if existing_steps:
             # 1. tool_number 기준 매핑 시도
@@ -184,7 +186,7 @@ def sync_workplan_nc_cutting_conditions(db: Session, workplan_id: str, nc_file_p
             # Workingstep이 아직 없는 경우 NC 기반으로 신규 생성
             for s in parsed_steps:
                 t_code = s['xml_tool_code']
-                target_tool_id = tool_mapping.get(t_code) if t_code else None
+                target_tool_id = tool_by_number.get(s['tool_number'])
                 new_ws = Workingstep(
                     workplan_id=workplan_id,
                     tool_id=target_tool_id,
@@ -287,6 +289,10 @@ def parse_nc(file_path, job_id_str=None):
             wp_archive.nc_raw_path = nc_rel_path
             wp_archive.nc_file_content = nc_binary_data
             wp_archive.nc_file_sha256 = nc_sha256
+
+            # 보관소 사본도 여기서 남긴다. 예전에는 xml_parser 가 Workplan 을 새로 만들 때만
+            # 넣어서, NC 가 먼저 도착하면 보관소에 NC 가 없는 Job 이 생겼다.
+            archive_file(file_path)
                 
             db.commit()
 

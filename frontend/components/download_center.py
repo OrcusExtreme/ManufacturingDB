@@ -115,15 +115,15 @@ def _part_cad_files(scoped):
             return []
 
         rows = conn.execute(_text(
-            "SELECT c.cad_id, c.file_name, c.file_content, p.part_name "
+            "SELECT c.cad_id, c.file_name, c.file_content, p.part_name, p.project_code "
             "FROM cad_file_archive c JOIN part p ON p.part_code = c.part_code "
             "WHERE c.part_code = :pc ORDER BY c.cad_id"
         ), {"pc": part_code}).fetchall()
 
-    for cad_id, file_name, file_content, part_nm in rows:
+    for cad_id, file_name, file_content, part_nm, proj_cd in rows:
         name = file_name or f"Part{part_code}_{cad_id}.step"
         # 보관소 경로는 저장하지 않고 규칙으로 계산한다 (vault_layout).
-        abs_vault = vault_layout.find_part_cad(part_nm, file_name)
+        abs_vault = vault_layout.find_part_cad(proj_cd, part_nm, file_name)
         if abs_vault:
             collected.append((abs_vault, f"{job_layout.CAD_DIR}/{name}"))
         elif file_content:

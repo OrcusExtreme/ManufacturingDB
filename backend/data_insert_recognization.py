@@ -266,7 +266,11 @@ class MachiningDataHandler(FileSystemEventHandler):
         #   machining_raw_data / Project / Part / JobID / {XML|Log|TDMS|NC|Surface_Roughness|etc} / 파일
         parts = file_path_norm.split(os.sep)
         try:
-            raw_idx = parts.index("machining_raw_data")
+            # 마지막 occurrence 를 쓴다. 어떤 이유로든 raw_data 안에 원본 트리가 중첩돼
+            # 들어오면(`.../machining_raw_data/data/machining_raw_data/Alchemist/...`),
+            # 첫 occurrence 를 쓰면 'data/machining_raw_data/Alchemist' 를 프로젝트·부품·
+            # 차수로 읽어 엉뚱한 Job 을 만든다. 안쪽 기준이 언제나 올바른 해석이다.
+            raw_idx = len(parts) - 1 - parts[::-1].index("machining_raw_data")
             rel_parts = parts[raw_idx + 1:] # Project, Part, JobID, ...
         except ValueError:
             return
@@ -285,7 +289,7 @@ class MachiningDataHandler(FileSystemEventHandler):
                 # 이동으로 생기는 watchdog 생성 이벤트가 같은 파일을 두 번 처리하지 않도록 미리 표시
                 self._mark_processed(file_path_norm)
                 parts = file_path_norm.split(os.sep)
-                rel_parts = parts[parts.index("machining_raw_data") + 1:]
+                rel_parts = parts[len(parts) - 1 - parts[::-1].index("machining_raw_data") + 1:]
 
         # 하위 폴더 이름은 사람이 손으로 만들면 대소문자가 섞이므로 표준 표기로 맞춰 본다.
         sub_kind = job_layout.canonical_subdir(rel_parts[3]) if len(rel_parts) > 4 else None
@@ -313,13 +317,19 @@ class MachiningDataHandler(FileSystemEventHandler):
             print(f"[Vault 백업] etc 참고용 파일을 안전 보관소(Vault)에 백업합니다: {file_path_norm}")
             from job_manager import get_or_create_job
             from DB.database import SessionLocal
-            from vault_manager import save_to_vault
+            from vault_manager import archive_file
             
             db_s = SessionLocal()
             try:
-                job = get_or_create_job(db_s, current_job_id)
-                save_to_vault(file_path_norm, "etc_files", f"Job_{job.job_id}", file_name)
+                # get_or_create_job 은 flush 로 PK 를 확정한다. 여기서 커밋하지 않으면
+                # close() 가 롤백하면서 Part·Workplan·Job 번호 3개가 그대로 소멸한다
+                # (InnoDB 는 롤백해도 auto-increment 를 돌려주지 않는다).
+                # 그래서 etc 파일 하나가 들어올 때마다 job_id 가 한 칸씩 밀렸다.
+                get_or_create_job(db_s, current_job_id)
+                db_s.commit()
+                archive_file(file_path_norm)
             except Exception as e_etc:
+                db_s.rollback()
                 print(f"[etc Vault 백업 에러]: {e_etc}")
             finally:
                 db_s.close()

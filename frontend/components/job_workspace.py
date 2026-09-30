@@ -8,7 +8,9 @@ import streamlit as st
 from sqlalchemy import text
 
 from .common import engine, load_data
-from vault_manager import PROCESSED_ROOT, VAULT_ROOT
+from vault_manager import PROCESSED_ROOT
+import job_layout
+import vault_layout
 from .filters import render_search_filters, render_job_table
 from cad_viewer_component import find_cad_file_name, render_cad_viewer
 
@@ -46,7 +48,7 @@ def _kv_list(items):
     st.markdown("".join(rows), unsafe_allow_html=True)
 
 
-def _load_machining_window(job_info, job_id):
+def _load_machining_window(job_info, job_id, source_folder=None):
     """가공 구간 판별 결과를 읽는다. DB 값이 없으면 processed_data 사이드카를 본다."""
     raw = job_info.get('machining_window') if hasattr(job_info, 'get') else None
     if isinstance(raw, str):
@@ -57,7 +59,10 @@ def _load_machining_window(job_info, job_id):
     if isinstance(raw, dict) and raw:
         return raw
 
-    side = os.path.join(PROCESSED_ROOT, f"job_{job_id}_window.json")
+    # 작업 폴더는 {Project}/{Part}/{Job} 계층이고 파일 이름에 job_id 를 쓰지 않는다.
+    if not source_folder:
+        return {}
+    side = os.path.join(PROCESSED_ROOT, *str(source_folder).split('/'), "window.json")
     if os.path.exists(side):
         try:
             with open(side, encoding="utf-8") as f:
@@ -139,23 +144,27 @@ def _fmt(value, fallback="-"):
     return fallback if text_value in ("", "None", "nan") else text_value
 
 
-def resolve_parquet_file(file_path, default_filename=None):
-    """Parquet 파일의 실제 경로를 찾는다. DB 경로 -> processed_data -> archive_vault 순으로 탐색."""
+def resolve_parquet_file(file_path, source_folder=None, default_filename=None):
+    """Parquet 파일의 실제 경로를 찾는다. DB 경로 -> processed_data -> archive_vault 순.
+
+    보관소와 작업 폴더가 모두 {Project}/{Part}/{Job} 계층을 쓰고 파일 이름에는 job_id 가
+    들어가지 않으므로, source_folder 만 있으면 세 자리를 모두 짚을 수 있다.
+    """
     from backend.vault_manager import get_abs_raw_data_path
     if file_path:
         abs_p = get_abs_raw_data_path(file_path)
         if abs_p and os.path.exists(abs_p):
             return abs_p
-    if default_filename:
-        p1 = os.path.join(PROCESSED_ROOT, default_filename)
+    if source_folder and default_filename:
+        seg = str(source_folder).split('/')
+        p1 = os.path.join(PROCESSED_ROOT, *seg, default_filename)
         if os.path.exists(p1):
             return p1
-        p2 = os.path.join(VAULT_ROOT, "processed_parquet", default_filename)
-        if os.path.exists(p2):
-            return p2
-        p3 = os.path.join(VAULT_ROOT, "surface_roughness", default_filename)
-        if os.path.exists(p3):
-            return p3
+        for kind in (job_layout.PARQUET_DIR, job_layout.ROUGHNESS_DIR):
+            rel = vault_layout.kind_dir_rel(source_folder, kind)
+            p2 = vault_layout.abs_if_exists(f"{rel}/{default_filename}") if rel else None
+            if p2:
+                return p2
     return None
 
 
@@ -253,7 +262,8 @@ def _render_analysis_tab(target_job_id, job_info, sr_df):
                     break
         if date_str == "알 수 없음" and pd.notnull(job_info['tdms_parquet_raw_path']):
             try:
-                pq_p = resolve_parquet_file(job_info['tdms_parquet_raw_path'], f"job_{target_job_id}_viz.parquet")
+                pq_p = resolve_parquet_file(job_info['tdms_parquet_raw_path'],
+                                            job_info.get('source_folder'), "viz.parquet")
                 if pq_p and os.path.exists(pq_p):
                     df_temp = pd.read_parquet(pq_p, columns=['Time Channel CNC'])
                     if not df_temp.empty and 'Time Channel CNC' in df_temp.columns:
@@ -345,7 +355,6 @@ def _render_analysis_tab(target_job_id, job_info, sr_df):
                 result_items += [
                     ("전체 표면조도 Ra", f"{ra_val:.3f} μm" if pd.notnull(ra_val) else "-"),
                     ("전체 표면조도 Rz", f"{rz_val:.3f} μm" if pd.notnull(rz_val) else "-"),
-                    ("형상 정밀도", _fmt(ins_row['shape_accuracy'])),
                     ("치수 및 공차", _fmt(ins_row['dimension_tolerance'])),
                 ]
             st.write("")
@@ -415,11 +424,13 @@ def _render_analysis_tab(target_job_id, job_info, sr_df):
 
     with chart_col.container(border=True, height="stretch"):
         _card_header(":material/timeline:", "TDMS 그래프")
-        parquet_path = resolve_parquet_file(job_info['tdms_parquet_raw_path'], f"job_{target_job_id}_viz.parquet")
+        parquet_path = resolve_parquet_file(job_info['tdms_parquet_raw_path'],
+                                            job_info.get('source_folder'), "viz.parquet")
         if parquet_path:
             try:
                 tdms_data = pd.read_parquet(parquet_path)
-                machining_window = _load_machining_window(job_info, target_job_id)
+                machining_window = _load_machining_window(job_info, target_job_id,
+                                                          job_info.get('source_folder'))
                 n_cnc = int(tdms_data['time_s'].notna().sum()) if 'time_s' in tdms_data.columns else len(tdms_data)
                 n_daq = int(tdms_data['daq_time_s'].notna().sum()) if 'daq_time_s' in tdms_data.columns else 0
                 st.caption(f"CNC {n_cnc:,} 행 · DAQ {n_daq:,} 행 · {os.path.basename(parquet_path)}")
@@ -472,7 +483,8 @@ def _render_analysis_tab(target_job_id, job_info, sr_df):
                         _empty_note("DAQ 데이터 없음")
 
                 with tab3:
-                    fft_path = resolve_parquet_file(job_info['tdms_fft_parquet_raw_path'], f"job_{target_job_id}_fft.parquet")
+                    fft_path = resolve_parquet_file(job_info['tdms_fft_parquet_raw_path'],
+                                                    job_info.get('source_folder'), "fft.parquet")
                     if fft_path:
                         try:
                             fft_data = pd.read_parquet(fft_path)
@@ -533,101 +545,10 @@ def _render_analysis_tab(target_job_id, job_info, sr_df):
             _empty_note("프로파일 평가 곡선 없음")
 
 
-def _render_edit_tab(target_job_id, job_row):
-    tab1, tab2, tab3 = st.tabs([":material/edit_note: Job 메타데이터", ":material/thermostat: 환경 및 메모 (EnvMemo)", ":material/fact_check: 품질 점검 (Inspection)"])
-
-    with tab1:
-        st.write(f"**Job ID: {job_row['job_id']} / 폴더: {job_row['source_folder']} / 시작시간: {job_row['start_time']}**")
-        with st.form("ws_job_meta_form"):
-            # 부품명·프로젝트명은 part 테이블 하나가 정답이다. Job 마다 덮어쓰던 사본을
-            # 없앴으므로 여기서는 수정하지 않는다. (부품 정보는 계층형 마스터 화면에서 관리)
-            st.caption(f"부품 **{job_row['part_name']}** · 프로젝트 **{job_row['project_code']}** "
-                       "— 부품 정보는 계층형 마스터 데이터 화면에서 관리합니다.")
-            mt_input = st.text_input("가공 종류", value=job_row['machining_type'] if pd.notnull(job_row['machining_type']) else "")
-
-            if st.form_submit_button("메타데이터 저장"):
-                with engine.connect() as conn:
-                    stmt = text("UPDATE job SET machining_type=:mt WHERE job_id=:jid")
-                    conn.execute(stmt, {"mt": mt_input or None, "jid": target_job_id})
-                    conn.commit()
-                st.success("메타데이터가 업데이트되었습니다.")
-                st.cache_data.clear()
-                st.rerun()
-
-    with tab2:
-        env_df = load_data("SELECT * FROM env_memo WHERE job_id = :jid", params={"jid": target_job_id})
-        env_row = env_df.iloc[0] if not env_df.empty else None
-
-        with st.form("ws_env_memo_form"):
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                wn = st.text_input("작업자 (worker_name)", value=env_row['worker_name'] if env_row is not None and pd.notnull(env_row['worker_name']) else "")
-                temp_val = str(env_row['temperature']) if env_row is not None and pd.notnull(env_row['temperature']) else ""
-                temp = st.text_input("온도 (temperature)", value=temp_val)
-                hum_val = str(env_row['humidity']) if env_row is not None and pd.notnull(env_row['humidity']) else ""
-                hum = st.text_input("습도 (humidity)", value=hum_val)
-            with col2:
-                dow = st.text_input("요일 (day_of_week)", value=env_row['day_of_week'] if env_row is not None and pd.notnull(env_row['day_of_week']) else "")
-                cs = st.text_input("칩 형태 (chip_shape)", value=env_row['chip_shape'] if env_row is not None and pd.notnull(env_row['chip_shape']) else "")
-                an = st.text_input("이상 소음 (abnormal_noise)", value=env_row['abnormal_noise'] if env_row is not None and pd.notnull(env_row['abnormal_noise']) else "")
-            with col3:
-                fm = st.text_area("수기 메모 (free_memo)", value=env_row['free_memo'] if env_row is not None and pd.notnull(env_row['free_memo']) else "")
-
-            if st.form_submit_button("EnvMemo 저장"):
-                with engine.connect() as conn:
-                    if env_row is not None:
-                        stmt = text("UPDATE env_memo SET worker_name=:wn, temperature=:temp, humidity=:hum, day_of_week=:dow, chip_shape=:cs, abnormal_noise=:an, free_memo=:fm WHERE job_id=:jid")
-                    else:
-                        stmt = text("INSERT INTO env_memo (job_id, worker_name, temperature, humidity, day_of_week, chip_shape, abnormal_noise, free_memo) VALUES (:jid, :wn, :temp, :hum, :dow, :cs, :an, :fm)")
-
-                    temp_parsed = float(temp) if temp and temp.strip() else None
-                    hum_parsed = float(hum) if hum and hum.strip() else None
-
-                    conn.execute(stmt, {"wn": wn or None, "temp": temp_parsed, "hum": hum_parsed, "dow": dow or None, "cs": cs or None, "an": an or None, "fm": fm or None, "jid": target_job_id})
-                    conn.commit()
-                st.success("EnvMemo가 성공적으로 저장되었습니다.")
-                st.cache_data.clear()
-                st.rerun()
-
-    with tab3:
-        ins_df = load_data("SELECT * FROM inspection WHERE job_id = :jid", params={"jid": target_job_id})
-        ins_row = ins_df.iloc[0] if not ins_df.empty else None
-
-        with st.form("ws_inspection_form"):
-            col1, col2 = st.columns(2)
-            with col1:
-                dt = st.text_input("치수 및 공차 (dimension_tolerance)", value=ins_row['dimension_tolerance'] if ins_row is not None and pd.notnull(ins_row['dimension_tolerance']) else "")
-                sra_val = str(ins_row['surface_roughness_ra']) if ins_row is not None and pd.notnull(ins_row['surface_roughness_ra']) else ""
-                sra = st.text_input("표면조도 Ra", value=sra_val)
-                srz_val = str(ins_row['surface_roughness_rz']) if ins_row is not None and pd.notnull(ins_row['surface_roughness_rz']) else ""
-                srz = st.text_input("표면조도 Rz", value=srz_val)
-            with col2:
-                sa = st.text_input("형상정밀도 (shape_accuracy)", value=ins_row['shape_accuracy'] if ins_row is not None and pd.notnull(ins_row['shape_accuracy']) else "")
-                pf_options = ["", "PASS", "FAIL"]
-                current_pf = ins_row['pass_fail'] if ins_row is not None and pd.notnull(ins_row['pass_fail']) else ""
-                pf_index = pf_options.index(current_pf) if current_pf in pf_options else 0
-                pf = st.selectbox("합불 판정 (pass_fail)", options=pf_options, index=pf_index)
-
-            if st.form_submit_button("Inspection 저장"):
-                with engine.connect() as conn:
-                    if ins_row is not None:
-                        stmt = text("UPDATE inspection SET dimension_tolerance=:dt, surface_roughness_ra=:sra, surface_roughness_rz=:srz, shape_accuracy=:sa, pass_fail=:pf WHERE job_id=:jid")
-                    else:
-                        stmt = text("INSERT INTO inspection (job_id, dimension_tolerance, surface_roughness_ra, surface_roughness_rz, shape_accuracy, pass_fail) VALUES (:jid, :dt, :sra, :srz, :sa, :pf)")
-
-                    sra_parsed = float(sra) if sra and sra.strip() else None
-                    srz_parsed = float(srz) if srz and srz.strip() else None
-
-                    conn.execute(stmt, {"dt": dt or None, "sra": sra_parsed, "srz": srz_parsed, "sa": sa or None, "pf": pf or None, "jid": target_job_id})
-                    conn.commit()
-                st.success("Inspection이 성공적으로 저장되었습니다.")
-                st.cache_data.clear()
-                st.rerun()
-
-
 def render_job_workspace():
     st.subheader("Job 워크스페이스")
-    st.caption("조건별로 Job을 검색하고 센서 분석 결과를 확인합니다. 데이터 수정/삭제가 필요하면 Job 상세에서 '편집 모드'를 켜고, "
+    st.caption("조건별로 Job을 검색하고 센서 분석 결과를 확인합니다. "
+               "메타데이터·환경·품질 값은 '데이터 삽입' 화면에서 업로드와 함께 입력하고, "
                "원본 파일을 내려받으려면 왼쪽 '데이터 다운로드' 메뉴를 이용하세요.")
 
     result = render_search_filters(key_prefix="ws")
@@ -676,8 +597,9 @@ def render_job_workspace():
         )
     with toggle_col:
         edit_mode = st.toggle(
-            ":material/lock_open: 편집 모드", key="ws_edit_mode",
-            help="켜면 메타데이터·환경·품질 수정 탭과 Job 영구 삭제 버튼이 나타납니다. 기본은 꺼져 있어 조회 중 실수로 데이터를 바꾸는 것을 막습니다.",
+            ":material/lock_open: 삭제 모드", key="ws_edit_mode",
+            help="켜면 Job 영구 삭제 버튼이 나타납니다. 기본은 꺼져 있어 조회 중 실수로 지우는 것을 막습니다.\n"
+                 "메타데이터·환경·품질 값은 '데이터 삽입' 화면에서 입력합니다.",
         )
 
     if selected_target != st.session_state['ws_target_job_id']:
@@ -718,14 +640,7 @@ def render_job_workspace():
         params={"jid": target_job_id},
     )
 
-    if edit_mode:
-        tab_analysis, tab_edit = st.tabs([":material/analytics: 분석 보기", ":material/edit: 메타데이터 · 환경 · 품질 수정"])
-        with tab_analysis:
-            _render_analysis_tab(target_job_id, job_info, sr_df)
-        with tab_edit:
-            _render_edit_tab(target_job_id, job_info)
-    else:
-        _render_analysis_tab(target_job_id, job_info, sr_df)
+    _render_analysis_tab(target_job_id, job_info, sr_df)
 
     if edit_mode:
         st.divider()

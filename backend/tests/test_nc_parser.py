@@ -47,7 +47,9 @@ M2
     step = steps[0]
     assert step["step_order"] == 1
     assert step["tool_number"] == 6
-    assert step["xml_tool_code"] == "T6"
+    # NC 는 T6 으로 적지만 DB 에는 표준 표기(두 자리 0 채움)로 적는다.
+    # 매칭은 tool_number 로 하므로 표기가 달라도 공구 마스터와 연결된다.
+    assert step["xml_tool_code"] == "T06"
     assert step["spindle_speed"] == 3800.0
     assert step["feed_rate"] == 710.0
 

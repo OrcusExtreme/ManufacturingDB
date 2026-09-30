@@ -42,3 +42,6 @@ backups/
 
 # C++ 컨트롤러 빌드 중간 산출물 (리소스 오브젝트 등)
 build/
+
+# Tunnel tools
+cloudflared.exe

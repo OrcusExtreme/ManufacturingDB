@@ -313,7 +313,7 @@ NC 파일 경로는 `workplan_file_archive` 로 옮겼습니다. `nc_hash` 는 �
 | `operation_type` | VARCHAR(50) | 가공 방식 |
 | `step_order` | INT NOT NULL | 공구 호출 순서 |
 | `tool_number` | INT NOT NULL | 호출된 공구 번호 |
-| `xml_tool_code` | VARCHAR(50) | `T6` 형태의 공구 코드 |
+| `xml_tool_code` | VARCHAR(50) | 표준 표기 공구 코드 (`T06`). 매칭은 `tool_number` 로 한다 |
 | `feed_rate` | FLOAT | 이송속도 mm/min (NC 파싱) |
 | `spindle_speed` | FLOAT | 주축 회전수 RPM (NC 파싱) |
 
@@ -322,7 +322,7 @@ NC 파일 경로는 `workplan_file_archive` 로 옮겼습니다. `nc_hash` 는 �
 | 컬럼 | 타입 | 설명 |
 | :--- | :--- | :--- |
 | `tool_id` **PK** | INT AI | |
-| `tool_code` | VARCHAR(50) NOT NULL | `T1`~`T99` |
+| `tool_code` | VARCHAR(50) NOT NULL | `T01`~`T99` (두 자리 0 채움) |
 | `company_name` / `tool_type` / `specification` | VARCHAR | 제조사 / 종류 / 규격 |
 | `cutter_diameter` | DOUBLE | 직경 |
 | `tool_teeth` / `stock_count` | INT | 날수 / 재고 |
@@ -361,12 +361,73 @@ NC 파일 경로는 `workplan_file_archive` 로 옮겼습니다. `nc_hash` 는 �
 #### `inspection` — 품질 점검 (Job과 1:1)
 
 `inspection_id` PK, `job_id` FK UNIQUE, `dimension_tolerance`,
-`surface_roughness_ra`, `surface_roughness_rz`, `shape_accuracy`, `pass_fail`
+`surface_roughness_ra`, `surface_roughness_rz`, `pass_fail`
+
+`surface_roughness_ra/rz` 는 **조도 CSV 에서 파서가 평균 내 채우는 측정값**입니다
+(`roughness_parser`). 데이터 삽입 화면에서 값을 적으면 그 값이 우선하고, 비워 두면
+측정값이 유지됩니다.
+
+`shape_accuracy`(형상정밀도)는 쓰지 않기로 하여 제거했습니다
+(`backend/migrate_auth_and_inspection.py`).
+
+#### 공구 코드 표기와 매칭 (`backend/tool_codes.py`)
+
+저장 표기는 **두 자리 0 채움**입니다: `T1` → `T01`, `T6` → `T06`, `T29` → `T29`.
+문자열로 정렬해도 번호 순과 일치하고(`T01 T02 T06 T11 T29`, 예전에는 `T1 T11 T2 T29 T6`),
+화면·엑셀·NC 어디에 나와도 폭이 같습니다.
+
+**매칭은 표기가 아니라 번호로 합니다.** NC 코드는 `M6T6` 처럼 0 을 채우지 않고 적으므로,
+표기를 그대로 비교하면 마스터의 `T06` 과 연결되지 않습니다. 예전에는 세 곳에서
+`f"T{번호}"` 로 문자열을 만들어 `tool.tool_code` 와 비교했는데(`tool_inserter` 의 relink SQL,
+`nc_parser`, `xml_parser`), 그 방식은 양쪽 표기가 한 글자라도 다르면 **조용히 연결이 끊깁니다**
+— `tool_id` 가 NULL 로 남고 화면에서는 공구가 '미연결' 로 보입니다.
+
+공구를 가리키는 진짜 값은 정수 `workingstep.tool_number` 입니다. 표기는 사람에게 보여줄
+때만 쓰고, 연결은 언제나 번호로 합니다. 덕분에 옛 표기(`T6`)가 남아 있는 DB 에서도
+그대로 동작합니다.
+
+| 함수 | 쓰는 곳 | 엄격도 |
+| :--- | :--- | :--- |
+| `canonical_tool_code(v)` | 저장·표시 표기 만들기 (`T6` → `T06`) | — |
+| `tool_code_number(v)` | "이 칸이 마스터의 정식 코드인가" | 엄격 — `T19-TIP` 은 None |
+| `tool_number_from_label(v)` | "이 이름표가 어느 공구를 가리키는가" | 느슨 — `T6_10` → 6 |
+| `index_by_number(pairs)` | 마스터를 번호 기준으로 색인 | — |
+
+두 엄격도가 나뉘어 있는 이유가 있습니다. 공구 마스터(엑셀)에서는 엄격해야 합니다 —
+`T19-TIP` 같은 변형 행을 받아들이면 공구 19 와 별개인 가짜 공구가 생깁니다. 반대로 '어느
+공구를 가리키는가' 를 물을 때는 느슨해야 합니다. 실측 XML 의 `<Tools>` 는 `toolCode` 를
+**`T6_10`** 으로 적는데, 예전에는 그 문자열을 키로 담아 두고 `'T6'` 으로 찾아서 XML 의 공구
+제원(`toolUsedCount`·오프셋 9종)이 **한 번도 붙지 않았습니다**. 이름표에서 번호만 뽑아
+색인하도록 바꿔 해결했습니다.
 
 #### `env_memo` — 작업 환경 (Job과 1:1)
 
 `env_id` PK, `job_id` FK UNIQUE, `worker_name`, `temperature`, `humidity`,
 `day_of_week`, `chip_shape`, `abnormal_noise`, `free_memo`
+
+**Job 이 생기면 빈 행도 같이 생깁니다.** 작업자·온습도처럼 사람이 나중에 적는 칸이라 예전에는
+행 자체를 만들지 않았고, 화면에서 처음 저장할 때야 생겼습니다. 그러면 "Job 은 있는데 env_memo 는
+없는" 상태가 정상이 되어 1:1 이라는 약속이 데이터에서는 지켜지지 않았습니다. 지금은
+`job_manager.ensure_env_memo()` 가 Job 생성 경로에서 빈 행을 만들고, Job 삭제 시 cascade 로
+함께 사라집니다.
+
+**`day_of_week` 는 자동으로 채워집니다** (영어: `Monday` ~ `Sunday`).
+`job.start_time` 에서 계산되는 파생값이라 사람이 입력하지 않습니다 — 화면의 입력칸도 읽기
+전용입니다.
+
+계산은 `DB/models.py` 의 `english_day_of_week()` 가 하고, **고정 표를 `weekday()` 로
+색인**합니다. `strftime('%A')` 나 `calendar.day_name` 은 쓰지 않습니다 — 둘 다 로케일을 따라서
+한국어 Windows 에서는 `'금요일'` 이 나오고(실측), 장비 PC 의 지역 설정에 따라 같은 컬럼에
+영어와 한국어가 섞입니다. `weekday()` 는 로케일과 무관합니다.
+
+채우는 자리는 **한 곳**입니다. `job.start_time` 을 쓰는 코드가 8군데(xml/log/tdms 파서, 복구
+backfill, tdms_visualizer)라 그 자리마다 요일 계산을 끼워 넣으면 언젠가 한 곳이 빠집니다.
+그래서 어디서 채우든 반드시 지나가는 **세션 flush 직전**에 한 번만 맞춥니다
+(`models.py` 의 `_sync_day_of_week`, `before_flush` 이벤트). `start_time` 이 바뀌면 요일도
+따라 바뀝니다.
+
+이전에 쌓인 행은 `python backend/backfill_day_of_week.py --apply` 로 정리합니다
+(미리보기 기본. 파생값이므로 기존 값이 있어도 날짜 기준으로 덮어씁니다).
 
 #### 아카이브 4종
 
@@ -394,39 +455,56 @@ job_file_archive.tdms_parquet_*  processed_parquet/job_1_viz.parquet
 | 접미사 | 기준 | 뜻 | DB 저장 |
 | :--- | :--- | :--- | :--- |
 | `*_raw_path` | `RAW_DATA_ROOT` | 장비가 원본을 떨군 자리 — **사실** | 저장함 |
-| (보관소 경로) | `VAULT_ROOT` | 보관소 사본의 자리 — **규칙** | 저장하지 않고 계산 |
+| (보관소 경로) | `VAULT_ROOT` | 원본 상대경로와 **같음** | 저장하지 않고 계산 |
 
-#### 보관소 경로는 저장하지 않고 계산한다
+#### 보관소는 원본 트리를 그대로 비춘다
 
-보관소 안의 자리는 자유로운 값이 아니라 **레코드로부터 계산되는 규칙**입니다.
+규칙은 한 줄입니다 — **보관소 상대경로 = `machining_raw_data` 상대경로.**
 
 ```
-XML      jobs/{source_folder}/metadata.xml
-NC       workplan_nc/WP{workplan_id}.nc
-TDMS     tdms_files/Job_{job_id}/{파일명}
-로그     machine_logs/Job_{job_id}/{파일명}
-조도     surface_roughness/Job_{job_id}/{파일명}
-Parquet  processed_parquet/job_{job_id}_viz.parquet · _fft.parquet
-CAD      cad_models/Part_{부품명}/{파일명}
+machining_raw_data/Alchemist/DB_test/1/TDMS/foo.tdms
+archive_vault/     Alchemist/DB_test/1/TDMS/foo.tdms
 ```
 
-같은 규칙을 DB 컬럼에도 적어 두면 규칙이 **코드와 데이터 두 곳**에 살게 됩니다. 배치를 한 번
-바꾸면 이미 쌓인 행이 전부 옛 규칙을 가리키고 어느 쪽이 맞는지 알 수 없습니다. 그래서 규칙은
-`backend/vault_layout.py` **한 곳**에만 두고 필요할 때 계산합니다.
+```
+{보관소 루트}/
+  {Project}/{Part}/{JobID}/XML · NC · TDMS · Log · Surface_Roughness
+                          /processed_parquet · etc
+  {Project}/{Part}/CAD_Files/
+  실험실 공구 정리.xlsx
+```
+
+**왜 이렇게 바꿨나.** 예전에는 보관소가 파일을 합성한 이름과 id 기반 폴더에 담았습니다.
+
+```
+jobs/{source_folder}/metadata.xml     <- 원래 파일명을 버림
+workplan_nc/WP{workplan_id}.nc        <- 원래 파일명을 버림
+tdms_files/Job_{job_id}/{파일명}       <- job_id 에 의존
+```
+
+`job_id`·`workplan_id` 는 **대리키(surrogate key)** 라 재구축·수집순서·실패에 따라 값이
+달라집니다. 실제로 auto-increment 가 한 번 밀리자 보관소의 `Job_1` 이 job2 로 복원됐고,
+이름을 잃은 `WP2.nc` 가 다시 `program_code` 로 읽히며 신원이 또 어긋났습니다. 복원이
+왕복하지 않았습니다.
+
+원본 경로를 그대로 쓰면 경로에 id 가 전혀 없으므로 id 가 어떻게 바뀌든 보관소는 멀쩡하고,
+복원은 **폴더 복사 한 번**이 되어 파일명까지 원래대로 돌아옵니다.
 
 ```python
 import vault_layout
-vault_layout.find_job_xml(job)              # jobs/{source_folder}/metadata.xml
-vault_layout.find_workplan_nc(workplan_id)  # workplan_nc/WP{id}.nc
-vault_layout.find_job_tdms(job_id, raw)     # 원본 파일명 우선, 없으면 폴더 훑기
-vault_layout.find_part_cad(part_name, name)
-vault_layout.list_in_dir(vault_layout.roughness_dir_rel(job_id))
+vault_layout.find_job_xml(job)                  # {sf}/XML/*.xml
+vault_layout.find_job_nc(job, raw_path)         # {sf}/NC/*.nc
+vault_layout.find_job_tdms(job, raw_path)       # {sf}/TDMS/*.tdms
+vault_layout.find_job_parquet(job, "viz")       # {sf}/processed_parquet/viz.parquet
+vault_layout.find_part_cad(project, part, name) # {Project}/{Part}/CAD_Files/*
+vault_layout.list_job_roughness(job)
 ```
 
-보관소 파일명은 대개 원본 파일명과 같으므로, 이름이 필요한 자리에서는 `*_raw_path` 의
-basename 을 쓰고 그래도 모르면 폴더를 훑습니다(`resolve_in_dir`). 다운로드·복원의
-**원본 폴더 → 보관소 → LONGBLOB** 폴백은 그대로입니다 — 가운데 단계의 경로를 읽는 대신
-계산할 뿐입니다.
+**쓰기는 `vault_manager.archive_file(원본 절대경로)` 하나뿐입니다.** 예전에는 파서마다
+폴더 이름을 문자열로 직접 들고 있어(`"tdms_files", f"Job_{id}"` 같은 식) 같은 규칙이 11곳에
+복제돼 있었고, 읽는 쪽과 쓰는 쪽이 조용히 어긋났습니다. 이제 배치를 아는 쓰기 함수는 하나입니다.
+
+다운로드·복원의 **원본 폴더 → 보관소 → LONGBLOB** 폴백은 그대로입니다.
 
 읽고 쓸 때는 `backend/file_archive.py` 의 헬퍼를 씁니다.
 
@@ -673,14 +751,14 @@ Vault(`cad_models/Part_{부품명}/`) 보관 + 15MB 이하면 LONGBLOB + SHA-256
 
 엑셀 업로드가 공구 마스터의 **유일한 입력 경로**이며, 업서트가 아니라 **전체 교체**입니다.
 
-1. `tool_code` 를 `^T\d{1,2}$` 로 검증. `t4` / `T 4` 는 `T4` 로 정규화,
-   `T19-TIP`·설명 문구·빈 값은 제외 건수로 보고
+1. `tool_code` 를 `^T0*(\d{1,2})$` 로 검증하고 **두 자리 0 채움 표준 표기**로 정규화.
+   `t4` / `T 4` / `T04` 는 모두 `T04`, `T19-TIP`·설명 문구·빈 값은 제외 건수로 보고
 2. 한글 → 영문 변환 (`엔드밀`→`End Mill`, `날장`→`Flute Length` 등)
 3. **유효 공구가 0건이면 교체를 취소**하고 기존 마스터를 유지
    (열 이름 불일치·파일 손상으로 마스터가 비워지는 사고 방지)
 4. 기존 전체 삭제 → 엑셀 내용만 등록 → `tool_id` 를 1부터 연속 재부여
-5. `relink_workingsteps()` 가 `xml_tool_code`(없으면 `T{tool_number}`) 기준으로
-   가공 이력의 공구 연결을 다시 맺음. 이번 엑셀에 없는 공구는 `tool_id` 만 비우고 호출 번호는 보존
+5. `relink_workingsteps()` 가 **공구 번호** 기준으로 가공 이력의 공구 연결을 다시 맺음.
+   이번 엑셀에 없는 공구는 `tool_id` 만 비우고 호출 번호는 보존
 6. 원본을 `{보관소 루트}/tool_master/tool_info.xlsx` 로 보관(최신 1개만)
 
 ---
@@ -889,15 +967,12 @@ DB 에 저장되는 Vault 경로는 **전부 `VAULT_ROOT` 기준 상대경로**�
 
 ```
 {보관소 루트}/          # 기본: data/archive_vault, 설정 시 DB 설치 폴더 아래
-  ├─ jobs/{프로젝트}/{부품}/{차수}/metadata.xml
-  ├─ workplan_nc/WP{id}.nc
-  ├─ tdms_files/Job_{id}/
-  ├─ machine_logs/Job_{id}/
-  ├─ surface_roughness/Job_{id}/
-  ├─ cad_models/Part_{부품명}/
-  ├─ etc_files/Job_{id}/
-  ├─ processed_parquet/
-  └─ tool_master/tool_info.xlsx
+  ├─ {프로젝트}/{부품}/{차수}/XML · NC · TDMS · Log
+  │                        /Surface_Roughness · processed_parquet · etc
+  ├─ {프로젝트}/{부품}/CAD_Files/
+  └─ 실험실 공구 정리.xlsx
+
+  (machining_raw_data 트리와 파일 단위로 동일 — 경로에 job_id 가 들어가지 않는다)
 ```
 
 ### 8.2 무결성 검증 (`integrity.py` / `integrity_monitor.py`)
@@ -1042,7 +1117,10 @@ Google Cloud 콘솔풍 밝은 화면을 Win32 오너드로우로 직접 그립�
 | 로그 패널 | `#F8F9FA` |
 
 - 헤더: `logo_card.png` (GDI+) + 제목 + 해석된 파이썬 경로
-- 왼쪽: 모듈 3개(상태 점·PID·시작/중지) / 파서 토글 6개 + 일시정지 / 관리 유틸리티 2개
+- 왼쪽: 모듈 3개(상태 점·PID·시작/중지) / 파서 토글 6개 + 일시정지 / 관리 유틸리티 4개
+  (유저 관리 · 더미 데이터 청소 · 보관소에서 원본 복원 · DB·스토리지 초기화)
+- 창은 작업 영역(작업표시줄 제외) 가운데에 뜹니다. `CW_USEDEFAULT` 는 계단식으로 아래로 밀어
+  놓아, 높이가 화면에 들어가는데도 아래쪽 버튼이 작업표시줄에 가려졌습니다.
 - 오른쪽: 실시간 로그 + 자동 스크롤·비우기·복사
 
 **그리기 주의점 두 가지**
@@ -1073,7 +1151,161 @@ g++ -std=c++17 -O2 -municode -mwindows src\system_controller.cpp build\resources
 ## 11. 웹 대시보드
 
 `frontend/dashboard.py` 단일 엔트리포인트, 포트 8501.
-로그인·역할 구분이 없고, 파괴적 작업에만 확인 절차가 남아 있습니다.
+**로그인해야 화면이 열립니다.** 대시보드 안에는 역할 구분(관리자/일반)이 없고, 파괴적 작업에는
+확인 절차가 따로 남아 있습니다. 가입 승인만은 대시보드가 아니라 제조 DB Controller 에서 합니다.
+
+#### 로그인 계정 (`backend/auth.py` · `components/auth_view.py`)
+
+계정은 `app_user` 테이블에 있습니다 (`user` 는 MySQL 시스템 테이블과 겹쳐 쓰지 않습니다).
+
+| 컬럼 | 내용 |
+| :--- | :--- |
+| `username` | 로그인 아이디 (영문·숫자·`_.-`, 3~50자, 유일) |
+| `password_hash` | PBKDF2-HMAC-SHA256, 계정마다 다른 소금, 600,000회 |
+| `worker_name` | **작업자 이름 — 데이터 삽입 시 `env_memo.worker_name` 으로 기록** |
+
+비밀번호는 평문으로 저장하지 않습니다. 저장 형식에 반복 횟수를 함께 적어 두어, 나중에
+횟수를 올려도 기존 계정이 그대로 로그인되고 로그인 성공 시 현재 기준으로 다시 해싱합니다.
+로그인 실패 메시지는 아이디 없음과 비밀번호 틀림을 **구분하지 않습니다**(존재하는 아이디를
+알아내는 데 쓰이기 때문). 없는 아이디로 시도해도 해싱을 한 번 돌려 응답 시간을 맞춥니다.
+
+#### 회원가입 — 관리자 승인
+
+가입은 **신청 → 승인** 두 단계입니다. 이메일은 받지 않습니다. **승인하기 전까지 계정을 만들지
+않습니다.**
+
+```
+① 대시보드 '회원가입' 탭: 아이디·이름·비밀번호  ->  app_pending_signup 에 대기
+② 제조 DB Controller › 유저 관리 › 가입 신청: 승인  ->  app_user 에 계정 생성, 대기 줄에서 삭제
+                                          거절  ->  대기 줄에서 삭제
+```
+
+미승인 계정을 먼저 만들어 두면 '계정은 있는데 로그인은 막힌' 상태가 생기고, 그 상태를 코드
+곳곳에서 계속 구분해 다뤄야 합니다. 대기 줄을 따로 두면 승인을 통과한 것만 계정이 됩니다.
+승인은 계정 생성과 신청 삭제를 **한 트랜잭션**에서 합니다.
+
+| 상황 | 동작 |
+| :--- | :--- |
+| 같은 아이디로 다시 신청 | 거부 — 덮어쓰게 두면 남의 신청을 가로채 자기 비밀번호로 바꿔 둘 수 있음 |
+| 이미 계정이 있는 아이디 | 신청 거부. 대기 중에 계정이 생겼다면 승인이 거부되고 거절만 가능 |
+| 승인 전 로그인 시도 | **비밀번호까지 맞으면** "승인 대기 중" 안내, 아니면 일반 로그인 실패 문구 |
+| 신청 · 승인 · 거절 | 한 줄씩 표준 출력 → 컨트롤러 실시간 로그에 `[가입 신청] 아이디 (이름)` 등으로 표시 |
+
+#### 유저 관리 (제조 DB Controller › 관리 유틸리티 › `유저 관리`)
+
+`backend/user_manager.py` (tkinter — 표준 라이브러리라 추가 의존성 없음). 탭 두 장입니다.
+
+| 탭 | 보이는 것 | 동작 |
+| :--- | :--- | :--- |
+| 가입 신청 (N) | 신청 시각 · 아이디 · 이름 | 승인 · 거절 |
+| 가입 멤버 (N) | 아이디 · 이름 · 가입 시각 · 마지막 로그인 | 삭제 |
+
+**관리 화면을 대시보드에 두지 않는 이유.** 대시보드에는 권한 구분이 없어서, 거기 두면 로그인한
+누구나 남을 들이거나 지울 수 있습니다. 유저 관리 창은 서버 PC 에서 `.env` 의 DB 계정으로 직접
+붙으므로 **관리 권한 = 서버 PC 접근 권한** 입니다. 대시보드를 터널 등으로 외부에 열었을 때도
+가입은 관리자가 승인해야만 끝납니다. 계정이 하나도 없어도 잠기지 않습니다 — 관리 권한이 계정이
+아니라 서버 PC 에 있기 때문입니다.
+
+**멤버 삭제** (`auth.delete_user`)
+
+- 계정과 그 계정의 로그인 세션을 **한 트랜잭션**에서 지웁니다. MySQL 외래키 CASCADE 로도 지워지지만
+  그 동작에 기대지 않고 명시합니다.
+- 열려 있던 대시보드도 **다음 동작에서 바로** 로그인 화면으로 돌아가고 "계정이 삭제되어
+  로그아웃되었습니다" 안내가 한 번 뜹니다. 대시보드가 그릴 때마다 서버 세션을 다시 확인하기
+  때문입니다(`auth_view._session_still_valid`). 예전에는 `session_state` 의 계정 정보만 믿어서,
+  지워도 그 탭은 새로고침 전까지 로그인된 채였습니다.
+- 그 재확인은 **DB 오류면 로그인을 유지**합니다. `auth.session_account` 는 '세션 없음'이면 None,
+  DB 오류면 예외를 내서 둘을 구분합니다. 같이 다루면 MySQL 이 한 번 재시작될 때 전원이 로그아웃됩니다.
+- 가공 이력의 작업자 이름(`env_memo.worker_name`)은 계정을 가리키는 키가 아니라 그때 적어 둔
+  이름이라 **그대로 남습니다**. `app_user` 를 참조하는 테이블은 `app_session` 뿐입니다.
+- 되돌릴 수 없으므로 확인창이 경고 아이콘에 기본값 '아니오' 입니다. 지운 아이디로는 다시 가입
+  신청할 수 있습니다.
+
+**창의 동작**
+
+- 컨트롤러는 `RunUtilityScript` 로 **띄우기만** 합니다. 조회·승인·거절·삭제는 전부 파이썬 쪽이 하므로
+  `python backend/user_manager.py` 로 컨트롤러 없이도 똑같이 돕니다. 창은 Job Object 에 묶이지
+  않아 컨트롤러를 닫아도 남습니다(다른 관리 유틸리티와 같은 방식).
+- **창은 하나만** 뜹니다. 이름 있는 뮤텍스(`Local\OrcusUserManager`)로 판정하고, 이미 있으면
+  창 제목으로 찾아 앞으로 가져온 뒤 새 프로세스는 코드 0 으로 끝납니다. 뮤텍스는 프로세스가
+  죽으면 OS 가 거둬 가므로, 잠금 파일처럼 비정상 종료 후 남아 다음 실행을 막는 일이 없습니다.
+- 열려 있는 동안 10초마다 두 목록을 함께 다시 읽습니다(F5 로 즉시, Ctrl+Tab 으로 탭 전환).
+  승인하면 신청이 멤버로 옮겨 가므로 어느 탭에서 무엇을 하든 둘 다 읽습니다. 고르던 행은 유지됩니다.
+- 여러 건을 골라 한 번에 처리할 수 있고, 모든 동작이 대상 목록을 보여 주는 확인창을 거칩니다.
+  승인·거절·삭제는 한 줄씩 표준 출력으로 남아 컨트롤러 실시간 로그에 들어옵니다.
+- DB 에 못 붙으면 **목록을 비우고** 이유를 표 가운데에 빨간 글씨로 보입니다. 예전 목록을 남겨
+  두면 이미 처리된 항목을 보고 누를 수 있기 때문입니다.
+- 색·버튼 규칙은 컨트롤러(`theme.h`)와 같습니다. ttk 기본 테마(vista)는 버튼 색 지정을 무시해서
+  `clam` 테마를 쓰고, `relief=flat` 은 테두리를 지워 흰 버튼이 링크처럼 보이므로 쓰지 않습니다.
+  탭은 `ttk.Notebook` 대신 직접 그립니다 — clam 의 Notebook 은 폴더 모양 테두리를 둘러 표의
+  테두리와 두 겹으로 보여서, 글자 + 선택 밑줄만 있는 콘솔식 탭으로 바꿨습니다.
+
+> **이메일 인증에서 바꾼 DB** 는 `backend/migrate_auth_and_inspection.py --apply` 로 정리합니다.
+> 옛 형식의 `app_pending_signup`(이메일·인증 코드 컬럼)을 새로 만들고 `app_user.email` 을 지웁니다.
+> 적용 전에 컨트롤러에서 「전체 중지」 하세요 — 옛 코드가 떠 있는 채로 email 을 지우면 그 코드가
+> 없는 컬럼을 읽으려다 실패해 로그인이 막힙니다. `.env` 의 `SMTP_*` 항목은 더 이상 쓰지 않습니다.
+
+#### 새로고침해도 로그인이 풀리지 않게 (`app_session`)
+
+Streamlit 의 `session_state` 는 **웹소켓 세션에 묶여 있어 새로고침하면 사라집니다.**
+쿠키로 해결할 수도 없습니다 — `st.context.cookies` 는 **읽기 전용**이라 파이썬에서 쿠키를
+구울 수 없고, 위젯의 `persist_state` 는 세션 안에서 페이지를 옮길 때만 값을 남깁니다.
+
+그래서 로그인 사실을 서버에 남기고, 그것을 가리키는 난수 토큰만 URL 질의문자열
+(`?sid=...`)로 주고받습니다.
+
+| 동작 | 처리 |
+| :--- | :--- |
+| 로그인 | 256비트 난수 토큰 발급 → `app_session` 에 **SHA-256 해시**만 저장 → **URL 에 먼저** 실음 |
+| 로그인 후 첫 렌더링 | `sync_browser_token()` 이 **쿠키를 굽고**, 확인되면 URL 에서 토큰을 지움 |
+| 새로고침·새 탭 | `session_state` 가 비어 있으면 쿠키(없으면 URL) 토큰으로 계정을 되살림 |
+| 로그아웃 | 서버 세션 행 삭제 + 쿠키 제거 → **즉시 무효** |
+| 만료 | 기본 7일(`auth.SESSION_DAYS`). 만료된 토큰은 조회 시 거부하고 그 자리에서 삭제 |
+
+**쿠키를 로그인 처리에서 굽지 않고 다음 렌더링으로 미루는 이유가 있다.** 쿠키 쓰기는
+컴포넌트가 실제로 렌더링돼야 브라우저까지 전달되는데, 로그인 직후에는 화면을 바꾸려고 곧바로
+`st.rerun()` 을 부르므로 그 렌더링이 일어나지 않는다. 처음 구현에서 이 순서 때문에 쿠키가
+**한 번도 구워지지 않았고**, 새로고침하면 그대로 로그아웃됐다(실제 브라우저로 확인).
+그래서 URL 토큰으로 먼저 이어 붙이고, 쿠키는 로그인된 화면을 그릴 때 굽는다.
+
+**쿠키를 쓰는 이유는 탭을 가리지 않기 때문입니다.** URL 토큰만으로는 같은 탭 새로고침은
+버텨도, 새 창에서 주소를 직접 치면 토큰이 없어 다시 로그인해야 합니다.
+
+굽기는 `streamlit-cookies-controller` 컴포넌트가, 읽기는 Streamlit 내장 `st.context.cookies`
+가 합니다. 읽기를 내장 기능으로 하는 이유는 컴포넌트가 첫 렌더링에서 값을 못 돌려주는
+경우가 있어서입니다 — 그러면 로그인했는데 한 번 튕기는 것처럼 보입니다.
+(`st.context.cookies` 는 읽기 전용이라 굽는 일은 컴포넌트가 맡아야 합니다.)
+
+토큰이 아니라 해시를 저장하는 이유는 비밀번호와 같습니다 — DB 를 들여다본 사람이 그대로
+로그인할 수 있으면 안 됩니다. 토큰은 256비트 난수라 사전 공격이 통하지 않으므로 느린
+해시까지는 필요 없고 SHA-256 으로 충분합니다.
+
+> **감수한 대가.** JS 로 굽는 쿠키라 `HttpOnly` 가 아니어서 페이지의 스크립트가 읽을 수
+> 있습니다. HTTPS 가 아니므로 `Secure` 도 걸지 않았습니다(걸면 localhost 에서 동작하지
+> 않습니다). 쿠키를 못 쓰는 환경에서는 URL 토큰으로 내려가는데, 그 URL 을 복사해 넘기면
+> 만료 전까지 남이 쓸 수 있습니다. 내부망 도구를 전제로 한 절충입니다.
+
+> **추가된 의존성**: `streamlit-cookies-controller`. 폴더를 복사해 배포할 때
+> `pip install streamlit-cookies-controller` 가 필요합니다. 설치되어 있지 않으면 쿠키 없이
+> URL 토큰 방식으로만 동작합니다(코드가 ImportError 를 잡아 넘깁니다).
+
+> **이 인증의 한계.** 내부망 localhost 대시보드를 전제로 한 **앱 수준 인증**입니다.
+> Streamlit 은 HTTP 로 서비스되므로 다른 PC 에서 접속하면 비밀번호가 평문으로 오갑니다.
+> 외부에 열어야 한다면 리버스 프록시로 HTTPS 를 씌워야 합니다. 세션은 `session_state` 에만
+> 있어 탭을 닫으면 풀립니다. 적대적 침입을 막는 장치가 아니라, **누가 넣었는지 남기고
+> 아무나 들어오지 못하게** 하는 용도입니다.
+
+#### 가공 기록 입력 위치
+
+메타데이터(가공 종류)·환경(온습도·칩 형태·소음·메모)·품질(치수공차·Ra/Rz·합불)은
+**'데이터 삽입' 화면에서 업로드와 함께** 입력합니다. 값을 아는 시점이 가공을 막 끝낸
+업로드 때이기 때문입니다. Job 워크스페이스의 편집 모드는 제거되었고, 그 자리에는 Job 영구
+삭제만 남았습니다.
+
+**빈 칸은 '변경하지 않음'으로 다룹니다.** `surface_roughness_ra/rz` 는 조도 CSV 에서 파서가
+채우는 측정값이라, 빈 칸을 NULL 로 쓰면 측정 결과를 지워 버리기 때문입니다.
+작업자 이름은 새 Job 이면 항상 로그인 계정으로 적고, 기존 Job 은 **비어 있을 때만** 채웁니다
+(이미 다른 사람이 기록돼 있다면 그 기록이 사실이므로 덮어쓰지 않습니다).
 
 ### 11.1 공통 기반 (`components/common.py`)
 
@@ -1241,6 +1473,40 @@ python tools/run_system.py
 | **초기화** | DB 전체 DROP + `create_all` |
 | **초기화** | `data/machining_raw_data` · `data/processed_data` · `data/failed_data` |
 | **보존** | 원본 백업 보관소(`archive_vault`) — **어떤 경우에도 지우지 않음** |
+
+`backend/restore_from_vault.py` — 컨트롤러의 `보관소에서 원본 복원` 버튼이 부릅니다.
+위 초기화의 **반대 방향**입니다. 보관소 → `data/machining_raw_data` 로 원본을 되돌리면
+수집기가 그것을 다시 읽어 DB 까지 복구됩니다.
+
+| 상황 | 하는 일 |
+| :--- | :--- |
+| DB 살아 있음 | `recovery_engine.restore_single_job_to_raw_data()` 로 Job 별 정확 복원 |
+| DB 비어 있음 | 보관소 파일만 보고 복원 (경로에 id 가 없어 DB 가 필요 없음) |
+
+덮어쓰지 않습니다. 이미 있는 파일은 건너뛰므로 여러 번 돌려도 결과가 같습니다.
+
+**왜 `job_manifest.json` 이 필요한가.** 보관소 안의 자리는 두 종류입니다.
+
+```
+jobs/{source_folder}/metadata.xml     <- 경로에 폴더 이름이 들어 있다
+tdms_files/Job_{job_id}/...           <- job_id 로만 묶여 있다
+```
+
+`job_id` 가 어느 `source_folder` 였는지는 **DB 에만 있던 사실**이라, DB 까지 잃으면 파일
+이름만으로는 알 수 없습니다. 그래서 XML 을 보관할 때 옆에 쪽지를 같이 남깁니다
+(`vault_layout.write_manifest`, `xml_parser` 가 커밋 직후 호출).
+
+```json
+{"source_folder": "Alchemist/DB_test/1", "job_id": 1, "workplan_id": 2,
+ "part_name": "DB_test", "project_code": "Alchemist", "nc_file_name": "O0911.nc"}
+```
+
+경로를 DB 에 저장하던 것과는 다릅니다 — 계산 가능한 **규칙**이 아니라 '이 job_id 는 이
+폴더였다'는 **사실**을 원본 옆에 두는 것입니다. `nc_file_name` 덕에 보관소가 `WP{id}.nc` 로
+바꿔 담은 NC 도 원래 이름으로 되돌아갑니다.
+
+쪽지가 없는 옛 보관소는 `backend/backfill_vault_manifests.py --apply` 로 DB 가 살아 있을 때
+한 번 만들어 두면 됩니다.
 
 보관소는 원본이 사라져도 복원할 수 있게 해 주는 마지막 방어선이고, 프로젝트와 함께
 지워지지 않도록 일부러 밖으로 빼 둔 폴더입니다. 초기화가 그것까지 지우면 밖으로 뺀 의미가

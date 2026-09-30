@@ -10,7 +10,7 @@
   <a href="https://www.sqlalchemy.org/"><img src="https://img.shields.io/badge/SQLAlchemy-2.0%2B-red.svg" alt="ORM" /></a>
   <a href="https://streamlit.io/"><img src="https://img.shields.io/badge/Streamlit-1.61%2B-FF4B4B.svg" alt="Frontend" /></a>
   <a href="https://www.iso.org/"><img src="https://img.shields.io/badge/Standard-ISO%2014649%20(STEP--NC)-green.svg" alt="Standard" /></a>
-  <a href="https://github.com/OrcusExtreme/ManufacturingDB"><img src="https://img.shields.io/badge/Release-V3.0.5-brightgreen.svg" alt="Release" /></a>
+  <a href="https://github.com/OrcusExtreme/ManufacturingDB"><img src="https://img.shields.io/badge/Release-V3.0.6-brightgreen.svg" alt="Release" /></a>
 </p>
 
 공작기계지능화실험실(Machine Tool Intelligence Lab)의 **통합 스마트 제조 데이터베이스 및 실시간 분석 플랫폼**입니다.  
@@ -46,12 +46,23 @@
 세 프로세스의 로그를 한 창에서 실시간으로 봅니다. 파서 6종과 파이프라인 일시정지를 **재시작 없이** 토글할 수
 있으며(`backend/pipeline_config.json` 공유), Job Object 로 묶어 제어기가 비정상 종료해도 자식 프로세스가
 남지 않습니다. 파이썬 코드를 품지 않고 디스크의 `.py` 를 그대로 실행하므로 **파이썬을 고쳐도 재빌드가 필요 없습니다.**
+대시보드 계정 관리(가입 승인·거절, 멤버 조회·삭제)도 **여기서** 합니다(관리 유틸리티 › `유저 관리`).
 
 ### 5. 단일 통합 Streamlit 웹 대시보드 (Port 8501)
-Job 검색부터 ISO 14649 트리뷰, 센서/조도 분석(Plotly Envelope & FFT), 메타데이터·환경·품질 수정, 데이터 삽입,
-DB 테이블 조회/편집, 재난 복구(ZIP)까지 하나의 화면 흐름에서 처리합니다. 별도의 관리자/사용자 계정 구분 없이
-모든 기능에 접근할 수 있으며, Job 삭제나 DB 테이블 직접 편집처럼 파괴적인 작업에는 확인 절차(삭제 확인
-다이얼로그, Root 계정 재인증)가 남아 있습니다.
+Job 검색부터 ISO 14649 트리뷰, 센서/조도 분석(Plotly Envelope & FFT), 데이터 삽입(가공 기록 입력 포함),
+DB 테이블 조회/편집, 재난 복구(ZIP)까지 하나의 화면 흐름에서 처리합니다.
+
+**로그인해야 화면이 열립니다.** 회원가입은 아이디·이름·비밀번호로 **신청**만 하고, 관리자가
+제조 DB Controller 의 `유저 관리` 창에서 승인해야 계정이 생깁니다(이메일 인증 없음). 멤버 삭제도
+그 창에서 하며, 삭제하면 열려 있던 대시보드도 다음 동작에서 바로 로그아웃됩니다.
+가입 시 받는 작업자 이름이 데이터 삽입 시 그 Job 의
+`env_memo.worker_name` 으로 자동 기록됩니다. 비밀번호는 PBKDF2-HMAC-SHA256(계정별 소금,
+600,000회)으로 해싱해 저장하며 평문으로 남기지 않습니다. 역할 구분(관리자/일반)은 없고,
+Job 삭제나 DB 테이블 직접 편집처럼 파괴적인 작업에는 확인 절차(삭제 확인 다이얼로그,
+Root 계정 재인증)가 남아 있습니다.
+
+> 내부망 localhost 를 전제로 한 앱 수준 인증입니다. Streamlit 은 HTTP 로 서비스되므로
+> 외부에 열어야 한다면 리버스 프록시로 HTTPS 를 씌우세요.
 
 ---
 
@@ -137,9 +148,9 @@ erDiagram
 | **아카이브 & 백업** | `workplan_file_archive`, `job_file_archive`, `surface_roughness_archive`, `log_file_archive` | 장비 원본 경로(`*_raw_path`) 및 LONGBLOB 이중화 백업 데이터 |
 
 > **파일 경로는 전부 아카이브 테이블에 둡니다.** 주 테이블(`job`·`workplan`·`surface_roughness`)에는
-> 경로 컬럼이 없습니다. 그리고 **보관소(Vault) 안의 경로는 아예 저장하지 않습니다** — 그 자리는
-> 레코드로부터 계산되는 규칙이라 `backend/vault_layout.py` 한 곳에만 두고 필요할 때 계산합니다.
-> (`jobs/{source_folder}/metadata.xml` · `workplan_nc/WP{id}.nc` · `tdms_files/Job_{id}/…` 등)
+> 경로 컬럼이 없습니다. 그리고 **보관소(Vault) 안의 경로는 아예 저장하지 않습니다** — 보관소가
+> `machining_raw_data` 트리를 그대로 비추므로 **보관소 상대경로 = 원본 상대경로**이기 때문입니다.
+> 규칙은 `backend/vault_layout.py` 한 곳에만 있습니다.
 > 다운로드·복원의 **원본 폴더 → 보관소 → LONGBLOB** 폴백은 그대로이며, 가운데 단계의 경로를
 > 읽는 대신 계산할 뿐입니다.
 
@@ -183,6 +194,8 @@ ManufacturingDB/
 │   ├── pipeline_config.json          #   ↑ 그 상태 파일
 │   ├── integrity.py                  #   SHA-256 원본 복원 검증 단일 로직 (3-상태)
 │   ├── integrity_monitor.py          #   검증 백그라운드 감시자 (30분 주기)
+│   ├── auth.py                       #   로그인 계정 · 세션 · 가입 신청/승인 (PBKDF2)
+│   ├── user_manager.py               #   유저 관리 창: 가입 승인·멤버 조회·삭제 (tkinter, 단독 실행 가능)
 │   ├── clean_dummy_data.py           #   고아 Workplan·중복 Workingstep 자동 정리
 │   ├── reset_database_and_storage.py #   DB + 프로젝트 data/ 초기화 (보관소는 보존)
 │   ├── migrate_keys_v3.py            #   키 정규화 마이그레이션 (숫자 PK 전환)
@@ -326,6 +339,20 @@ DB 테이블과 프로젝트 폴더의 `data/` 만 비우고 보관소는 손대
 | 초기화 | DB 테이블 전체 · `data/machining_raw_data` · `data/processed_data` · `data/failed_data` |
 | 보존 | 원본 백업 보관소 `archive_vault` |
 
+**되돌리는 길도 버튼 하나입니다.** 관리 유틸리티의 `보관소에서 원본 복원` 은 보관소의 원본을
+`data/machining_raw_data` 로 되돌려 놓습니다. 보관소가 원본 트리를 그대로 비추므로 복원은
+**폴더 복사 한 번**이고, 파일 이름도 자리도 원본과 같습니다. 파일이 제자리에 돌아가면 수집기가
+그것을 다시 읽으므로 **DB 까지 함께 복구**됩니다. 이미 있는 파일은 건드리지 않고 없는 것만
+채우므로 여러 번 눌러도 결과가 같고, 살아남은 원본을 사본으로 덮어쓰지 않습니다.
+
+**DB 가 통째로 비어 있어도 복원됩니다.** 경로에 `job_id` 가 전혀 들어가지 않으므로 DB 를 볼
+이유가 없습니다.
+
+> 옛 보관소(`jobs/` · `tdms_files/Job_{id}/` 같은 id 기반 배치)는
+> `python backend/migrate_vault_to_mirror_layout.py --apply` 로 한 번 옮기면 됩니다
+> (미리보기 기본, 복사 → 검증 → 삭제, 검증 실패 시 아무것도 지우지 않음).
+> **실행 전 컨트롤러에서 「전체 중지」** 를 하세요.
+
 > ⚠️ **보관소를 MySQL 스키마 폴더(`...\Data\orcus`) 안에 두지 마세요.**
 > `DROP DATABASE orcus` 는 스키마 폴더를 **통째로 삭제**하므로 그 안의 `archive_vault` 까지
 > 함께 사라집니다. 이 프로젝트의 초기화 버튼은 `DROP TABLE` 만 쓰고 보관소를 이중으로
@@ -349,6 +376,13 @@ tools\run_controller.bat       # 없으면 자동 빌드 후 실행
 
 **동작 방식** — 컨트롤러는 파이썬 코드를 품고 있지 않고 디스크의 `.py` 를 그대로 실행하는 감독자입니다.
 따라서 `backend/`, `frontend/` 를 수정하면 **컨트롤러를 다시 빌드하지 않아도** 다음 실행부터 반영됩니다.
+
+**유저 관리** — 관리 유틸리티의 `유저 관리` 창에서 대시보드 계정을 관리합니다.
+`가입 신청` 탭에서 신청을 승인·거절하고, `가입 멤버` 탭에서 멤버(아이디·이름·가입 시각·마지막 로그인)를
+조회하거나 삭제합니다. 버튼은 `backend/user_manager.py`(tkinter 창)를 띄우기만 하고, 모든 처리는 그
+파이썬 창이 DB 에 직접 합니다. 그래서 컨트롤러 없이 `python backend/user_manager.py` 로도 똑같이
+동작합니다. 새 신청·승인·거절·삭제는 실시간 로그에 `[가입 신청] 아이디 (이름)` 처럼 한 줄씩 남습니다.
+멤버를 삭제해도 가공 이력에 기록된 작업자 이름은 그대로 남습니다.
 
 **파이썬 인터프리터 탐색 순서** (`controller/app_config.h`)
 1. `runtime\python.exe` — 프로젝트에 동봉한 임베디드 런타임 (파이썬 미설치 PC 대응)
@@ -378,7 +412,8 @@ python tools/run_system.py
 
 ## 📈 대시보드 주요 기능 안내 (UI Features)
 
-로그인·역할 구분 없이 하나의 화면에서 모든 기능에 접근합니다. Job 삭제, DB 테이블 직접 편집처럼 되돌릴 수
+대시보드는 **로그인 계정으로 접속**하며, 역할 구분(관리자/일반) 없이 모든 기능에 접근합니다.
+가입 승인은 제조 DB Controller의 '유저 관리'에서 수행합니다. Job 삭제, DB 테이블 직접 편집처럼 되돌릴 수
 없는 작업에는 확인 다이얼로그 또는 Root 계정 재인증이 남아 있습니다.
 
 1. **홈**: 로고 헤더와 Quick Access 카드 8개. 자주 쓰는 화면으로 한 번에 이동합니다
@@ -386,19 +421,19 @@ python tools/run_system.py
    검색한 뒤, 하나의 화면에서 탭으로 전환하며 처리합니다. 가공시간·조도 Ra·평균 RPM 범위로도 좁힐 수 있습니다.
    - `분석 보기`: Job 정보/품질/조도통계/CNC로그/환경 카드 + CNC·DAQ·FFT 탭 차트, CNC 로그 추이,
      마이크로미터 표면조도 단면 곡선. TDMS 카드 상단에 가공 구간 판별 근거를 한 줄로 표시합니다
-   - `메타데이터 · 환경 · 품질 수정`(편집 모드): Job 메타데이터, 온습도/작업자/칩형태 환경메모,
-     치수공차/형상/PASS·FAIL 품질점검 통합 편집
-   - 하단 `영구 삭제`: 원자적 연쇄 삭제(`CASCADE`) 확인 모달 지원
+   - 하단 `영구 삭제`: 원자적 연쇄 삭제(`CASCADE`) 확인 모달 지원 (가공 기록·환경·품질 입력은 업로드 시점인 `데이터 삽입` 화면으로 통합)
    - 원본 파일 다운로드는 `데이터 다운로드` 메뉴로 일원화되어 있습니다
 3. **계층형 마스터 데이터**: ISO 14649 공정 트리(Part ➔ Workplan ➔ Workingstep ➔ Tool) 조회.
    Workingstep 표에 NC에서 파싱한 `주축회전수 (RPM)`·`이송속도 (mm/min)`가 함께 나오며,
    단위는 열 이름에만 표기하고 칸에는 숫자만 둡니다. Part별 3D CAD 모델 뷰어(Z-up, 축 gizmo) 제공
 4. **공구 마스터**: 엑셀(`.xlsx`) 업로드로 공구 마스터 전체 교체(기존 데이터 삭제 후 엑셀 내용만 등록,
-   `T1`~`T99` 형식 코드만 적재, 가공 이력의 공구 연결은 공구 코드 기준으로 자동 재연결) 및 전체 공구 목록 조회.
+   `T01`~`T99` 형식 코드만 적재(두 자리 0 채움으로 정규화), 가공 이력의 공구 연결은
+   **공구 번호** 기준으로 자동 재연결) 및 전체 공구 목록 조회.
    유효 공구가 0건이면 교체를 취소해 잘못된 파일로 마스터가 비워지는 사고를 막습니다.
    업로드한 원본은 보관소의 `tool_master/tool_info.xlsx`로 보관되며 화면에서 바로 내려받을 수 있습니다
 5. **데이터 삽입**: CAD 도면(`.stl`/`.stp`/`.step`), XML, NC, TDMS, Log, 조도 CSV 웹 수동 업로드.
-   업로드한 파일은 처음부터 자료 종류별 하위 폴더에 저장됩니다
+   업로드와 동시에 가공 종류, 환경 정보(온습도·작업자·칩 형태·이상 소음·메모), 품질 점검(치수공차·합불 판정)을
+   함께 입력합니다. 작업자는 로그인 계정 이름으로 자동 기록되며, 업로드한 파일은 자료 종류별 하위 폴더에 즉시 분류 저장됩니다
 6. **DB 테이블**: 인터랙티브 ERD에서 테이블을 선택해 실시간 조회·검색, 속성별 정렬(오름/내림차순)과 속성 ▸
    비교 조건 ▸ 값 드롭다운 필터링, CSV 내보내기 지원. 표를 직접 편집한 뒤 저장하면 Root 인증을 거쳐 반영
 7. **데이터 다운로드**: 프로젝트 ▸ Part ▸ Job 순으로 좁혀가며 선택 범위를 ZIP으로 내려받습니다.
@@ -431,6 +466,33 @@ XML/NC/CAD 원본이 저장 시점과 바이트 단위로 동일한지에 대한
 ## 🚀 릴리즈 노트 (Release Notes)
 
 각 버전의 핵심만 적습니다. 세부 동작과 판단 근거는 [`docs/gemini.md`](docs/gemini.md)를 참고하세요.
+
+### [V3.0.6] - 2026-09-30
+- **웹 대시보드 로그인 인증 및 세션 영속화**:
+  - `app_user` (계정 아이디, 작업자명, PBKDF2-HMAC-SHA256 해시, 600,000회 반복), `app_session` (토큰 해시, 7일 만료), `app_pending_signup` (승인 대기)
+  - 대시보드에서 가입 신청 후 제조 DB Controller의 `유저 관리` 창에서 관리자가 승인/거절 및 회원 삭제 관리 (이메일 인증 불필요)
+  - URL 질의문자열(`?sid=...`)과 브라우저 쿠키(`streamlit-cookies-controller`) 연동으로 브라우저 새로고침 및 새 탭에서도 로그인 상태 유지
+  - 가입 시 등록한 작업자 이름이 데이터 삽입 시 `env_memo.worker_name`으로 자동 기록
+- **원본 백업 보관소 미러 레이아웃(Mirror Layout) 전환 및 원클릭 복원**:
+  - 보관소(`archive_vault`) 구조를 원본 트리(`machining_raw_data`)와 1:1 동일한 상대경로 미러 구조로 단순화 (`backend/vault_layout.py`)
+  - 보관소 경로에서 DB 대리키(`job_id`, `workplan_id`) 의존성을 완전히 제거하여, DB가 비어 있거나 auto-increment가 밀려도 원본 파일명과 폴더 그대로 복원 가능
+  - 아카이빙 쓰기 진입점을 `vault_manager.archive_file(raw_path)` 하나로 단일화
+  - Controller 관리 유틸리티 및 스크립트(`backend/restore_from_vault.py`)에 `보관소에서 원본 복원` 추가: 보관소 원본을 `machining_raw_data`로 복원하여 수집기를 통한 DB 자동 재구축 지원 (기존 파일 보존 및 덮어쓰기 방지)
+  - 기존 구형 보관소를 미러 구조로 변환하는 마이그레이션 도구 제공 (`backend/migrate_vault_to_mirror_layout.py`)
+- **공구 코드 표준 표기(`T01`~`T99`) 및 공구 번호 기반 매칭 (`backend/tool_codes.py`)**:
+  - 공구 코드를 두 자리 0 채움 표준 표기(`T01`~`T99`)로 정규화하여 정렬 순서 및 화면 일관성 확보
+  - NC 코드(`M6T6`), XML(`T6_10`), 엑셀 마스터 간의 연결을 문자열 표기가 아닌 **공구 번호(정수 `tool_number`)** 기준으로 일원화하여 연결 누락 문제 해결
+- **가공 환경 및 품질 데이터 입력/관리 체계 개선**:
+  - 메타데이터(가공 종류), 환경 정보(온습도·작업자·칩 형태·이상 소음·메모), 품질 점검(치수공차·합불 판정) 입력을 **'데이터 삽입' 업로드 화면으로 일원화**
+  - Job 워크스페이스의 복잡한 편집 모드를 제거하고 직관적인 '영구 삭제' 기능만 유지
+  - `job` 생성 시 `env_memo` 빈 레코드 동시 생성 보장 (`job_manager.ensure_env_memo`)
+  - `job.start_time` 기반으로 `day_of_week` (영어: `Monday`~`Sunday`)를 세션 flush 이벤트에서 자동 계산 및 동기화 (`DB/models.py`)
+  - 조도 CSV 파서(`roughness_parser`) 측정 평균 Ra/Rz 보존 및 수동 입력 우선 적용, `inspection`에서 미사용 `shape_accuracy` 컬럼 제거
+- **제조 DB Controller (C++ GUI) 기능 확장 및 UI 편의성 개선**:
+  - 관리 유틸리티 버튼 추가: `유저 관리` (신청 승인/거절, 회원 목록/삭제 GUI 창) 및 `보관소에서 원본 복원`
+  - 창 생성 시 작업표시줄을 제외한 작업 영역 중앙에 배치하여 하단 버튼 잘림 현상 방지
+  - 유저 신청/승인/거절/삭제 이벤트를 Controller 실시간 로그 패널에 즉각 표시
+  - C++ 컨트롤러 재컴파일 완료 (`system_controller.exe`)
 
 ### [V3.0.5] - 2026-09-16
 - **보관소를 MySQL 스키마 폴더 밖으로 이전** (`ORCUS_VAULT_ROOT=D:\Orcus\archive_vault`):
@@ -521,7 +583,8 @@ XML/NC/CAD 원본이 저장 시점과 바이트 단위로 동일한지에 대한
 ### [V2.3.3] - 2026-09-10
 - 공구 마스터의 단일 출처를 **엑셀로 고정**. `xml_parser`는 공구 행을 만들 수 없도록 차단
 - 업로드 방식을 업서트 → **전체 교체**로 변경하고, 유효 공구 0건이면 취소해 사고 방지
-- 공구 코드 형식 검증(`^T\d{1,2}$`), `tool_id` 연속 재부여, 원본 엑셀 보관
+- 공구 코드 형식 검증 및 표준 표기(`T01`~`T99`) 정규화, `tool_id` 연속 재부여, 원본 엑셀 보관
+  (표기는 보여주기용이고 공구 연결은 번호로 한다 — NC 는 `T6` 으로 적기 때문. `backend/tool_codes.py`)
 
 ### [V2.3.2] - 2026-09-09
 - **DB 키 정규화**: 사람이 읽는 이름을 PK로 쓰던 구조를 숫자 대리키로 전환.
