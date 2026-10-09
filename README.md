@@ -10,7 +10,7 @@
   <a href="https://www.sqlalchemy.org/"><img src="https://img.shields.io/badge/SQLAlchemy-2.0%2B-red.svg" alt="ORM" /></a>
   <a href="https://streamlit.io/"><img src="https://img.shields.io/badge/Streamlit-1.61%2B-FF4B4B.svg" alt="Frontend" /></a>
   <a href="https://www.iso.org/"><img src="https://img.shields.io/badge/Standard-ISO%2014649%20(STEP--NC)-green.svg" alt="Standard" /></a>
-  <a href="https://github.com/OrcusExtreme/ManufacturingDB"><img src="https://img.shields.io/badge/Release-V3.0.6-brightgreen.svg" alt="Release" /></a>
+  <a href="https://github.com/OrcusExtreme/ManufacturingDB"><img src="https://img.shields.io/badge/Release-V3.1.0-brightgreen.svg" alt="Release" /></a>
 </p>
 
 공작기계지능화실험실(Machine Tool Intelligence Lab)의 **통합 스마트 제조 데이터베이스 및 실시간 분석 플랫폼**입니다.  
@@ -42,11 +42,13 @@
   (464MB 실측 54.9초 → 10.1초). 메모리가 부족하면 지연 로딩으로 자동 전환
 
 ### 4. 제조 DB Controller (C++ 네이티브 GUI)
-`system_controller.exe` 하나로 Streamlit UI · Watchdog 수집기 · TDMS 변환기를 개별 제어하고,
-세 프로세스의 로그를 한 창에서 실시간으로 봅니다. 파서 6종과 파이프라인 일시정지를 **재시작 없이** 토글할 수
+`system_controller.exe` 하나로 Streamlit UI · Watchdog 수집기 · TDMS 변환기 · **REST API 서버**를 개별 제어하고,
+네 프로세스의 로그를 한 창에서 실시간으로 봅니다. 파서 6종과 파이프라인 일시정지를 **재시작 없이** 토글할 수
 있으며(`backend/pipeline_config.json` 공유), Job Object 로 묶어 제어기가 비정상 종료해도 자식 프로세스가
 남지 않습니다. 파이썬 코드를 품지 않고 디스크의 `.py` 를 그대로 실행하므로 **파이썬을 고쳐도 재빌드가 필요 없습니다.**
 대시보드 계정 관리(가입 승인·거절, 멤버 조회·삭제)도 **여기서** 합니다(관리 유틸리티 › `유저 관리`).
+`DB · 스토리지 초기화` 는 지울 항목(가공 데이터 DB · 스토리지 · 공구 목록)을 골라서 하며, 백업 보관소와
+로그인 계정은 어떤 항목을 골라도 남습니다.
 
 ### 5. 단일 통합 Streamlit 웹 대시보드 (Port 8501)
 Job 검색부터 ISO 14649 트리뷰, 센서/조도 분석(Plotly Envelope & FFT), 데이터 삽입(가공 기록 입력 포함),
@@ -64,24 +66,32 @@ Root 계정 재인증)가 남아 있습니다.
 > 내부망 localhost 를 전제로 한 앱 수준 인증입니다. Streamlit 은 HTTP 로 서비스되므로
 > 외부에 열어야 한다면 리버스 프록시로 HTTPS 를 씌우세요.
 
+### 6. 제조 DB REST API 서버 (Port 8000 & OpenAPI / Swagger)
+외부 시스템, 타 연구실 PC, AI 모델 및 LLM(대형 언어 모델) 연동을 위한 **FastAPI 기반 RESTful API 서비스**를 제공합니다.
+- **전체 DB 일괄 덤프 (`GET /api/v1/export/all`)**: 15개 전체 테이블의 모든 가공·공정·계측 데이터를 단일 JSON으로 한 번에 수신
+- **LLM/RAG 최적화 계층형 프로필 (`GET /api/v1/jobs/{job_id}/full`)**: 특정 Job의 공정 계획부터 공구, 장비로그, 표면조도, 품질검사, 환경메모까지 단일 JSON 컨텍스트로 바인딩하여 LLM 환각(Hallucination) 방지
+- **대화형 Swagger UI (`http://localhost:8000/docs`) & ReDoc (`/redoc`)**: 웹 브라우저에서 모든 엔드포인트 실시간 테스트 및 데이터 다운로드 지원
+- **LLM Tool / Function Calling 자동 등록 (`http://localhost:8000/openapi.json`)**: LangChain, LlamaIndex, OpenAI/Gemini Agent에 스키마 URL 하나로 자동 도구 바인딩 지원
+- **CORS 전체 허용 & 보안 직렬화**: 외부 웹 프론트엔드 연동을 위한 CORS 지원 및 비밀번호 해시/대용량 바이너리 자동 필터링
+
 ---
 
 ## 🏗️ 시스템 아키텍처 (System Architecture)
 
-사람이 켜는 창은 **제조 DB Controller 하나**이고, 그 아래 **3개의 독립 프로세스**가 돕니다.
-세 프로세스는 서로 직접 통신하지 않고 **MySQL · 파일시스템 · `pipeline_config.json`** 으로만 이어집니다.
+사람이 켜는 창은 **제조 DB Controller 하나**이고, 그 아래 **4개의 독립 프로세스**가 돕니다.
+네 프로세스는 서로 직접 통신하지 않고 **MySQL · 파일시스템 · `pipeline_config.json`** 으로만 이어집니다.
 
 ```text
-┌──────────────────────────────────────────────────────────────────────────────┐
-│  제조 DB Controller  (system_controller.exe · C++ Win32)                      │
-│  · 3개 프로세스 기동/중지 · 실시간 로그 통합 · 파서 6종 On/Off · 일시정지       │
-│  · backend/pipeline_config.json (파일 기반 전달, IPC 없음)                    │
-│  · Job Object 로 비정상 종료 시 자식 프로세스 일괄 회수                        │
-└────────┬─────────────────────────┬──────────────────────────┬────────────────┘
-         │ 기동·감시                │ 기동·감시                 │ 기동·감시
-         ▼                         ▼                          ▼
-  ① Watchdog 수집기         ② TDMS 변환 데몬            ③ Streamlit UI
-                              (5초 폴링)                   (localhost:8501)
+┌─────────────────────────────────────────────────────────────────────────────────────────────┐
+│  제조 DB Controller  (system_controller.exe · C++ Win32)                                     │
+│  · 4개 프로세스 기동/중지 · 실시간 로그 통합 · 파서 6종 On/Off · 일시정지                       │
+│  · backend/pipeline_config.json (파일 기반 전달, IPC 없음)                                   │
+│  · Job Object 로 비정상 종료 시 자식 프로세스 일괄 회수                                       │
+└────────┬─────────────────────────┬──────────────────────────┬───────────────────────────────┤
+         │ 기동·감시                │ 기동·감시                 │ 기동·감시                     │ 기동·감시
+         ▼                         ▼                          ▼                               ▼
+  ① Watchdog 수집기         ② TDMS 변환 데몬            ③ Streamlit UI                 ④ REST API 서버
+                              (5초 폴링)                   (localhost:8501)               (0.0.0.0:8000)
 
 [장비 / 계측 PC] ──폴더째 복사(File Drop)──┐
                                           ▼
@@ -143,7 +153,7 @@ erDiagram
 
 | 도메인 | 테이블명 | 주요 역할 |
 | :--- | :--- | :--- |
-| **마스터 & 계획** | `part`, `workplan`, `tool`, `workingstep`, `cad_file_archive` | 가공 대상 부품(숫자 PK + `part_name`), NC 공정 계획(숫자 PK + 부품·프로그램·NC해시 유일 제약), 공구 제원, 단위 공정 순서 및 절삭 가공조건(Feed/Spindle), 3D 도면 관리 |
+| **마스터 & 계획** | `part`, `workplan`, `tool`, `workingstep`, `cad_file_archive` | 가공 대상 부품(숫자 PK + `part_name`), NC 공정 계획(숫자 PK + 부품·프로그램·NC해시 유일 제약), 공구 제원(ISO 14649 분류·치수, 매거진 장착 공구 + 미장착 재고), 단위 공정 순서 및 절삭 가공조건(Feed/Spindle), 3D 도면 관리 |
 | **가공 실행 & 품질** | `job`, `machine_log`, `surface_roughness`, `inspection`, `env_memo` | 가공 이력(시간,거리,에러), CNC 1Hz 부하 요약, 다지점 표면조도, 공차/합부(PASS/FAIL), 온습도/메모 |
 | **아카이브 & 백업** | `workplan_file_archive`, `job_file_archive`, `surface_roughness_archive`, `log_file_archive` | 장비 원본 경로(`*_raw_path`) 및 LONGBLOB 이중화 백업 데이터 |
 
@@ -189,7 +199,7 @@ ManufacturingDB/
 │   ├── recovery_engine.py            #   Vault/DB 기반 복원 및 재난 복구 ZIP 생성
 │   ├── tdms_visualizer.py            #   백그라운드 TDMS Parquet/FFT 변환 데몬
 │   ├── tdms_alignment.py             #   NC 대조 실가공 구간 판별 + CNC/DAQ 시간축 정렬 (단독 CLI)
-│   ├── tool_inserter.py              #   공구 마스터 Excel 전체 교체 + 원본 보관
+│   ├── tool_inserter.py              #   공구 마스터 전체 교체 (ISO 14649 형식 CSV·XLSX 검사 → 교체 → 보관)
 │   ├── pipeline_control.py           #   파서 토글/일시정지 상태 (컨트롤러와 JSON 공유)
 │   ├── pipeline_config.json          #   ↑ 그 상태 파일
 │   ├── integrity.py                  #   SHA-256 원본 복원 검증 단일 로직 (3-상태)
@@ -197,10 +207,13 @@ ManufacturingDB/
 │   ├── auth.py                       #   로그인 계정 · 세션 · 가입 신청/승인 (PBKDF2)
 │   ├── user_manager.py               #   유저 관리 창: 가입 승인·멤버 조회·삭제 (tkinter, 단독 실행 가능)
 │   ├── clean_dummy_data.py           #   고아 Workplan·중복 Workingstep 자동 정리
-│   ├── reset_database_and_storage.py #   DB + 프로젝트 data/ 초기화 (보관소는 보존)
+│   ├── reset_database_and_storage.py #   항목별 초기화: 가공 DB · 스토리지 · 공구 목록 (보관소·계정 보존)
+│   ├── reset_manager.py              #   초기화 창: 항목 선택 · 모듈 실행 확인 · 진행 기록 (tkinter)
+│   ├── admin_ui.py                   #   관리 창 공통 (팔레트 · 버튼 · 창 하나만 · DPI)
 │   ├── migrate_keys_v3.py            #   키 정규화 마이그레이션 (숫자 PK 전환)
 │   ├── migrate_job_folder_layout.py  #   Job 폴더를 자료 종류별 하위 폴더로 이전
 │   ├── migrate_vault_location.py     #   원본 보관소 위치 이전 도구 (미리보기 / --apply)
+│   ├── migrate_tool_iso14649.py      #   tool 테이블 ISO 14649 구조 전환 + CSV 적재 (미리보기 / --apply)
 │   ├── normalize_name_casing.py      #   보관소 폴더 대소문자 표기를 DB 기준으로 통일
 │   ├── backfill_workingstep_conditions.py  # 기존 Workplan 절삭조건 소급 갱신
 │   ├── DB/
@@ -212,9 +225,15 @@ ManufacturingDB/
 │   │   └── log_parser.py  roughness_parser.py  cad_parser.py
 │   └── tests/
 │       ├── test_nc_parser.py                  # pytest
+│       ├── test_tool_master_parse.py          # pytest (공구 마스터 파일 검사)
+│       ├── test_reset_options.py              # pytest (초기화 항목 선택)
+│       ├── test_setup_target.py               # pytest (설치 마무리: .env · my.ini · 입력 검사)
+│       ├── test_user_management.py            # pytest (가입 승인·멤버 관리)
 │       ├── test_controller_integration.py     # pytest
 │       ├── test_tdms_alignment.py             # 단독 실행 (합성 TDMS 31개 검사)
-│       └── verify_e2e_cutting_conditions.py   # 단독 실행 (실 DB 연동 검증)
+│       ├── verify_e2e_cutting_conditions.py   # 단독 실행 (실 DB 연동 검증)
+│       ├── verify_tool_csv.py                 # 단독 실행 (공구 CSV·모델·실제 tool 테이블 대조)
+│       └── verify_reset.py                    # 단독 실행 (초기화를 시험용 스키마에서 실제로 돌려 봄)
 │
 ├── frontend/                         # Streamlit 통합 대시보드 (Port 8501)
 │   ├── dashboard.py                  #   단일 엔트리포인트: 사이드바 내비게이션
@@ -226,7 +245,7 @@ ManufacturingDB/
 │       ├── filters.py                #   5단계 캐스케이딩 Job 검색 필터
 │       ├── job_workspace.py          #   Job 검색·분석·수정 통합 화면
 │       ├── master_tree.py            #   계층형 마스터 데이터 (ISO 14649 트리)
-│       ├── tool_master.py            #   공구 마스터 엑셀 업로드 및 조회
+│       ├── tool_master.py            #   공구 마스터 파일 교체 · CSV 내려받기 · 장착/미장착 조회
 │       ├── data_upload.py            #   가공 데이터 수동 업로드
 │       ├── db_explorer.py            #   DB 테이블 조회·필터·편집·CSV
 │       ├── download_center.py        #   프로젝트 ▸ Part ▸ Job 드릴다운 다운로드
@@ -251,19 +270,32 @@ ManufacturingDB/
 │
 ├── tools/                            # 개발·운영 도구
 │   ├── run_system.py                 #   CLI 일괄 실행 (컨트롤러 대안)
-│   ├── compile_controller.bat        #   컨트롤러 빌드 (g++ + windres)
+│   ├── compile_controller.bat        #   컨트롤러 빌드 (g++ + windres, 인자로 출력 경로 지정 가능)
 │   ├── run_controller.bat            #   컨트롤러 실행 (없으면 자동 빌드)
 │   ├── run_windows.bat               #   venv 생성 + 의존성 설치 + CLI 실행
 │   └── requirements.txt              #   런타임 의존 패키지
 │
+├── installer/                        # 배포용 설치 파일(Setup.exe) 만들기 — 결과물은 dist\ (gitignore)
+│   ├── build_installer.py            #   런타임 · MySQL · VC++ 런타임 · 프로젝트 파일을 모아 컴파일
+│   ├── ManufacturingDB.iss           #   Inno Setup 스크립트 (마법사 화면 · 업그레이드 · 방화벽 · 제거)
+│   ├── setup_target.py               #   설치 마무리 (설치한 PC 에서 실행): MySQL · 테이블 · 공구 목록 · 확인
+│   ├── requirements-runtime.txt      #   동봉 파이썬 런타임의 패키지 (판 고정)
+│   └── install_info.txt              #   설치 화면 안내문
+│
 └── docs/
-    └── gemini.md                     # 전체 시스템 상세 명세서
+    ├── gemini.md                     # 전체 시스템 상세 명세서
+    ├── tool_iso14649.csv             # 공구 마스터 데이터 (장착 18 + 미장착 32)
+    ├── tool_iso14649_schema.sql      # tool 테이블 DDL (models.Tool 과 같음)
+    └── tool_iso14649_sources.md      # 공구 사양의 출처 · 실물 확인 목록
 ```
 
 
 ---
 
 ## 🚀 빠른 시작 (Quick Start)
+
+> **다른 PC(서버 PC 등)에 설치만 하려면** 아래 [배포용 설치 파일](#-배포용-설치-파일-setupexe) 하나로 끝납니다.
+> 그 PC 에 파이썬 · MySQL 을 따로 설치하지 않아도 되고, 인터넷도 필요 없습니다. 아래 1~5 는 개발 PC 기준입니다.
 
 ### 1. 사전 요구사항 (Prerequisites)
 - **Python**: 3.10 이상
@@ -330,14 +362,21 @@ python backend\normalize_name_casing.py --apply     # DB 표기 기준으로 폴
 > 옮기거나 다른 PC 에서 복원하면 대소문자를 구분하는 파일시스템에서 경로가 어긋납니다.
 > DB 가 참조하지 않는 고아 폴더는 **삭제하지 않고 보고만** 합니다.
 
-**보관소는 초기화 버튼으로 지워지지 않습니다.** 컨트롤러의 `DB · 스토리지 초기화` 는
-DB 테이블과 프로젝트 폴더의 `data/` 만 비우고 보관소는 손대지 않습니다. 삭제 대상 목록에서
-제외하는 것에 더해, 실제 삭제 직전에 보관소 안쪽 경로인지 한 번 더 확인해 막습니다.
+**초기화는 지울 항목을 골라서 합니다.** 컨트롤러의 `DB · 스토리지 초기화` 는 초기화 창
+(`backend/reset_manager.py`)을 띄우고, 거기서 항목마다 지워질 양(테이블 · 행 · 파일 · 공구 수)을 보며
+고릅니다. 수집기 · 대시보드 · TDMS 변환기가 실행 중이면 실행 버튼이 잠깁니다 — 수집기가 켜져
+있으면 지운 Job 폴더를 '유실'로 보고 보관소에서 자동 복원해 초기화가 무효가 되기 때문입니다.
 
-| 구분 | 대상 |
-| :--- | :--- |
-| 초기화 | DB 테이블 전체 · `data/machining_raw_data` · `data/processed_data` · `data/failed_data` |
-| 보존 | 원본 백업 보관소 `archive_vault` |
+| 항목 | 지우는 것 | 남는 것 |
+| :--- | :--- | :--- |
+| 가공 데이터 DB | 공구 · 계정을 뺀 모든 테이블 (DROP 후 `models.py` 로 다시 만듦) | 공구 목록 · 로그인 계정 |
+| 스토리지 | `data/machining_raw_data` · `data/processed_data` · `data/failed_data` (폴더는 남김) | 원본 백업 보관소 |
+| 공구 목록 | `tool` 테이블 + 감시 폴더 루트의 공구 마스터 파일 | 보관소의 `공구 마스터.csv` |
+
+**백업 보관소와 로그인 계정은 어떤 항목을 골라도 지우지 않습니다.** 보관소는 삭제 대상 목록에서
+제외하는 것에 더해, 실제 삭제 직전에 보관소 안쪽 경로인지 한 번 더 확인해 막습니다. 계정은
+`유저 관리` 에서 관리합니다. 명령줄에서는 `python backend/reset_database_and_storage.py --db --storage --tools`
+(또는 `--all`)로 같은 일을 하며, 항목을 하나도 주지 않으면 아무것도 지우지 않습니다.
 
 **되돌리는 길도 버튼 하나입니다.** 관리 유틸리티의 `보관소에서 원본 복원` 은 보관소의 원본을
 `data/machining_raw_data` 로 되돌려 놓습니다. 보관소가 원본 트리를 그대로 비추므로 복원은
@@ -366,7 +405,7 @@ DB 테이블과 프로젝트 폴더의 `data/` 만 비우고 보관소는 손대
 ### 4. 시스템 실행 (Run System)
 
 #### 방법 1: 제조 DB Controller (권장 - 실시간 로그 모니터 & 모듈/파서 토글 지원)
-C++ Win32 네이티브 컨트롤러로 Streamlit UI, Watchdog 파일 감시, TDMS 변환기를 개별 제어하고,
+C++ Win32 네이티브 컨트롤러로 Streamlit UI, Watchdog 파일 감시, TDMS 변환기, REST API 서버를 개별 제어하고,
 실시간 로그 스트리밍과 파서별 On/Off 토글을 수행합니다. Google Cloud 콘솔풍의 밝은 화면을
 오너드로우로 직접 그렸고, 강조색은 대시보드와 같은 `#1A73E8` 입니다.
 ```bash
@@ -385,7 +424,7 @@ tools\run_controller.bat       # 없으면 자동 빌드 후 실행
 멤버를 삭제해도 가공 이력에 기록된 작업자 이름은 그대로 남습니다.
 
 **파이썬 인터프리터 탐색 순서** (`controller/app_config.h`)
-1. `runtime\python.exe` — 프로젝트에 동봉한 임베디드 런타임 (파이썬 미설치 PC 대응)
+1. `runtime\python.exe` — 배포용 설치 파일이 넣는 동봉 런타임 (파이썬 미설치 PC 대응. 개발 PC 에는 없음)
 2. `py -3` → 실제 `sys.executable` 경로를 조회해 사용
 3. PATH 의 `python` → 마찬가지로 실제 경로를 조회해 사용
 
@@ -399,14 +438,87 @@ tools\compile_controller.bat
 ```
 
 #### 방법 2: CLI 터미널 일괄 실행
-`tools/run_system.py`를 실행하면 필수 패키지 설치 확인, DB 스키마 자동 초기화, 파이프라인 및 통합 대시보드가 서브프로세스로 동시 기동됩니다.
+`tools/run_system.py`를 실행하면 필수 패키지 설치 확인, DB 스키마 자동 초기화, 파이프라인, 통합 대시보드 및 REST API 서버가 서브프로세스로 동시 기동됩니다.
 ```bash
 python tools/run_system.py
 ```
 
+*개별 서비스 단독 실행:*
+```bash
+# REST API 서버만 단독 실행 (Port 8000)
+tools\run_api.bat              # 또는 python tools/run_api.py
+```
+
 ### 5. 서비스 접속
 - **통합 대시보드**: [http://localhost:8501](http://localhost:8501)
-- **컨트롤러 모니터**: `system_controller.exe` 창에서 Watchdog 및 대시보드 실시간 로그 확인 가능
+- **제조 DB REST API (Swagger UI)**: [http://localhost:8000/docs](http://localhost:8000/docs) (ReDoc: `/redoc`, OpenAPI 스펙: `/openapi.json`)
+- **컨트롤러 모니터**: `system_controller.exe` 창에서 4대 모듈 상태 및 실시간 로그 확인 가능
+
+---
+
+## 📦 배포용 설치 파일 (Setup.exe)
+
+다른 PC 에는 설치 파일 하나로 설치합니다. 설치 파일 안에 프로젝트, 전용 파이썬 3.14 런타임(패키지 포함),
+MySQL 8.0, VC++ 런타임이 모두 들어 있어서 **그 PC 에 파이썬 · MySQL 이 없어도, 인터넷이 없어도** 됩니다.
+
+### 설치하기 (설치할 PC)
+
+1. `Setup_ManufacturingDB_v3.1.0.exe` 를 실행합니다 (관리자 권한 필요. 서명되지 않은 파일이라 SmartScreen 이
+   경고하면 '추가 정보' → '실행').
+2. **설치 폴더**(기본 `D:\ManufacturingDB`)와 **데이터 폴더**(기본 `D:\Orcus` — 원본 백업 보관소 `archive_vault` 와
+   DB 파일 `mysql_data` 가 생기는 곳)를 고릅니다. D 드라이브가 없으면 C 드라이브가 기본값이고, 둘 다 영문 경로여야 합니다.
+3. **데이터베이스**를 고릅니다. 설치 프로그램이 이 PC 의 MySQL 서비스와 3306 포트를 먼저 살펴 기본값을 정합니다.
+   - **동봉된 MySQL 8.0.46 설치 (권장)** — `OrcusMySQL` 서비스로 등록되어 부팅 때 켜지고, 이 PC 안에서만 접속됩니다.
+     3306 을 이미 다른 MySQL 이 쓰면 비어 있는 포트(3307~)를 제안합니다.
+   - **이 PC 에 이미 있는 MySQL 사용** — 8.0.16 이상. root 비밀번호를 넣으면 설치를 시작하기 전에 실제로 접속해 확인합니다.
+     같은 이름의 데이터베이스가 이미 있으면 지우지 않고 이어서 씁니다.
+   - root 비밀번호 기본값은 프로젝트 기본값 `610610610` 이고, 바꾸면 설치 폴더의 `.env` 에 저장됩니다.
+4. 끝나면 '제조 DB Controller' 를 실행해 **[전체 시작]** → 웹 대시보드 <http://localhost:8501>.
+   처음 가입한 계정은 컨트롤러의 **[유저 관리]** 에서 승인합니다.
+
+| 설치 프로그램이 하는 일 | 내용 |
+| :--- | :--- |
+| 파일 | 프로젝트(`backend` · `frontend` · `tools` · `docs` · 컨트롤러) · `runtime\` (파이썬) · `mysql\` |
+| VC++ 런타임 | 없거나 동봉판보다 오래됐을 때만 Microsoft 재배포 패키지를 조용히 설치 (MySQL 이 사용) |
+| MySQL | (동봉) `my.ini` 작성 → 데이터 폴더 초기화 → `OrcusMySQL` 서비스 등록·시작 → root 비밀번호 지정 |
+| 데이터베이스 | `orcus`(utf8mb4) · `models.py` 기준 테이블 · 기본 공구 목록(설치 파일을 만들 때 DB 에 있던 공구 마스터) |
+| 설정 · 폴더 | `.env`(DB 접속 · `ORCUS_VAULT_ROOT`) · 원본 백업 보관소 · `data\` 폴더 |
+| 방화벽 | 대시보드 8501 (기본 선택) · REST API 8000 (기본 해제 — 로그인 없이 DB 를 읽을 수 있어서) |
+| 바로 가기 | 바탕 화면 · 시작 메뉴 (컨트롤러, 설치 폴더, 설치 기록, 제거) |
+
+- **다시 실행 = 업그레이드** — 같은 판이든 새 판이든, 이미 설치된 폴더에 다시 설치하면 설정 화면 없이 `.env` · DB ·
+  데이터 · 파서 On/Off 설정을 그대로 두고 프로그램만 바꿉니다. DB 는 빠진 테이블·컬럼만 채웁니다.
+- **제거** — 서비스와 방화벽 규칙을 지우고, 데이터베이스 파일(`mysql_data`)은 지울지 묻습니다(기본: 남김).
+  **원본 백업 보관소는 지우지 않습니다.** 남긴 데이터 폴더를 다시 고르면 그 DB 를 그대로 이어서 씁니다.
+- **실패하면** — 프로그램 파일은 설치된 채로 원인을 보여 줍니다. 고친 뒤 설치 프로그램을 다시 실행하면 이어서 설정합니다.
+  기록: `{설치 폴더}\logs\install.log`
+- **기존 데이터 옮기기** — 원래 PC 의 보관소 폴더(`archive_vault`)를 새 PC 데이터 폴더 아래로 복사한 뒤 컨트롤러에서
+  **[보관소에서 원본 복원]** → **[전체 시작]** 하면 수집기가 DB 를 다시 채웁니다. 계정은 새로 가입·승인합니다.
+
+무인 설치(명령줄) — 화면 없이 같은 설정으로 설치합니다. 설정이 끝까지 되지 않으면 종료 코드 8 을 돌려줍니다.
+
+```bat
+Setup_ManufacturingDB_v3.1.0.exe /VERYSILENT /SUPPRESSMSGBOXES /DIR=D:\ManufacturingDB /DATAROOT=D:\Orcus ^
+    /DBMODE=bundled /DBPORT=3306 /DBPASSWORD=610610610 /TASKS="desktopicon,firewall"
+rem 제거하면서 DB 파일까지 지우기: "D:\ManufacturingDB\unins000.exe" /VERYSILENT /DELETEDBDATA=1
+```
+
+### 설치 파일 만들기 (개발 PC)
+
+필요한 것: [Inno Setup 6](https://jrsoftware.org/isdl.php) (`winget install JRSoftware.InnoSetup`), 이 PC 의
+MySQL Server 8.0 설치본, w64devkit(g++), 처음 한 번 인터넷(파이썬 · VC++ 런타임 내려받기).
+
+```bat
+python installer\build_installer.py           & rem → dist\Setup_ManufacturingDB_v<버전>.exe
+python installer\build_installer.py --test    & rem 시험용 판 (관리자 권한 없이 설치·제거, 서비스 대신 백그라운드 mysqld)
+```
+
+- 판 번호는 이 README 릴리즈 노트 맨 위(`### [Vx.y.z]`)에서 가져옵니다 (`--version` 으로 바꿀 수 있음).
+- 빌드할 때의 작업 트리(커밋 전 새 파일 포함, `.gitignore` 대상 제외)를 그대로 담고, 컨트롤러는 소스에서 새로 빌드합니다.
+  `.env` · `data\` · 보관소 · 테스트는 담지 않습니다.
+- 동봉 런타임의 패키지는 `installer\requirements-runtime.txt` 에 판을 고정해 둡니다. **`tools\requirements.txt` 에
+  패키지를 더하면 이 파일에도 더하세요** (안 그러면 설치한 PC 에서 그 기능만 import 오류가 납니다).
+- 담은 MySQL 은 빌드 중에 임시 데이터 폴더로 실제로 초기화·기동해 보고, 런타임은 주요 패키지를 불러 써 봅니다.
 
 ---
 
@@ -426,11 +538,12 @@ python tools/run_system.py
 3. **계층형 마스터 데이터**: ISO 14649 공정 트리(Part ➔ Workplan ➔ Workingstep ➔ Tool) 조회.
    Workingstep 표에 NC에서 파싱한 `주축회전수 (RPM)`·`이송속도 (mm/min)`가 함께 나오며,
    단위는 열 이름에만 표기하고 칸에는 숫자만 둡니다. Part별 3D CAD 모델 뷰어(Z-up, 축 gizmo) 제공
-4. **공구 마스터**: 엑셀(`.xlsx`) 업로드로 공구 마스터 전체 교체(기존 데이터 삭제 후 엑셀 내용만 등록,
-   `T01`~`T99` 형식 코드만 적재(두 자리 0 채움으로 정규화), 가공 이력의 공구 연결은
-   **공구 번호** 기준으로 자동 재연결) 및 전체 공구 목록 조회.
-   유효 공구가 0건이면 교체를 취소해 잘못된 파일로 마스터가 비워지는 사고를 막습니다.
-   업로드한 원본은 보관소의 `tool_master/tool_info.xlsx`로 보관되며 화면에서 바로 내려받을 수 있습니다
+4. **공구 마스터**: ISO 14649 기반 공구 마스터(분류·치수·재질·재고)를 매거진 장착 공구와 미장착 재고로
+   나눠 조회합니다. 고칠 때는 `현재 공구 마스터 CSV` 를 내려받아 수정한 뒤 CSV·XLSX 로 올리면 전체 교체되고,
+   가공 이력의 공구 연결은 **T번호(공구 번호)** 기준으로 자동 재연결됩니다. 파일에 형식 오류가 한 곳이라도
+   있으면 아무것도 바꾸지 않고 행·열 위치를 알려 줍니다. 반영된 내용은 보관소 루트에 `공구 마스터.csv` 로
+   남아, 보관소에서 원본을 복원하면 수집기가 그 파일로 공구 마스터를 다시 채웁니다
+   (형식·출처: `docs/tool_iso14649.csv`, `docs/tool_iso14649_sources.md`)
 5. **데이터 삽입**: CAD 도면(`.stl`/`.stp`/`.step`), XML, NC, TDMS, Log, 조도 CSV 웹 수동 업로드.
    업로드와 동시에 가공 종류, 환경 정보(온습도·작업자·칩 형태·이상 소음·메모), 품질 점검(치수공차·합불 판정)을
    함께 입력합니다. 작업자는 로그인 계정 이름으로 자동 기록되며, 업로드한 파일은 자료 종류별 하위 폴더에 즉시 분류 저장됩니다
@@ -466,6 +579,26 @@ XML/NC/CAD 원본이 저장 시점과 바이트 단위로 동일한지에 대한
 ## 🚀 릴리즈 노트 (Release Notes)
 
 각 버전의 핵심만 적습니다. 세부 동작과 판단 근거는 [`docs/gemini.md`](docs/gemini.md)를 참고하세요.
+
+### [V3.1.0] - 2026-10-09
+- **제조 DB REST API 서버 신설 (Port 8000 & OpenAPI/Swagger)**:
+  - 외부 연구자, 타 서버, AI 분석 모델 및 LLM 연동을 위한 FastAPI 기반 고성능 RESTful API 서비스 신설 ([`backend/api/`](backend/api))
+  - **전체 DB 일괄 덤프 (`GET /api/v1/export/all`)**: 15개 전체 테이블의 모든 데이터를 단일 JSON 객체로 일괄 추출
+  - **LLM/RAG 최적화 계층형 프로필 (`GET /api/v1/jobs/{job_id}/full`)**: 특정 Job의 공정 계획부터 공구, 장비로그, 표면조도, 품질검사, 환경메모까지 단일 JSON 컨텍스트로 바인딩하여 LLM 환각(Hallucination) 방지
+  - 대화형 Swagger UI (`/docs`), ReDoc (`/redoc`), 및 LLM Tool/Function Calling 자동 등록용 OpenAPI 표준 스펙 (`/openapi.json`) 제공
+  - CORS 전체 허용(`*`) 및 민감정보(비밀번호 해시, 대용량 바이너리) 자동 필터링 직렬화기([`backend/api/serializers.py`](backend/api/serializers.py)) 적용
+- **제조 DB Controller (C++ GUI) 4대 프로세스 통합**:
+  - `system_controller.exe`에 `REST API (Port 8000)`를 제4의 핵심 시스템 모듈로 추가
+  - 8000번 포트 충돌 사전 감지, 개별 시작/중지 토글, `[전체 시작]` / `[전체 중지]` 일괄 제어 및 실시간 로그 스트리밍 통합
+  - 모듈 카드 높이 및 메인 윈도우 크기 자동 조정 (1280x930)
+- **ISO 14649 공구 마스터 및 스토리지 초기화 고도화**:
+  - 공구 마스터 스키마를 ISO 14649 표준(분류, 절삭방향, 치수, 날 수, 재질, 재고)으로 전면 정규화 (`docs/tool_iso14649.csv`, `backend/tool_inserter.py`)
+  - DB 및 스토리지 선택적 초기화 관리자 (`backend/reset_manager.py`) 신설
+- **올인원 배포 인스톨러 (Inno Setup) 아키텍처 구축**:
+  - `installer/build_installer.py`, `installer/ManufacturingDB.iss`를 통해 파이썬 3.14 런타임 및 MySQL 8.0 무인 자동 설치 지원
+- **러너 및 패키지 의존성 최신화**:
+  - `tools/run_api.py`, `tools/run_api.bat` 신설 및 `tools/run_system.py`에 REST API 서버 5번째 서비스로 자동 기동 연동
+  - `tools/requirements.txt`에 `fastapi`, `uvicorn` 반영
 
 ### [V3.0.6] - 2026-09-30
 - **웹 대시보드 로그인 인증 및 세션 영속화**:

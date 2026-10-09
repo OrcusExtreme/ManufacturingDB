@@ -15,7 +15,7 @@ from parsers.log_parser import parse_log
 from parsers.roughness_parser import parse_roughness
 from parsers.cad_parser import parse_cad
 from parsers.nc_parser import parse_nc
-from tool_inserter import parse_and_insert_tools
+from tool_inserter import is_tool_master_file, sync_from_watch_folder
 from pipeline_control import is_parser_enabled, get_config
 
 class MachiningDataHandler(FileSystemEventHandler):
@@ -238,13 +238,16 @@ class MachiningDataHandler(FileSystemEventHandler):
         file_extension = os.path.splitext(file_path_norm)[1].lower()
         file_name = os.path.basename(file_path_norm)
 
-        # 공구 정리 엑셀 파일인 경우 별도로 처리하고 종료
-        if file_extension == '.xlsx' and '실험실 공구 정리' in file_name:
+        # 공구 마스터 파일(공구 마스터.csv 등)인 경우 별도로 처리하고 종료.
+        # 일반 .csv(조도 데이터)보다 먼저 걸러야 조도 파서로 넘어가지 않는다.
+        # 옛 실험실 시트(실험실 공구 정리.xlsx)도 여기로 오지만, 입력기가 형식을 보고 반영을 거부한다.
+        # 기동 시 스캔으로 다시 들어온 같은 파일·옛 파일은 입력기가 걸러 낸다 (sync_from_watch_folder).
+        if is_tool_master_file(file_name):
             if not self.wait_for_file_ready(file_path_norm):
-                print(f"[오류] 엑셀 파일이 준비되지 않았습니다: {file_path_norm}")
+                print(f"[오류] 공구 마스터 파일이 준비되지 않았습니다: {file_path_norm}")
                 return
-            
-            parse_and_insert_tools(file_path_norm)
+
+            sync_from_watch_folder(file_path_norm)
             self._mark_processed(file_path_norm)
             return
 

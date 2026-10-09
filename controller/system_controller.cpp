@@ -44,12 +44,15 @@ enum ControlIDs {
     IDC_BTN_TOGGLE_UI = 1001,
     IDC_BTN_TOGGLE_WATCHDOG,
     IDC_BTN_TOGGLE_TDMS,
+    IDC_BTN_TOGGLE_API,
     IDC_STATIC_STATUS_UI,
     IDC_STATIC_STATUS_WATCHDOG,
     IDC_STATIC_STATUS_TDMS,
+    IDC_STATIC_STATUS_API,
     IDC_STATIC_NAME_UI,
     IDC_STATIC_NAME_WATCHDOG,
     IDC_STATIC_NAME_TDMS,
+    IDC_STATIC_NAME_API,
 
     IDC_BTN_START_ALL = 1031,
     IDC_BTN_STOP_ALL,
@@ -74,10 +77,11 @@ enum ControlIDs {
 #define WM_USER_PROC_EXITED  (WM_USER + 102)
 
 // --- 모듈 ---
-enum ModuleIndex { MOD_UI = 0, MOD_WATCHDOG, MOD_TDMS, MOD_COUNT };
+enum ModuleIndex { MOD_UI = 0, MOD_WATCHDOG, MOD_TDMS, MOD_API, MOD_COUNT };
 
-// 대시보드가 쓰는 포트. 아래 기동 명령과 사전 점검이 같은 값을 보게 한 곳에 둔다.
+// 대시보드와 API 서버가 쓰는 포트. 아래 기동 명령과 사전 점검이 같은 값을 보게 한 곳에 둔다.
 const unsigned short UI_PORT = 8501;
+const unsigned short API_PORT = 8000;
 
 // 프로세스 핸들의 수명은 전부 UI 스레드가 쥔다. 리더 스레드는 읽기 파이프만
 // 소유하고, 끝나면 WM_USER_PROC_EXITED 를 보내 UI 스레드가 정리하게 한다.
@@ -247,6 +251,30 @@ void LoadLogo() {
     }
 }
 
+// Streamlit 은 처음 실행될 때 %USERPROFILE%\.streamlit\credentials.toml 이 없으면 이메일을 묻는다.
+// 컨트롤러가 띄우는 대시보드에는 표준 입력이 없어 그 질문에 답할 수 없고, 답을 못 받은 Streamlit 은
+// 대시보드를 띄우기도 전에 종료된다. 새 PC 에 설치한 직후 대시보드가 켜지자마자 꺼지는 원인이다.
+// 질문에 빈칸으로 답했을 때 Streamlit 이 남기는 것과 같은 파일을 미리 만들어 둔다. 있으면 손대지 않는다.
+void EnsureStreamlitCredentials() {
+    wchar_t profile[MAX_PATH];
+    DWORD n = GetEnvironmentVariableW(L"USERPROFILE", profile, MAX_PATH);
+    if (n == 0 || n >= MAX_PATH) return;
+
+    std::wstring dir = std::wstring(profile) + L"\\.streamlit";
+    std::wstring file = dir + L"\\credentials.toml";
+    if (appcfg::FileExists(file)) return;
+
+    CreateDirectoryW(dir.c_str(), NULL);   // 이미 있으면 실패하지만 상관없다
+    if (appcfg::WriteFileUtf8(file, "[general]\nemail = \"\"\n")) {
+        PostLogMessage(GetTimestamp() + L"[준비] 대시보드가 첫 실행 질문(이메일)에 막히지 않도록 " +
+                       file + L" 을(를) 만들었습니다.\r\n");
+    } else {
+        PostLogMessage(GetTimestamp() + L"[경고] " + file + L" 을(를) 만들지 못했습니다. "
+                       L"대시보드가 시작 직후 꺼지면 이 파일을 직접 만들고 두 줄을 적으세요: "
+                       L"[general] / email = \"\"\r\n");
+    }
+}
+
 // ============================ 프로세스 제어 ============================
 
 // 이미 그 포트를 듣고 있는 프로세스의 PID (없으면 0).
@@ -302,7 +330,7 @@ void StartModule(int idx) {
     ManagedProcess& proc = g_modules[idx];
     if (proc.isRunning) return;
 
-    // 대시보드는 포트를 잡아야 뜬다. 막혀 있으면 띄워 봐야 바로 죽으므로 먼저 알린다.
+    // 대시보드와 API 서버는 포트를 잡아야 뜬다. 막혀 있으면 띄워 봐야 바로 죽으므로 먼저 알린다.
     if (idx == MOD_UI) {
         DWORD holder = FindPortListenerPid(UI_PORT);
         if (holder) {
@@ -314,6 +342,19 @@ void StartModule(int idx) {
                            L" (PID " + std::to_wstring(holder) + L")\r\n"
                            L"        그 프로세스를 끝낸 뒤 다시 시작하세요. "
                            L"(이전에 수동으로 띄운 Streamlit 이 남아 있는 경우가 많습니다)\r\n");
+            UpdateModuleUI(idx);
+            return;
+        }
+    } else if (idx == MOD_API) {
+        DWORD holder = FindPortListenerPid(API_PORT);
+        if (holder) {
+            std::wstring who = GetProcessNameByPid(holder);
+            PostLogMessage(GetTimestamp() + L"[오류] 포트 " + std::to_wstring(API_PORT) +
+                           L" 을(를) 이미 다른 프로세스가 쓰고 있어 [" + proc.name +
+                           L"] 을(를) 시작할 수 없습니다.\r\n"
+                           L"        점유 프로세스: " + (who.empty() ? L"(이름 확인 불가)" : who) +
+                           L" (PID " + std::to_wstring(holder) + L")\r\n"
+                           L"        그 프로세스를 끝낸 뒤 다시 시작하세요.\r\n");
             UpdateModuleUI(idx);
             return;
         }
@@ -557,7 +598,7 @@ void ComputeLayout(int cw, int ch) {
     // 파서 카드 높이 = 제목(48) + 토글 6줄(6*30) + 구분선 여백 + 일시정지 줄 + 아래 여백.
     // 예전에는 마지막 토글(…224)과 일시정지(222)가 겹쳐 구분선이 가려졌다.
     int y = L.headerH + 16;
-    L.cardModules = {L.leftX, y, L.leftX + L.leftW, y + 242};
+    L.cardModules = {L.leftX, y, L.leftX + L.leftW, y + 292};
     y = L.cardModules.bottom + gap;
     L.cardParsers = {L.leftX, y, L.leftX + L.leftW, y + 286};
     y = L.cardParsers.bottom + gap;
@@ -594,7 +635,7 @@ void ApplyLayout() {
         rowY += 50;
     }
     // 전체 시작 / 전체 중지 / 브라우저 열기 (3등분)
-    int allY = L.cardModules.top + 196;
+    int allY = L.cardModules.top + 246;
     int thirdW = (cw - 16) / 3;
     MoveCtl(GetDlgItem(g_hWndMain, IDC_BTN_START_ALL), cx, allY, thirdW, 32);
     MoveCtl(GetDlgItem(g_hWndMain, IDC_BTN_STOP_ALL), cx + thirdW + 8, allY, thirdW, 32);
@@ -665,11 +706,11 @@ void CreateUIControls(HWND hWnd) {
     g_brushLog = CreateSolidBrush(theme::SURFACE);
 
     const wchar_t* modNames[MOD_COUNT] = {
-        L"웹 대시보드 (Port 8501)", L"Watchdog 수집기", L"TDMS 변환기"
+        L"웹 대시보드 (Port 8501)", L"Watchdog 수집기", L"TDMS 변환기", L"REST API (Port 8000)"
     };
-    const int nameIds[MOD_COUNT] = {IDC_STATIC_NAME_UI, IDC_STATIC_NAME_WATCHDOG, IDC_STATIC_NAME_TDMS};
-    const int statusIds[MOD_COUNT] = {IDC_STATIC_STATUS_UI, IDC_STATIC_STATUS_WATCHDOG, IDC_STATIC_STATUS_TDMS};
-    const int btnIds[MOD_COUNT] = {IDC_BTN_TOGGLE_UI, IDC_BTN_TOGGLE_WATCHDOG, IDC_BTN_TOGGLE_TDMS};
+    const int nameIds[MOD_COUNT] = {IDC_STATIC_NAME_UI, IDC_STATIC_NAME_WATCHDOG, IDC_STATIC_NAME_TDMS, IDC_STATIC_NAME_API};
+    const int statusIds[MOD_COUNT] = {IDC_STATIC_STATUS_UI, IDC_STATIC_STATUS_WATCHDOG, IDC_STATIC_STATUS_TDMS, IDC_STATIC_STATUS_API};
+    const int btnIds[MOD_COUNT] = {IDC_BTN_TOGGLE_UI, IDC_BTN_TOGGLE_WATCHDOG, IDC_BTN_TOGGLE_TDMS, IDC_BTN_TOGGLE_API};
 
     for (int i = 0; i < MOD_COUNT; i++) {
         g_modules[i].hName = MakeLabel(hWnd, nameIds[i], modNames[i], g_fontBody);
@@ -978,9 +1019,10 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 
         SetBkMode(hdc, TRANSPARENT);
         if (id == IDC_STATIC_STATUS_UI || id == IDC_STATIC_STATUS_WATCHDOG ||
-            id == IDC_STATIC_STATUS_TDMS) {
+            id == IDC_STATIC_STATUS_TDMS || id == IDC_STATIC_STATUS_API) {
             int mi = (id == IDC_STATIC_STATUS_UI) ? MOD_UI
-                   : (id == IDC_STATIC_STATUS_WATCHDOG) ? MOD_WATCHDOG : MOD_TDMS;
+                   : (id == IDC_STATIC_STATUS_WATCHDOG) ? MOD_WATCHDOG
+                   : (id == IDC_STATIC_STATUS_TDMS) ? MOD_TDMS : MOD_API;
             SetTextColor(hdc, g_modules[mi].isRunning ? theme::SUCCESS : theme::TEXT_DIM);
         } else if (id == IDC_STATIC_LOG_INFO) {
             SetTextColor(hdc, theme::TEXT_DIM);
@@ -1019,7 +1061,8 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             if (style == STYLE_MODULE) {
                 int id = (int)dis->CtlID;
                 int mi = (id == IDC_BTN_TOGGLE_UI) ? MOD_UI
-                       : (id == IDC_BTN_TOGGLE_WATCHDOG) ? MOD_WATCHDOG : MOD_TDMS;
+                       : (id == IDC_BTN_TOGGLE_WATCHDOG) ? MOD_WATCHDOG
+                       : (id == IDC_BTN_TOGGLE_TDMS) ? MOD_TDMS : MOD_API;
                 active = g_modules[mi].isRunning;
             }
             DrawPillButton(dis, text, style, active);
@@ -1076,9 +1119,11 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         switch (id) {
         case IDC_BTN_TOGGLE_UI:
         case IDC_BTN_TOGGLE_WATCHDOG:
-        case IDC_BTN_TOGGLE_TDMS: {
+        case IDC_BTN_TOGGLE_TDMS:
+        case IDC_BTN_TOGGLE_API: {
             int mi = (id == IDC_BTN_TOGGLE_UI) ? MOD_UI
-                   : (id == IDC_BTN_TOGGLE_WATCHDOG) ? MOD_WATCHDOG : MOD_TDMS;
+                   : (id == IDC_BTN_TOGGLE_WATCHDOG) ? MOD_WATCHDOG
+                   : (id == IDC_BTN_TOGGLE_TDMS) ? MOD_TDMS : MOD_API;
             if (g_modules[mi].isRunning) StopModule(mi); else StartModule(mi);
             break;
         }
@@ -1093,6 +1138,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             StartModule(MOD_WATCHDOG);
             StartModule(MOD_UI);
             StartModule(MOD_TDMS);
+            StartModule(MOD_API);
             break;
 
         case IDC_BTN_STOP_ALL:
@@ -1145,25 +1191,15 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             break;
         }
 
-        case IDC_BTN_RESET_STORAGE: {
-            // 백업 보관소는 프로젝트를 지워도 남으라고 밖으로 뺀 폴더이고,
-            // 초기화 대상이 아니다. 무엇이 지워지고 무엇이 남는지 창에서 분명히 나눠 보여준다.
-            std::wstring vaultLine = ResolveVaultRootForDisplay();
-            std::wstring msg =
-                L"[초기화 대상] 되돌릴 수 없습니다.\n"
-                L"    · DB('orcus') 의 모든 테이블 내용\n"
-                L"    · 프로젝트 폴더의 data\\machining_raw_data\n"
-                L"    · 프로젝트 폴더의 data\\processed_data\n"
-                L"    · 프로젝트 폴더의 data\\failed_data\n\n"
-                L"[보존] 원본 백업 보관소는 지우지 않습니다.\n    " + vaultLine + L"\n\n"
-                L"정말 진행하시겠습니까?";
-            int ret = MessageBoxW(hWnd, msg.c_str(),
-                L"초기화 확인", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2);
-            if (ret == IDYES) {
-                RunUtilityScript(L"backend\\reset_database_and_storage.py", L"DB · 스토리지 초기화");
-            }
+        case IDC_BTN_RESET_STORAGE:
+            // 초기화 창은 파이썬(tkinter)이 따로 띄우는 독립 프로세스다. 컨트롤러는 실행만 하고,
+            // 지울 항목(가공 데이터 DB · 스토리지 · 공구 목록) 선택 · 확인 · 실행은 전부 그쪽이 한다.
+            // 그 창은 모듈(수집기 · 대시보드 · TDMS 변환기)이 돌고 있으면 실행을 잠그고, 백업 보관소와
+            // 로그인 계정은 어떤 항목을 골라도 지우지 않는다. 진행 기록은 이 로그 패널로도 들어온다.
+            // 이름에 '창' 을 붙인다: 창을 닫을 때 찍히는 '… 완료' 가 초기화를 끝냈다는 뜻으로
+            // 읽히지 않게 (실제로 초기화했는지는 창이 닫으면서 따로 남긴다).
+            RunUtilityScript(L"backend\\reset_manager.py", L"DB · 스토리지 초기화 창");
             break;
-        }
 
         case IDC_BTN_CLEAR_LOG:
             SetWindowTextW(g_hEditLog, L"");
@@ -1249,6 +1285,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow) {
     // 여기서 한 번만 지정해 두면 모듈 세 개 모두 UTF-8 로 출력한다.
     SetEnvironmentVariableW(L"PYTHONIOENCODING", L"utf-8");
     SetEnvironmentVariableW(L"PYTHONUTF8", L"1");
+    EnsureStreamlitCredentials();
 
     // 제어기가 비정상 종료돼도 자식 프로세스가 남지 않도록 Job Object 에 묶는다.
     g_hJobObject = CreateJobObjectW(NULL, NULL);
@@ -1266,6 +1303,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow) {
     g_modules[MOD_WATCHDOG].scriptArgs = L"-u backend\\data_insert_recognization.py";
     g_modules[MOD_TDMS].name = L"TDMS Visualizer";
     g_modules[MOD_TDMS].scriptArgs = L"-u backend\\tdms_visualizer.py";
+    g_modules[MOD_API].name = L"REST API";
+    g_modules[MOD_API].scriptArgs = L"-u tools\\run_api.py";
 
     INITCOMMONCONTROLSEX icc;
     icc.dwSize = sizeof(icc);
@@ -1299,7 +1338,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow) {
         return 1;
     }
 
-    RECT want = {0, 0, 1280, 880};
+    RECT want = {0, 0, 1280, 930};
     AdjustWindowRect(&want, WS_OVERLAPPEDWINDOW, FALSE);
     int winW = want.right - want.left, winH = want.bottom - want.top;
 

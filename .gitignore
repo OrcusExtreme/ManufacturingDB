@@ -45,3 +45,6 @@ build/
 
 # Tunnel tools
 cloudflared.exe
+
+# 배포용 설치 파일 (installer/build_installer.py 의 결과물)
+dist/

@@ -1,0 +1,25 @@
+# Packages bundled into runtime\ by installer/build_installer.py (Python 3.14, win_amd64 wheels only).
+# Same list as tools/requirements.txt, pinned to the versions the controller runs today, so the
+# installed PC behaves exactly like the lab PC. Keep this file ASCII: pip reads it with the
+# system code page (cp949 on Korean Windows).
+pandas==3.0.5
+numpy==2.5.0
+openpyxl==3.1.5
+SQLAlchemy==2.0.51
+PyMySQL==1.2.0
+# RSA step of MySQL 8 caching_sha2_password logins after a server restart (PyMySQL needs it).
+cryptography==50.0.2
+python-dotenv==1.2.2
+watchdog==6.0.0
+streamlit==1.61.1
+streamlit-option-menu==0.4.0
+streamlit-cookies-controller==0.0.4
+plotly==7.0.0
+pyarrow==24.0.0
+scipy==1.18.1
+npTDMS==1.11.0
+psutil==7.2.2
+pillow==12.3.0
+# REST API module of the controller (tools/run_api.py, port 8000)
+fastapi==0.143.0
+uvicorn==0.52.4

@@ -125,10 +125,10 @@ def run_e2e_verification():
                    ws.xml_tool_code AS '사용 공구',
                    ws.spindle_speed AS '주축회전수 (RPM)',
                    ws.feed_rate AS '이송속도 (mm/min)',
-                   t.company_name AS '제조사',
-                   t.tool_type AS '공구종류',
+                   t.manufacturer AS '제조사',
+                   t.iso14649_class AS 'ISO 14649 분류',
                    t.cutter_diameter AS '직경',
-                   t.tool_teeth AS '날수'
+                   t.number_of_teeth AS '날수'
             FROM workingstep ws
             LEFT JOIN tool t ON ws.tool_id = t.tool_id
             WHERE ws.workplan_id = :w

@@ -3,6 +3,12 @@ setlocal
 rem This script lives in tools\ but every path below is relative to the project root.
 cd /d "%~dp0.."
 
+rem Optional first argument: output exe path (absolute, or relative to the project root).
+rem The installer build uses it to compile into its staging folder, so a controller
+rem that is running from the project root does not block the build.
+set "OUT_EXE=%~1"
+if "%OUT_EXE%"=="" set "OUT_EXE=system_controller.exe"
+
 echo ====================================================
 echo   Building Orcus System Controller
 echo ====================================================
@@ -38,13 +44,13 @@ if %ERRORLEVEL% equ 0 (
 echo [2/2] Compiling C++ Win32 application...
 g++.exe -std=c++17 -O2 -municode -mwindows ^
     "controller\system_controller.cpp" %RES_OBJ% ^
-    -o "system_controller.exe" ^
+    -o "%OUT_EXE%" ^
     -lcomctl32 -lshlwapi -lgdiplus -lgdi32 -luser32 -lole32 -liphlpapi ^
     -static -static-libgcc -static-libstdc++
 
 if %ERRORLEVEL% equ 0 (
     echo.
-    echo [SUCCESS] system_controller.exe
+    echo [SUCCESS] %OUT_EXE%
     echo ====================================================
 ) else (
     echo.

@@ -7,4 +7,5 @@ project-excludes = [
 ]
 search-path = [
     "backend",
+    "installer",
 ]

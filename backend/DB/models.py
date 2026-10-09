@@ -1,7 +1,7 @@
 import datetime
 
-from sqlalchemy import (Column, Integer, String, Float, Double, Boolean, DateTime, JSON, ForeignKey,
-                        LargeBinary, Text, UniqueConstraint, event)
+from sqlalchemy import (CheckConstraint, Column, Integer, String, Float, Double, Boolean, DateTime,
+                        JSON, ForeignKey, LargeBinary, Numeric, Text, UniqueConstraint, event, text)
 from sqlalchemy.orm import Session, relationship
 from .database import Base
 
@@ -143,20 +143,58 @@ class Workplan(Base):
                                 cascade="all, delete-orphan", uselist=False)
 
 class Tool(Base):
-    __tablename__ = "tool"
-    __table_args__ = {'comment': '공구 마스터 정보 테이블 (Excel에서 불러오기)'}
+    """공구 마스터 (ISO 14649 기반) — 매거진에 장착된 공구와 미장착 재고를 함께 담는다.
 
+    `tool_code` 는 매거진 포트 번호라 장착된 공구에만 있고, 미장착 재고는 NULL 이다.
+    (UNIQUE 는 NULL 을 여러 개 허용한다.) 장착된 공구는 NC/XML 이 T번호로 부르므로 분류·직경·
+    날 수가 반드시 있어야 하고, 이를 CHECK 로 강제한다. 미장착 재고에는 시트에 '?' 로만 적힌
+    행이나 인서트처럼 그 셋이 없는 것이 섞여 있어 강제하지 않는다.
+
+    DDL 은 docs/tool_iso14649_schema.sql 과 같고(verify_tool_csv.py 가 대조한다), 데이터 원본은
+    docs/tool_iso14649.csv 다. 공구 마스터는 tool_inserter.py 만 교체한다.
+    """
+    __tablename__ = "tool"
+    __table_args__ = (
+        CheckConstraint(
+            "tool_code IS NULL OR (iso14649_class IS NOT NULL AND cutter_diameter IS NOT NULL "
+            "AND number_of_teeth IS NOT NULL)",
+            name="chk_tool_mounted_complete"),
+        {'comment': '공구 마스터 (ISO 14649 기반, 매거진 장착 공구 + 미장착 재고)'},
+    )
+
+    # [1] 식별 · 제조사
     tool_id = Column(Integer, primary_key=True, autoincrement=True)
     # 표준 표기는 두 자리 0 채움 (T01 · T06 · T29). 규칙은 backend/tool_codes.py 한 곳.
     # 매칭은 이 문자열이 아니라 **번호**로 한다 (NC 는 T6 으로 적기 때문).
-    tool_code = Column(String(50), nullable=False, comment='공구 세트 번호 (표준 표기: T01, T06, T29)')
-    company_name = Column(String(50), comment='제조사명')
-    tool_type = Column(String(50), comment='공구 종류')
-    cutter_diameter = Column(Double, comment='직경 (숫자값)')
-    specification = Column(String(100), comment='규격')
-    tool_teeth = Column(Integer, comment='날수')
-    stock_count = Column(Integer, comment='재고 개수')
-    memo = Column(String(255), comment='비고')
+    tool_code = Column(String(20), unique=True, comment='매거진 포트 T번호 (T01·T06). 미장착 재고는 NULL')
+    manufacturer = Column(String(50), comment='제조사명')
+    model_code = Column(String(100), comment='제조사 카탈로그 형번')
+    # [2] ISO 14649 분류
+    iso14649_class = Column(String(50), comment='ISO 14649-111 공구 엔티티 (ENDMILL, TWIST_DRILL ...)')
+    hand_of_cut = Column(String(10), server_default=text("'RIGHT'"), comment='절삭 방향 (RIGHT/LEFT/NEUTRAL)')
+    # [3] 공통 치수 (mm)
+    cutter_diameter = Column(Numeric(6, 3), comment='직경 Dc')
+    shank_diameter = Column(Numeric(6, 3), comment='생크 직경 Ds / Dcon')
+    cutting_edge_length = Column(Numeric(6, 2), comment='절삭날 길이 APMX / Lc')
+    overall_length = Column(Numeric(6, 2), comment='전체 길이 OAL')
+    usable_length = Column(Numeric(6, 2), comment='유효장 LU')
+    # [4] 공구 종류별 치수
+    corner_radius = Column(Numeric(5, 3), server_default=text("'0.000'"), comment='코너 R / 볼 반경 RE')
+    point_angle = Column(Numeric(5, 2), comment='드릴 선단각 (°)')
+    approach_angle = Column(Numeric(5, 2), comment='진입각 KAPR (°)')
+    helix_angle = Column(Numeric(4, 2), comment='비틀림각 (°)')
+    # [5] 절삭날 · 재질
+    number_of_teeth = Column(Integer, server_default=text("'1'"), comment='날 수 Z')
+    tool_material = Column(String(30), comment='모재 재질 (CARBIDE, HSS ...)')
+    coating_type = Column(String(50), comment='코팅 (TiAlN, DLC, UNCOATED ...)')
+    coolant_through = Column(Boolean, server_default=text("'0'"), comment='내부 급유 지원')
+    # [6] 재고 · 세팅
+    stock_count = Column(Integer, server_default=text("'0'"), comment='재고 수량')
+    gauge_length = Column(Numeric(6, 3), comment='홀더 장착 후 게이지 라인 길이 (mm)')
+    memo = Column(Text, comment='비고')
+    created_at = Column(DateTime, server_default=text("CURRENT_TIMESTAMP"), comment='등록 시각')
+    updated_at = Column(DateTime, server_default=text("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"),
+                        comment='수정 시각')
 
     workingsteps = relationship("Workingstep", back_populates="tool")
 

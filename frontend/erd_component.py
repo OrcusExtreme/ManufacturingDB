@@ -25,7 +25,7 @@ TABLE_METADATA = {
     "tool": {
         "label": "Tool",
         "kr_name": "공구 마스터",
-        "desc": "절삭 가공 공구 사양(직경, 날수, 규격, 재고) 마스터 정보",
+        "desc": "ISO 14649 분류 · 치수 · 재고 공구 마스터 (매거진 장착 공구는 T번호, 미장착 재고는 T번호 없음)",
         "color": "#fb923c"
     },
     "workingstep": {

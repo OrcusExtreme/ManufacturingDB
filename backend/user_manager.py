@@ -11,12 +11,10 @@
 창은 하나만 뜬다. 버튼을 두 번 눌러도 새로 띄우지 않고 이미 열린 창을 앞으로 가져온다.
 열려 있는 동안 REFRESH_MS 마다 두 목록을 다시 읽어, 새 신청이 들어오면 바로 보인다.
 """
-import ctypes
 import datetime
 import os
 import sys
 import tkinter as tk
-from ctypes import wintypes
 from tkinter import messagebox, ttk
 
 BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -24,83 +22,19 @@ if BACKEND_DIR not in sys.path:
     sys.path.insert(0, BACKEND_DIR)
 
 import auth
-
-PROJECT_DIR = os.path.dirname(BACKEND_DIR)
-ICON_PATH = os.path.join(PROJECT_DIR, "assets", "logo.ico")
+# 팔레트 · 버튼 규칙 · 창 하나만 띄우기 · DPI 대응은 관리 창들이 함께 쓴다 (admin_ui.py)
+from admin_ui import (ACCENT, BG, DANGER, EDGE, FONT, TEXT, TEXT_DIM,
+                      claim_single_instance, enable_dpi_awareness, setup_window, short_error)
 
 # 단일 실행 판정이 이 제목으로 기존 창을 찾는다. 바꾸면 두 곳이 함께 바뀐다.
 WINDOW_TITLE = "유저 관리 · 공작기계지능화실험실 제조 DB"
+MUTEX_NAME = "Local\\OrcusUserManager"
 REFRESH_MS = 10_000
-
-# 컨트롤러(controller/theme.h)와 같은 팔레트. 두 창이 한 프로그램처럼 보이게 한다.
-BG = "#FFFFFF"
-EDGE = "#DADCE0"
-TEXT = "#202124"
-TEXT_DIM = "#5F6368"
-ACCENT = "#1A73E8"
-ACCENT_DK = "#1765CC"
-ACCENT_BG = "#E8F0FE"
-DANGER = "#D93025"
-DANGER_BG = "#FCE8E6"
-SURFACE = "#F8F9FA"
-FONT = "Malgun Gothic"
-
-
-# ---------------------------------------------------------------------------
-# 창 하나만 띄우기 · 고해상도 대응 (Windows)
-# ---------------------------------------------------------------------------
-_MUTEX_NAME = "Local\\OrcusUserManager"
-_ERROR_ALREADY_EXISTS = 183
-_SW_RESTORE = 9
-
-
-def claim_single_instance():
-    """처음 뜬 창이면 True. 이미 떠 있으면 그 창을 앞으로 가져오고 False.
-
-    이름 있는 뮤텍스는 프로세스가 끝나면 OS 가 거둬 가므로, 창이 비정상 종료해도 잠금이
-    남지 않는다(잠금 파일은 남아서 다음 실행을 막는다). 핸들은 일부러 닫지 않는다 —
-    프로세스가 사는 동안 쥐고 있어야 잠금이 유지된다.
-    """
-    if sys.platform != "win32":
-        return True
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel32.CreateMutexW.restype = wintypes.HANDLE
-    kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR]
-    handle = kernel32.CreateMutexW(None, False, _MUTEX_NAME)
-    if not handle or ctypes.get_last_error() != _ERROR_ALREADY_EXISTS:
-        return True     # 뮤텍스를 못 만들었으면 막지 않는다 (창이 두 개 뜰 뿐 해는 없다)
-
-    user32 = ctypes.WinDLL("user32")
-    user32.FindWindowW.restype = wintypes.HWND
-    user32.FindWindowW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR]
-    hwnd = user32.FindWindowW(None, WINDOW_TITLE)
-    if hwnd:
-        if user32.IsIconic(hwnd):
-            user32.ShowWindow(hwnd, _SW_RESTORE)
-        # 컨트롤러(전경 프로세스)가 띄운 프로세스라 전경을 넘겨받을 수 있다.
-        user32.SetForegroundWindow(hwnd)
-    return False
-
-
-def enable_dpi_awareness():
-    """고해상도 화면에서 글자가 번지지 않게 한다. Tk 창을 만들기 전에 불러야 한다."""
-    if sys.platform != "win32":
-        return
-    try:
-        ctypes.windll.shcore.SetProcessDpiAwareness(1)     # 시스템 DPI 인식
-    except Exception:
-        pass
 
 
 # ---------------------------------------------------------------------------
 # 표시 도우미
 # ---------------------------------------------------------------------------
-def _short_error(e, limit=200):
-    """SQLAlchemy 오류는 SQL 과 안내 링크까지 여러 줄이라 첫 줄만 추린다."""
-    first = str(e).strip().splitlines()[0] if str(e).strip() else type(e).__name__
-    return first if len(first) <= limit else first[:limit] + "…"
-
-
 def _when(value):
     return value.strftime("%Y-%m-%d %H:%M") if value else "-"
 
@@ -261,7 +195,7 @@ class Page:
             self.rows = {}
             self.table.show_error(
                 f"DB 에 연결하지 못했습니다.\nMySQL 이 켜져 있는지, .env 의 DB 설정이 맞는지 "
-                f"확인하세요.\n\n{_short_error(e)}")
+                f"확인하세요.\n\n{short_error(e)}")
             self.set_status(f"DB 연결 실패 · {stamp}", error=True)
             self.sync_buttons()
             return None
@@ -303,71 +237,12 @@ class UserManagerWindow:
 
     def __init__(self, root):
         self.root = root
-        # DPI 인식을 켜면 픽셀로 준 크기는 늘어나지 않는다. 글꼴(포인트)과 비율을 맞춘다.
-        self.scale = root.winfo_fpixels("1i") / 96.0
         self.after_id = None
-
-        root.title(WINDOW_TITLE)
-        root.configure(bg=BG)
-        root.minsize(self.px(560), self.px(420))
-        if os.path.exists(ICON_PATH):
-            try:
-                root.iconbitmap(ICON_PATH)
-            except tk.TclError:
-                pass
-
-        self._init_styles()
+        self.px = setup_window(root, WINDOW_TITLE, size=(720, 540), min_size=(560, 420))
         self._build()
-        self._center(self.px(720), self.px(540))
         root.bind("<F5>", lambda _e: self.refresh())
         root.bind("<Control-Tab>", lambda _e: self.show_page((self.current + 1) % len(self.pages)))
         self.refresh()
-
-    def px(self, value):
-        return int(round(value * self.scale))
-
-    # --- 모양 ---------------------------------------------------------------
-    def _init_styles(self):
-        style = ttk.Style(self.root)
-        # 기본 테마(vista)는 버튼 색 지정을 무시한다. clam 은 색을 바꿀 수 있다.
-        style.theme_use("clam")
-        body = (FONT, 10)
-
-        style.configure(".", background=BG, foreground=TEXT, font=body)
-        style.configure("Treeview", background=BG, fieldbackground=BG, foreground=TEXT,
-                        rowheight=self.px(30), borderwidth=0, font=body)
-        style.configure("Treeview.Heading", background=SURFACE, foreground=TEXT_DIM,
-                        font=(FONT, 9, "bold"), relief="flat", borderwidth=0,
-                        padding=(self.px(8), self.px(6)))
-        style.map("Treeview", background=[("selected", ACCENT_BG)],
-                  foreground=[("selected", TEXT)])
-        style.map("Treeview.Heading", background=[("active", SURFACE)])
-        # 표의 기본 테두리를 걷어낸다. 테두리는 바깥 프레임이 1px 로 그린다.
-        style.layout("Treeview", [("Treeview.treearea", {"sticky": "nswe"})])
-        # clam 기본 스크롤바는 베이지빛 회색이라 팔레트와 어긋난다. 연회색 막대로 맞춘다.
-        style.configure("Vertical.TScrollbar", troughcolor=SURFACE, background=EDGE,
-                        bordercolor=SURFACE, lightcolor=EDGE, darkcolor=EDGE,
-                        arrowcolor=TEXT_DIM, gripcount=0)
-        style.map("Vertical.TScrollbar", background=[("active", "#BDC1C6")])
-
-        # 컨트롤러 버튼 규칙과 같다: 주 동작은 파랑 채움, 보조는 흰 바탕 + 파란 글자,
-        # 파괴적 동작은 흰 바탕 + 빨간 테두리·글자.
-        # relief 를 flat 으로 두면 clam 이 테두리(bordercolor)를 아예 그리지 않아, 흰 버튼이
-        # 글자만 떠 있는 링크처럼 보인다. 기본 relief 에 명암색을 바탕색과 같게 주면 입체감
-        # 없이 1px 테두리만 남는다.
-        pad = (self.px(18), self.px(6))
-
-        def button(name, fg, bg, edge, bg_active):
-            style.configure(name, foreground=fg, background=bg, bordercolor=edge,
-                            lightcolor=bg, darkcolor=bg, padding=pad, font=body)
-            state_bg = [("disabled", SURFACE), ("pressed", bg_active), ("active", bg_active)]
-            style.map(name, background=state_bg, lightcolor=state_bg, darkcolor=state_bg,
-                      foreground=[("disabled", TEXT_DIM)],
-                      bordercolor=[("disabled", EDGE)])
-
-        button("Accent.TButton", "#FFFFFF", ACCENT, ACCENT, ACCENT_DK)
-        button("Danger.TButton", DANGER, BG, DANGER, DANGER_BG)
-        button("Ghost.TButton", ACCENT, BG, EDGE, ACCENT_BG)
 
     def _build(self):
         outer = tk.Frame(self.root, bg=BG, padx=self.px(24), pady=self.px(20))
@@ -415,10 +290,6 @@ class UserManagerWindow:
         self.pages = [self.requests, self.members]
         self.current = -1       # 아직 아무 탭도 보이지 않음
         self.show_page(0)
-
-    def _center(self, w, h):
-        sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
-        self.root.geometry(f"{w}x{h}+{max((sw - w) // 2, 0)}+{max((sh - h) // 3, 0)}")
 
     def show_page(self, index):
         if index == self.current:
@@ -498,7 +369,7 @@ class UserManagerWindow:
 
 
 def main():
-    if not claim_single_instance():
+    if not claim_single_instance(MUTEX_NAME, WINDOW_TITLE):
         print("유저 관리 창이 이미 열려 있어 앞으로 가져왔습니다.", flush=True)
         return 0
     enable_dpi_awareness()

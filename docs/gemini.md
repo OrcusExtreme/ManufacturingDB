@@ -25,6 +25,7 @@
 12. [엔드투엔드 흐름](#12-엔드투엔드-흐름)
 13. [운영 가이드](#13-운영-가이드)
 14. [설계 판단과 알려진 제약](#14-설계-판단과-알려진-제약)
+15. [배포용 설치 파일](#15-배포용-설치-파일)
 
 ---
 
@@ -121,6 +122,9 @@ data/machining_raw_data/{프로젝트}/{부품}/{가공차수}/
 | OS | Windows 10/11 | 컨트롤러가 Win32 API 사용 |
 | g++ | MinGW-w64 / w64devkit | 컨트롤러를 **고칠 때만** 필요 |
 
+> 다른 PC 에 **설치만** 할 때는 [15. 배포용 설치 파일](#15-배포용-설치-파일)을 씁니다. 파이썬 · MySQL 을
+> 따로 설치하지 않아도 되고 `.env` 도 설치 프로그램이 만듭니다. 이 절의 내용은 개발 PC 기준입니다.
+
 ### 2.2 `.env`
 
 프로젝트 루트에 둡니다. `backend/DB/database.py` 가 `python-dotenv` 로 읽습니다.
@@ -138,11 +142,20 @@ PYTHONPATH=backend
 
 ```
 pandas>=2.2.0          numpy>=1.26.0        openpyxl==3.1.5
-SQLAlchemy==2.0.51     PyMySQL==1.2.0       python-dotenv==1.2.2
-watchdog==6.0.0        streamlit==1.61.1    streamlit-option-menu>=0.4.0
+SQLAlchemy==2.0.51     PyMySQL==1.2.0       cryptography>=42.0.0
+python-dotenv==1.2.2   watchdog==6.0.0      streamlit==1.61.1
+streamlit-option-menu>=0.4.0                streamlit-cookies-controller>=0.0.4
 plotly>=5.20.0         pyarrow>=14.0.1      scipy>=1.12.0
-nptdms>=1.9.0          psutil>=6.0.0
+nptdms>=1.9.0          psutil>=6.0.0        fastapi>=0.110.0     uvicorn>=0.28.0
 ```
+
+- **`cryptography` 는 빠지면 안 됩니다.** MySQL 8 의 기본 인증(`caching_sha2_password`)은 서버가 재시작된 뒤
+  첫 접속에서 비밀번호를 RSA 로 암호화해 보내야 하고, PyMySQL 은 그 계산을 `cryptography` 에 맡깁니다.
+  없으면 PC 를 재부팅한 직후 `'cryptography' package is required ...` 로 대시보드·수집기가 DB 에 붙지 못합니다
+  (다른 프로그램이 먼저 접속해 서버 쪽 인증 캐시가 차 있으면 우연히 지나가서 개발 PC 에서는 잘 드러나지 않았습니다).
+- 이 파일은 사람이 `pip install` 할 때 쓰는 목록입니다. 배포용 설치 파일의 동봉 런타임은
+  `installer/requirements-runtime.txt` 에 판을 고정해 따로 두므로, **패키지를 더하면 두 곳 모두** 고칩니다.
+- 둘 다 ASCII 로만 씁니다. pip 은 requirements 파일을 시스템 코드페이지(한국어 Windows 는 cp949)로 읽습니다.
 
 ### 2.4 DB 연결 (`backend/DB/database.py`)
 
@@ -159,9 +172,10 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 ### 2.5 스키마 생성과 보정
 
-- **최초 생성** — `backend/reset_database_and_storage.py` 가 `Base.metadata.create_all()` 로 14개
-  테이블을 만듭니다. 이 파일의 `from DB import models` 는 이름을 직접 쓰지 않지만 **지우면 안 됩니다.**
-  이 import 가 있어야 모델이 `Base.metadata` 에 등록됩니다.
+- **생성** — `backend/reset_database_and_storage.py` 가 `Base.metadata.create_all()` 로 `models.py` 의
+  테이블 중 **없는 것만** 만듭니다(가공 데이터 DB 초기화는 지운 테이블을 이것으로 다시 만들고, 남긴
+  공구 · 계정 테이블은 그대로 둡니다). 이 파일의 `from DB import models` 는 이름을 직접 쓰지 않지만
+  **지우면 안 됩니다.** 이 import 가 있어야 모델이 `Base.metadata` 에 등록됩니다.
 - **기동 시 보정** — `backend/DB/schema_patch.py` 의 `ensure_schema()` 가 `PENDING_COLUMNS` 목록을
   보고 **빠진 컬럼만** `ALTER TABLE ADD COLUMN` 합니다. 몇 번을 실행해도 안전하며,
   수집 파이프라인이 시작할 때 자동으로 호출됩니다.
@@ -319,17 +333,39 @@ NC 파일 경로는 `workplan_file_archive` 로 옮겼습니다. `nc_hash` 는 �
 
 #### `tool` — 공구 마스터
 
+ISO 14649 기반 공구 마스터입니다. **매거진에 장착된 공구와 미장착 재고를 함께** 담습니다.
+DDL 은 `docs/tool_iso14649_schema.sql`, 데이터는 `docs/tool_iso14649.csv`(장착 18 + 미장착 32)이며
+`backend/tests/verify_tool_csv.py` 가 CSV · `models.Tool` · 실제 테이블을 서로 대조합니다.
+
 | 컬럼 | 타입 | 설명 |
 | :--- | :--- | :--- |
-| `tool_id` **PK** | INT AI | |
-| `tool_code` | VARCHAR(50) NOT NULL | `T01`~`T99` (두 자리 0 채움) |
-| `company_name` / `tool_type` / `specification` | VARCHAR | 제조사 / 종류 / 규격 |
-| `cutter_diameter` | DOUBLE | 직경 |
-| `tool_teeth` / `stock_count` | INT | 날수 / 재고 |
-| `memo` | VARCHAR(255) | 비고 |
+| `tool_id` **PK** | INT AI | 1부터 빈 번호 없이 (교체할 때마다 다시 매김) |
+| `tool_code` | VARCHAR(20) NULL **UNIQUE** | 매거진 포트 T번호 `T01`~`T99`. **미장착 재고는 NULL** |
+| `manufacturer` / `model_code` | VARCHAR(50) / (100) | 제조사 / 카탈로그 형번 |
+| `iso14649_class` | VARCHAR(50) | ISO 14649-111:2010 엔티티 대문자 (`ENDMILL`, `BALLNOSE_ENDMILL`, `TWIST_DRILL` …) |
+| `hand_of_cut` | VARCHAR(10) DEFAULT 'RIGHT' | `RIGHT` / `LEFT` / `NEUTRAL` |
+| `cutter_diameter` · `shank_diameter` | DECIMAL(6,3) | 직경 Dc · 생크 Ds |
+| `cutting_edge_length` · `overall_length` · `usable_length` | DECIMAL(6,2) | 날장 · 전장 · 유효장 |
+| `corner_radius` | DECIMAL(5,3) DEFAULT 0 | 코너 R / 볼 반경 |
+| `point_angle` · `approach_angle` · `helix_angle` | DECIMAL | 선단각 · 진입각 · 비틀림각 |
+| `number_of_teeth` | INT DEFAULT 1 | 날 수 (프로브·마스터 툴은 0) |
+| `tool_material` · `coating_type` | VARCHAR | 재질 · 코팅 |
+| `coolant_through` | BOOLEAN DEFAULT FALSE | 내부 급유 |
+| `stock_count` · `gauge_length` · `memo` | INT · DECIMAL(6,3) · TEXT | 재고 · 게이지 길이 · 비고 |
+| `created_at` · `updated_at` | DATETIME | 등록 · 수정 시각 (DB 가 채움) |
 
-> 이 테이블을 **만들고 고치고 지울 수 있는 경로는 공구 마스터 엑셀 업로드 하나뿐**입니다.
-> `xml_parser` 는 `Tool` 모델을 import 조차 하지 않아, 실수로 공구 행을 만들 수 없습니다.
+**CHECK `chk_tool_mounted_complete`** — 장착 공구(`tool_code` 있음)는 `iso14649_class` ·
+`cutter_diameter` · `number_of_teeth` 가 반드시 있어야 합니다. NC/XML 이 T번호로 부르는 공구라서입니다.
+미장착 재고에는 실험실 시트에 '?' 로만 적힌 행이나 인서트처럼 그 셋이 없는 것이 있어 강제하지
+않습니다. 파서(`nc_parser` · `xml_parser`)는 `WHERE tool_code IS NOT NULL` 로 공구를 찾으므로
+미장착 재고는 T번호 매칭에 끼어들지 않습니다.
+
+**빈 칸은 NULL 입니다.** 입력기는 빈 칸을 DEFAULT 로 채우지 않습니다. 모르는 코너 R 이 0, 모르는
+날 수가 1 로 저장되면 거짓이 되기 때문입니다(DEFAULT 는 손으로 행을 넣을 때만 쓰입니다).
+
+> 이 테이블을 **통째로 교체하는 경로는 `tool_inserter` 하나뿐**입니다(대시보드 업로드 · 수집기 ·
+> 마이그레이션이 모두 그 코드를 씁니다). `xml_parser` 는 `Tool` 모델을 import 조차 하지 않아,
+> 실수로 공구 행을 만들 수 없습니다. DB 테이블 화면의 행 단위 편집은 CHECK 가 지킵니다.
 
 #### `job` — 1회 가공 실행 이력
 
@@ -471,7 +507,7 @@ archive_vault/     Alchemist/DB_test/1/TDMS/foo.tdms
   {Project}/{Part}/{JobID}/XML · NC · TDMS · Log · Surface_Roughness
                           /processed_parquet · etc
   {Project}/{Part}/CAD_Files/
-  실험실 공구 정리.xlsx
+  공구 마스터.csv
 ```
 
 **왜 이렇게 바꿨나.** 예전에는 보관소가 파일을 합성한 이름과 id 기반 폴더에 담았습니다.
@@ -564,7 +600,10 @@ TDMS 변환은 워커가 아니라 **별도 데몬**이 맡습니다([7.6](#76-�
    > 하위 폴더로 옮긴 뒤 도착하는 **뒤늦은 이벤트**를 걸러냅니다. 이 검사가 없으면
    > `wait_for_file_ready` 가 10초를 기다린 뒤에야 포기해서, 단일 워커가 그동안 멈춥니다.
    > (실측: 7회 발생 시 NC 처리가 70초 지연)
-3. **공구 마스터 엑셀인가** — 파일명에 `실험실 공구 정리` 가 있고 `.xlsx` 면 `tool_inserter` 로
+3. **공구 마스터 파일인가** — 이름에 `공구 마스터` · `tool_iso14649` · `실험실 공구 정리` 가 있는
+   `.csv` / `.xlsx` 면 `tool_inserter.sync_from_watch_folder` 로 (일반 `.csv` 인 조도 데이터보다 먼저
+   거른다). 옛 실험실 시트는 형식을 보고, 이미 반영된 파일 · 보관본보다 오래된 파일은 내용과 수정
+   시각을 보고 반영하지 않는다 ([6.7](#67-공구-마스터-tool_inserterpy))
 4. **지원 확장자인가** — `.step .stp .stl .txt .csv .fpk .xml .tdms .log .nc` 외에는 무시
 5. **전송이 끝났는가** — `wait_for_file_ready()` 가 파일을 열어 보고 **크기가 변하지 않을 때까지**
    0.5초 간격 최대 20회 대기. NAS/SMB 복사 지연 중 파싱하는 사고를 막습니다.
@@ -749,17 +788,45 @@ Vault(`cad_models/Part_{부품명}/`) 보관 + 15MB 이하면 LONGBLOB + SHA-256
 
 ### 6.7 공구 마스터 (`tool_inserter.py`)
 
-엑셀 업로드가 공구 마스터의 **유일한 입력 경로**이며, 업서트가 아니라 **전체 교체**입니다.
+공구 마스터를 바꾸는 **유일한 경로**이며, 업서트가 아니라 **전체 교체**입니다. 입력 형식은
+`docs/tool_iso14649.csv` 와 같은 **ISO 14649 형식 CSV · XLSX** 입니다(첫 줄 = 테이블 열 이름).
+대시보드 업로드, 수집기(감시 폴더의 `공구 마스터.csv`), 마이그레이션이 모두 이 코드를 씁니다.
 
-1. `tool_code` 를 `^T0*(\d{1,2})$` 로 검증하고 **두 자리 0 채움 표준 표기**로 정규화.
-   `t4` / `T 4` / `T04` 는 모두 `T04`, `T19-TIP`·설명 문구·빈 값은 제외 건수로 보고
-2. 한글 → 영문 변환 (`엔드밀`→`End Mill`, `날장`→`Flute Length` 등)
-3. **유효 공구가 0건이면 교체를 취소**하고 기존 마스터를 유지
-   (열 이름 불일치·파일 손상으로 마스터가 비워지는 사고 방지)
-4. 기존 전체 삭제 → 엑셀 내용만 등록 → `tool_id` 를 1부터 연속 재부여
-5. `relink_workingsteps()` 가 **공구 번호** 기준으로 가공 이력의 공구 연결을 다시 맺음.
-   이번 엑셀에 없는 공구는 `tool_id` 만 비우고 호출 번호는 보존
-6. 원본을 `{보관소 루트}/tool_master/tool_info.xlsx` 로 보관(최신 1개만)
+1. **파일 전체를 먼저 검사**하고, 한 칸이라도 틀리면 DB 를 건드리지 않고 행·열 위치와 이유를 돌려준다.
+   - 열 구성: 빠진 열 · 모르는 열 · 이름 없는 열의 값 (`tool_id` · `created_at` · `updated_at` 은 무시)
+   - `tool_code`: **두 자리 0 채움 표준 표기**로 정규화(`t4` / `T 4` → `T04`). `T19-TIP` 같은 변형은
+     오류. 번호가 같은 행이 둘이면(`T06` · `T6`) 오류. 빈 칸은 미장착 재고
+   - `iso14649_class`: 정해 둔 이름만(ISO 14649-111 · -10 · -121 + `REFERENCE_TOOL`). 오타 방지
+   - 숫자: DECIMAL 자릿수 · 0 이상 · 정수 칸, `coolant_through` 는 1/0/TRUE/FALSE
+   - 장착 공구의 분류 · 직경 · 날 수 누락 (DB CHECK 와 같은 규칙을 미리)
+2. **옛 실험실 시트(`실험실 공구 정리.xlsx`)는 받지 않는다.** ISO 분류와 치수가 없어서 받아들이면
+   조사해 채운 마스터를 덮어쓴다. 보관소 복원이 옛 시트를 감시 폴더로 되돌려도 마스터는 그대로다
+3. CSV 는 UTF-8 과 **CP949**(엑셀에서 'CSV' 로 저장한 한국어 Windows 기본) 둘 다 읽는다
+4. 기존 전체 삭제 → 파일 내용 등록(빈 칸은 명시적 NULL) → `relink_workingsteps()` 가 **공구 번호**
+   기준으로 가공 이력의 공구 연결을 다시 맺음 (한 트랜잭션). 장착 공구에 없는 번호는 `tool_id` 만
+   비우고 호출 번호는 보존 → `tool_id` 를 1부터 연속 재부여
+5. DB 내용을 그대로 내보낸 CSV 를 `{보관소 루트}/공구 마스터.csv` 로 보관 (무엇을 올렸든 이 한 형식,
+   임시 파일에 쓴 뒤 바꿔 끼워 보관본이 비는 순간이 없다).
+   대시보드의 `현재 공구 마스터 CSV` 내려받기도 같은 내보내기라, **올린 CSV 를 다시 내려받으면
+   바이트까지 같다**(verify_tool_csv.py 가 이것으로 실제 테이블을 대조한다)
+
+**수집기 경로는 두 경우를 건너뛴다** (`sync_from_watch_folder`). 수집기는 기동할 때 감시 폴더의
+기존 파일을 모두 다시 처리하는데, 보관소 복원으로 놓인 `공구 마스터.csv` 가 감시 폴더에 남아 있으면
+그 뒤 대시보드에서 올린 새 마스터가 재시작마다 옛 파일로 조용히 되돌아가기 때문이다.
+
+| 경우 | 처리 |
+| :--- | :--- |
+| 파일 내용 = 지금 DB | 건너뜀 (재시작마다 다시 쓰지 않음) |
+| 내용이 다르고, 보관본보다 **오래된** 파일 | 반영 안 함 + 경고 ("대시보드에서 올리세요") |
+| 내용이 다르고, 보관본보다 새것이거나 보관본이 없음 | 반영 |
+
+DB 를 초기화한 뒤 보관소에서 복원하면 DB 가 비어 있고 파일은 보관본보다 오래되지 않으므로 다시 채워진다.
+대시보드 업로드는 사람이 고른 파일이라 이 판단 없이 항상 반영한다.
+
+`backend/migrate_tool_iso14649.py` 는 옛 구조(`company_name` · `tool_type` · `specification` …)를 이
+구조로 바꾼 일회성 도구다. 옛 내용과 가공 이력 연결을 `backups/` 에 남기고, 외래키를 잠시 풀어
+테이블을 `models.Tool` 로 다시 만든 뒤 같은 이름 · `ON DELETE SET NULL` 로 다시 걸고, 위 1~5 로
+`docs/tool_iso14649.csv` 를 넣는다. 이미 새 구조면 내용만 다시 넣는다.
 
 ---
 
@@ -970,7 +1037,7 @@ DB 에 저장되는 Vault 경로는 **전부 `VAULT_ROOT` 기준 상대경로**�
   ├─ {프로젝트}/{부품}/{차수}/XML · NC · TDMS · Log
   │                        /Surface_Roughness · processed_parquet · etc
   ├─ {프로젝트}/{부품}/CAD_Files/
-  └─ 실험실 공구 정리.xlsx
+  └─ 공구 마스터.csv                 # 공구 마스터 보관본 (반영할 때마다 DB 내용으로 덮어씀)
 
   (machining_raw_data 트리와 파일 단위로 동일 — 경로에 job_id 가 들어가지 않는다)
 ```
@@ -1067,7 +1134,7 @@ _already_has(dest_dir, kind, extensions)   # 그 종류가 이미 있으면 복�
 ### 10.2 인터프리터 탐색 (`app_config.h`)
 
 ```
-1) {프로젝트}/runtime/python.exe   ← 동봉 런타임 (파이썬 미설치 PC 대응)
+1) {프로젝트}/runtime/python.exe   ← 배포용 설치 파일이 넣는 동봉 런타임 (개발 PC 에는 없음, 15절)
 2) py -3    → sys.executable 을 물어 실제 exe 경로를 얻음
 3) python   → 같은 방식
 ```
@@ -1090,6 +1157,11 @@ _already_has(dest_dir, kind, extensions)   # 그 종류가 이미 있으면 복�
 - **Job Object** (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`) 에 묶어, 컨트롤러가 비정상 종료해도
   자식이 남지 않음 (검증: 강제 종료 후 고아 프로세스 0개)
 - 중지는 `taskkill /F /T /PID` — 파이썬이 다시 자식(streamlit 등)을 띄우므로 트리째 정리
+- **Streamlit 첫 실행 질문을 미리 답해 둠** (`EnsureStreamlitCredentials`) — Streamlit 은
+  `%USERPROFILE%\.streamlit\credentials.toml` 이 없으면 처음 실행할 때 이메일을 묻습니다. 컨트롤러가 띄운
+  대시보드에는 표준 입력이 없어 답할 수 없고, 그러면 Streamlit 이 대시보드를 띄우기 전에 종료됩니다
+  (새 PC 에 설치한 직후 '대시보드가 켜지자마자 꺼지는' 증상). 컨트롤러가 기동할 때 빈 이메일로 답한 것과 같은
+  파일을 만들어 둡니다. 이미 있으면 손대지 않습니다.
 
 **핸들 수명은 전부 UI 스레드가 쥡니다.** 리더 스레드는 읽기 파이프만 소유하고, 끝나면
 `WM_USER_PROC_EXITED` 를 보내 UI 스레드가 정리합니다.
@@ -1118,7 +1190,9 @@ Google Cloud 콘솔풍 밝은 화면을 Win32 오너드로우로 직접 그립�
 
 - 헤더: `logo_card.png` (GDI+) + 제목 + 해석된 파이썬 경로
 - 왼쪽: 모듈 3개(상태 점·PID·시작/중지) / 파서 토글 6개 + 일시정지 / 관리 유틸리티 4개
-  (유저 관리 · 더미 데이터 청소 · 보관소에서 원본 복원 · DB·스토리지 초기화)
+  (유저 관리 · 더미 데이터 청소 · 보관소에서 원본 복원 · DB·스토리지 초기화). `유저 관리` 와
+  `DB·스토리지 초기화` 는 파이썬(tkinter) 창을 띄우기만 하고, 두 창은 `backend/admin_ui.py` 의
+  팔레트 · 버튼 규칙 · 창 하나만 띄우기 · DPI 대응을 함께 씁니다
 - 창은 작업 영역(작업표시줄 제외) 가운데에 뜹니다. `CW_USEDEFAULT` 는 계단식으로 아래로 밀어
   놓아, 높이가 화면에 들어가는데도 아래쪽 버튼이 작업표시줄에 가려졌습니다.
 - 오른쪽: 실시간 로그 + 자동 스크롤·비우기·복사
@@ -1135,9 +1209,14 @@ Google Cloud 콘솔풍 밝은 화면을 Win32 오너드로우로 직접 그립�
 ### 10.6 빌드
 
 ```bash
-tools\compile_controller.bat     # windres(아이콘/버전) + g++
-tools\run_controller.bat         # 없으면 자동 빌드 후 실행
+tools\compile_controller.bat                 # windres(아이콘/버전) + g++ → system_controller.exe
+tools\compile_controller.bat build\x.exe     # 출력 경로를 주면 거기로 (프로젝트 루트 기준 상대 경로)
+tools\run_controller.bat                     # 없으면 자동 빌드 후 실행
 ```
+
+출력 경로 인자는 설치 파일 빌드가 씁니다. 루트의 `system_controller.exe` 가 실행 중이면 덮어쓸 수 없기 때문입니다.
+**상대 경로로 주세요** — MinGW 의 g++/ld 는 경로를 시스템 코드페이지로 다뤄, 한글이 든 절대 경로(이 프로젝트
+폴더)에는 결과를 쓰지 못합니다.
 
 ```
 g++ -std=c++17 -O2 -municode -mwindows src\system_controller.cpp build\resources.o
@@ -1331,7 +1410,7 @@ def load_data(query, params=None): ...
 | 데이터 다운로드 | `download_center.py` | 프로젝트▸Part▸Job 드릴다운 ZIP |
 | Job 워크스페이스 | `job_workspace.py` + `filters.py` | 검색·분석·편집·삭제 |
 | 계층형 마스터 데이터 | `master_tree.py` | ISO 14649 트리 + CAD 뷰어 |
-| 공구 마스터 | `tool_master.py` | 엑셀 전체 교체 + 목록 |
+| 공구 마스터 | `tool_master.py` | ISO 14649 형식 파일 전체 교체 · CSV 내려받기 · 장착/미장착 목록 |
 | DB 테이블 | `db_explorer.py` | 14개 테이블 조회·편집·CSV |
 | 시스템 백업/복구 | `recovery.py` | 전체 복구 ZIP |
 
@@ -1465,14 +1544,34 @@ python tools/run_system.py
 3. 같은 `(workplan_id, step_order)` 로 **중복 생성된 Workingstep 병합**
    (살아남는 행의 빈칸을 나머지 행에서 채운 뒤 삭제)
 
-`backend/reset_database_and_storage.py` — 컨트롤러의 `DB · 스토리지 초기화` 버튼이 부릅니다.
-**되돌릴 수 없습니다.**
+`backend/reset_database_and_storage.py` — 항목별 초기화. 컨트롤러의 `DB · 스토리지 초기화` 버튼은
+초기화 창(`backend/reset_manager.py`)을 띄우고, 그 창이 `run_reset()` 을 부릅니다. **되돌릴 수 없습니다.**
 
-| 구분 | 대상 |
-| :--- | :--- |
-| **초기화** | DB 전체 DROP + `create_all` |
-| **초기화** | `data/machining_raw_data` · `data/processed_data` · `data/failed_data` |
-| **보존** | 원본 백업 보관소(`archive_vault`) — **어떤 경우에도 지우지 않음** |
+| 항목 | 지우는 것 | 남는 것 |
+| :--- | :--- | :--- |
+| 가공 데이터 DB (`--db`) | 공구 · 계정을 뺀 모든 테이블과 뷰 DROP → `create_all` 로 다시 만듦 | 공구 목록 · 로그인 계정 |
+| 스토리지 (`--storage`) | `data/machining_raw_data` · `data/processed_data` · `data/failed_data` 내용 (루트 폴더 유지) | 원본 백업 보관소 |
+| 공구 목록 (`--tools`) | `tool` 행 전부(AUTO_INCREMENT 1 로) + 감시 폴더 루트의 공구 마스터 파일 | 보관소의 `공구 마스터.csv`, 가공 이력의 T번호 |
+
+- **어떤 항목을 골라도 지우지 않는 것**: 원본 백업 보관소, 로그인 계정(`app_user` · `app_session` ·
+  `app_pending_signup`). 예전에는 DB 초기화가 모든 테이블을 DROP 해 계정까지 사라졌고, 그러면 모두가
+  다시 가입 신청 · 승인을 거쳐야 했다. 계정은 `유저 관리` 에서 다룬다.
+- **공구 목록만 지우면** 가공 이력(workingstep)은 남고 `tool_id` 만 외래키(ON DELETE SET NULL)로
+  비워진다. `tool_number` · `xml_tool_code` 가 남으므로 공구 마스터를 다시 넣으면 다시 연결된다.
+  감시 폴더 루트의 `공구 마스터.csv` 를 함께 지우는 이유는, 남겨 두면 수집기가 다시 켜질 때
+  '빈 공구 목록과 다른 파일'로 보고 공구 목록을 되살리기 때문이다([6.7](#67-공구-마스터-tool_inserterpy)).
+- **DB 만 지우면** 감시 폴더의 원본이 남으므로, 수집기를 다시 켜면 기동 스캔이 그 파일로 DB 를 다시 채운다.
+- **순서는 DB → 공구 목록 → 스토리지.** 도중에 실패해도 원본 파일이 남아 있으면 수집기로 다시 채울 수 있다.
+- **실행 전 모듈 확인** (`running_modules()`): 수집기 · 대시보드 · TDMS 변환기가 돌고 있으면 시작하지
+  않는다(psutil 로 프로세스 명령줄을 본다 — 컨트롤러로 띄웠든 `tools/run_system.py` 로 띄웠든 잡힌다).
+  수집기가 켜진 채 Job 폴더를 지우면 `_auto_restore` 가 유실로 보고 보관소에서 되살려 초기화가 무효가 된다.
+- 명령줄: `--db` · `--storage` · `--tools` · `--all`. 항목을 하나도 주지 않으면 도움말만 찍고 코드 2 로 끝난다.
+
+초기화 창(`reset_manager.py`)은 항목마다 지워질 양과 남는 것(보관소 경로 · 계정 수)을 보여 주고, 모듈이
+돌고 있으면 실행 버튼을 잠근다. '되돌릴 수 없음을 확인했습니다' 체크 + 마지막 확인창(기본값 '아니오')을
+거쳐 백그라운드 스레드로 실행하며, 진행 기록은 창의 기록란과 컨트롤러 로그 양쪽에 나온다. 실행 중에는
+창을 닫을 수 없고, 닫을 때 실제로 초기화했는지를 로그에 남긴다(컨트롤러가 붙이는 '… 창 완료' 는 창이
+끝났다는 뜻일 뿐이다).
 
 `backend/restore_from_vault.py` — 컨트롤러의 `보관소에서 원본 복원` 버튼이 부릅니다.
 위 초기화의 **반대 방향**입니다. 보관소 → `data/machining_raw_data` 로 원본을 되돌리면
@@ -1527,7 +1626,13 @@ tdms_files/Job_{job_id}/...           <- job_id 로만 묶여 있다
 | `test_nc_parser.py` | `pytest` | NC 절삭조건 파싱 4케이스 |
 | `test_controller_integration.py` | `pytest` | 토글·파서 skip·프로세스 수명·exe 동작 |
 | `test_tdms_alignment.py` | **단독 실행** | 합성 TDMS 로 31개 검사 |
-| `verify_e2e_cutting_conditions.py` | **단독 실행** | 실제 DB 연동 E2E 검증 |
+| `verify_e2e_cutting_conditions.py` | **단독 실행** | 실제 DB 연동 E2E 검증 (테스트 행을 만들었다 지움) |
+| `test_user_management.py` | `pytest` | 가입 신청 · 승인 · 멤버 삭제 (SQLite) |
+| `test_tool_master_parse.py` | `pytest` | 공구 마스터 파일 검사 · 수집기 반영 판단 (DB 없음) |
+| `test_reset_options.py` | `pytest` | 초기화 항목 조합 · 모듈 감지 · 보관소 보호 · 명령줄 (DB 없음) |
+| `verify_tool_csv.py` | **단독 실행** | 공구 CSV · `models.Tool` · 실제 tool 테이블 대조 (임시 테이블, 실제는 읽기만) |
+| `verify_reset.py` | **단독 실행** | 초기화를 시험용 스키마 `orcus_reset_selftest` 에서 실제로 돌려 봄 (실제 DB 는 읽기만, 끝나면 스키마 삭제) |
+| `test_setup_target.py` | `pytest` | 설치 마무리: `.env` 쓰기 · `my.ini` · 입력 검사 · `sc` 출력 해석 · Setup 과의 약속 (MySQL 없음) |
 
 ```bash
 python -m pytest backend/tests/test_nc_parser.py backend/tests/test_controller_integration.py -q
@@ -1554,7 +1659,7 @@ python backend/tests/verify_e2e_cutting_conditions.py
 | 경로 기준을 `vault_manager.PROJECT_ROOT` 한 곳에만 | 6개 모듈이 `dirname` 을 몇 번 거슬러 올라가는지 세어가며 같은 값을 계산하고 있었음 |
 | 복원을 `_restore_job_files` 하나로 | 같은 일을 두 번 구현하면 반드시 갈라짐 (실제로 갈라져 TDMS 가 빠졌음) |
 | 해시 재계산을 `integrity.py` 한 곳에만 | 화면에서 다시 구현하면 "ETL과 같은 계산"이라는 검증 근거가 무너짐 |
-| 공구 마스터 입력을 엑셀 하나로 | 여러 경로가 쓰면 어느 것이 정답인지 알 수 없음 |
+| 공구 마스터 교체를 `tool_inserter` 한 곳으로 | 여러 경로가 각자 쓰면 어느 것이 정답인지 알 수 없음 (업로드 · 수집기 · 마이그레이션이 같은 검사를 거침) |
 | TDMS 변환을 데몬 하나로 | 인라인 + 데몬 병행 시 같은 파일을 동시에 변환 (76초 → 110초) |
 | 단일 워커 스레드 | 파서가 같은 Job 행을 동시에 건드리는 경합 제거 |
 | 파일 종류 판정을 폴더 우선으로 | 확장자만 보면 `.csv` 가 조도인지 로그인지 알 수 없음 |
@@ -1567,9 +1672,10 @@ python backend/tests/verify_e2e_cutting_conditions.py
   느린 환경에서는 반영이 약간 지연될 수 있습니다.
 - **컨트롤러는 Windows 전용** — Win32 API 와 Job Object 를 직접 씁니다.
   다른 OS 에서는 `run_system.py` 를 쓰세요.
-- **`runtime/` 폴더는 비어 있습니다** — 탐색 로직은 준비되어 있으나, 파이썬 미설치 PC 배포가
-  필요하면 python.org 의 embeddable 패키지를 `runtime/` 에 풀고 그쪽에
-  `pip install -r requirements.txt` 를 해두어야 합니다.
+- **`runtime/` 은 배포용 설치 파일로 설치한 PC 에만 있습니다** — 개발 PC 에서는 비어 있고 컨트롤러가 `py -3` 을
+  씁니다. 만드는 방법과 이유는 [15. 배포용 설치 파일](#15-배포용-설치-파일).
+- **배포용 설치 파일은 서명되어 있지 않습니다** — 처음 실행할 때 SmartScreen 경고가 뜹니다. 코드 서명 인증서가
+  생기면 Inno Setup 의 `SignTool` 로 서명할 수 있습니다.
 - **`.igs` 등 미지원 확장자는 조용히 무시됩니다** — `etc/` 에 넣으면 Vault 에 보관은 됩니다.
 - **Job 을 여러 번 돌리면 Workplan 의 `nc_file_path` 는 마지막 Job 을 가리킵니다** —
   그 Job 을 지우면 참조가 깨집니다. 데이터 차원에서 고칠 수 있지만 코드 차원의 방어는 없습니다.
@@ -1585,6 +1691,121 @@ python backend/tests/verify_e2e_cutting_conditions.py
 4. **컨트롤러에 토글을 추가하나?** → `pipeline_control.DEFAULT_CONFIG`,
    `app_config.h` 의 키 목록, 컨트롤러 UI 세 곳을 맞추세요.
 5. **파괴적 동작인가?** → 확인 다이얼로그 또는 Root 재인증을 붙이세요.
+6. **파이썬 패키지를 추가하나?** → `tools/requirements.txt` 와 `installer/requirements-runtime.txt` 둘 다 고치고
+   (`setup_target.REQUIRED_MODULES` 와 `build_installer.RUNTIME_SMOKE` 에도 넣으면 설치 때 검사됩니다),
+   설치 파일을 다시 만드세요. 빠뜨리면 설치한 PC 에서만 그 기능이 import 오류로 죽습니다.
+
+---
+
+## 15. 배포용 설치 파일
+
+`installer/` — 다른 PC 에 설치할 설치 파일 하나(`dist\Setup_ManufacturingDB_v<판>.exe`)를 만듭니다.
+쓰는 법(설치 화면 · 무인 설치 · 빌드 명령)은 README 의 '배포용 설치 파일' 절에 있고, 여기에는 구조와 이유를 적습니다.
+
+### 15.1 무엇을 담는가
+
+| 담는 것 | 어디서 | 압축 전 |
+| :--- | :--- | :--- |
+| 프로젝트 | git 작업 트리(커밋 전 새 파일 포함, `.gitignore` 대상 · `backend/tests` 제외) + 소스에서 새로 빌드한 컨트롤러 | 약 10 MB |
+| `runtime\` | python.org 공식 배포본 3.14.x zip(SHA-256 고정) + `installer/requirements-runtime.txt` | 약 560 MB |
+| `mysql\` | 개발 PC 의 MySQL Server 8.0: `mysqld` · `mysql` · `mysqladmin` · `mysqldump` 와 그들이 쓰는 DLL, `share`, `lib/plugin`, `lib/private`(정규식 함수의 ICU 데이터) | 약 120 MB |
+| VC++ 런타임 | `aka.ms/vc14/vc_redist.x64.exe` (Microsoft 서명 확인) | 18 MB |
+| 기본 공구 목록 | 빌드할 때 DB 의 공구 마스터를 앱 코드(`tool_inserter.export_tool_master_csv`)로 내보낸 것 | — |
+
+LZMA2 솔리드 압축 뒤 약 130 MB. `.env` · `data\` · 보관소는 담지 않습니다(`.env` 가 담기면 빌드를 멈춥니다 — DB 비밀번호).
+
+### 15.2 빌드에서 정한 것 (`build_installer.py`)
+
+- **embeddable 판이 아니라 전체 배포판을 쓴다** — 관리 창(유저 관리 · 초기화)은 tkinter 가 필요한데 embeddable 에는
+  없습니다. 또 embeddable 의 `._pth` 는 격리 모드라 스크립트 폴더가 `sys.path` 에 들어가지 않아,
+  `backend\*.py` 가 옆 모듈을 import 하는 방식이 깨집니다.
+- **사용자 site-packages 차단 (`sitecustomize.py`)** — 파이썬은 `%APPDATA%\Python\Python314\site-packages`
+  (`pip install --user` 자리)를 런타임의 site-packages 보다 **앞에** 둡니다. 같은 PC 에서 파이썬 3.14 를 따로 쓰는
+  사람이 있으면 동봉 판 대신 그 판을 불러옵니다(개발 PC 에서 실제로 PIL 이 그쪽에서 불려 왔습니다). 런타임의
+  `sitecustomize.py` 가 그 경로를 빼고, 빌드 때 `-s` 없이 불러 차단을 확인합니다.
+- **MySQL DLL 은 import 표를 따라가며 모은다** (`pe_imports`) — 손으로 적은 목록에서 `libprotobuf-lite.dll` 이 다시
+  쓰는 `abseil_dll.dll` 이 빠져, 담은 `mysqld` 가 DLL 을 못 찾고(0xC0000135) 시작하지 못한 일이 있었습니다.
+- **담은 MySQL 을 실제로 띄워 본다** — 영문 임시 폴더에 복사해 `--initialize-insecure` → 기동 → 질의 → 종료.
+  빠진 파일은 설치한 PC 가 아니라 여기서 걸립니다 (`--skip-mysql-selftest` 로 건너뜀).
+- **패키지 자체 시험 코드(`tests/`)는 뺀다** — numpy · pandas · scipy · pyarrow. 실행에 쓰이지 않습니다.
+- **런타임은 파이썬 판 + 패키지 목록이 같으면 다시 만들지 않는다** (`.build-stamp`, `--rebuild-runtime`).
+
+### 15.3 설치 순서
+
+```
+마법사(데이터 폴더 · MySQL 선택) → 파일 복사 → [설치 마무리]
+  VC++ 런타임(없거나 오래됐을 때) → setup_target.py mysql → schema → verify → 방화벽 → 바로 가기
+```
+
+설치 마무리는 Inno Setup 의 Pascal 코드가 아니라 **설치된 파이썬 런타임으로 `installer/setup_target.py`** 를
+단계마다 부릅니다. 앱의 `models.py` · `schema_patch` · `tool_inserter` · `vault_manager` 를 그대로 쓰므로 테이블과
+공구 목록이 앱이 기대하는 모양과 어긋날 수 없고, 단위 시험도 파이썬으로 할 수 있습니다.
+
+| 주고받는 것 | 방식 |
+| :--- | :--- |
+| 설정 (Setup → 파이썬) | `{tmp}\setup_options.json` — 비밀번호를 명령줄에 싣지 않으려고 파일로 넘기고, 끝나면 지웁니다 |
+| 진행 상황 | 표준 출력의 `##STEP <키>` 줄 (ASCII). `ExecAndLogOutput` 콜백이 받아 설치 화면 문구를 바꿉니다 |
+| 실패 설명 | `logs\install_error.txt` (UTF-8) — Setup 이 읽어 메시지 창에 그대로 띄웁니다 |
+| 기록 | `logs\install.log` — 모든 단계의 출력 (사람용) |
+| 설치 상태 | `installer\install_state.ini` — MySQL 방식 · 서비스 · 데이터 폴더. 업그레이드 · 제거가 읽습니다 (`GetIniString`) |
+| 종료 코드 | 0 성공 · 1 실패 · 2 root 비밀번호 틀림. 하나라도 실패하면 Setup 자체가 8 로 끝납니다 |
+
+- **모든 단계는 다시 실행해도 같다** — 초기화된 데이터 폴더는 재사용, `CREATE DATABASE IF NOT EXISTS`,
+  `create_all`(없는 테이블만), 공구 목록은 비어 있을 때만 넣습니다. 지우는 일은 하지 않습니다. 그래서 실패한 뒤
+  설치 프로그램을 다시 실행하면 이어서 설정되고, 업그레이드도 같은 단계를 그대로 부릅니다.
+- **설치 단계는 방금 쓴 `.env` 만 본다** — Setup 을 띄운 셸에 `DB_*` 가 남아 있으면(개발 PC 의 터미널 등)
+  dotenv 는 그 값을 덮어쓰지 않습니다(`override=False`). 실제로 시험 중에 설치 단계가 개발 PC 의 실제 DB 를
+  바라본 일이 있어(쓰기는 없었음), `.env` 의 값으로 덮어쓰고 `.env` 에 없는 키는 지우게 했습니다. 거꾸로 Windows
+  '영구' 환경 변수(`DB_*` · `ORCUS_*`)가 `.env` 와 다르면 설치한 앱이 그 값을 쓰게 되므로 `verify` 가 실패로 알립니다.
+
+### 15.4 MySQL
+
+- **감지** — 서비스 목록에서 이름에 `mysql` · `mariadb` 가 든 것, 3306 포트 사용 여부(`Get-NetTCPConnection`).
+  있으면 '이 PC 의 MySQL 사용' 을, 없으면 '동봉 MySQL' 을 기본으로 고르고, 3306 이 차 있으면 동봉 MySQL 의 포트로
+  3307 부터 빈 포트를 제안합니다.
+- **동봉** — `{app}\mysql\my.ini` 를 쓰고(경로는 `/`, 옵션 파일에서 `\` 는 이스케이프), 데이터 폴더를
+  `--initialize-insecure` 로 만든 뒤 `OrcusMySQL` 서비스(LocalSystem, 자동 시작, 실패 시 재시작)로 등록하고
+  root 비밀번호를 정합니다. `bind-address=127.0.0.1` · `mysqlx=OFF` (이 PC 의 앱만 접속), `utf8mb4_0900_ai_ci`,
+  `lower_case_table_names=1`, `max_allowed_packet=1G`(개발 PC 와 같게), `skip-log-bin`, `secure-file-priv=NULL`.
+  `.env` 의 `DB_HOST` 는 `127.0.0.1` — `localhost` 는 `::1` 을 먼저 시도해 접속마다 지연됩니다.
+- **기존** — 설치를 시작하기 전에 동봉 `mysql.exe` 로 실제로 접속해 봅니다(비밀번호는 임시 옵션 파일로 넘기고 바로
+  지움). 8.0.16 미만과 MariaDB 는 받지 않습니다(CHECK 제약 · `utf8mb4_0900_ai_ci`). 같은 이름의 DB 가 있으면
+  지우지 않고 이어서 쓴다고 확인을 받습니다. `DB_HOST=localhost` (개발 PC 와 같은 계정 규칙).
+- **비밀번호 문자 제한** — 영문 · 숫자와 `! # $ ^ & * ( ) - _ = + [ ] { } ; : , . ? ~`. `.env` 와 SQLAlchemy 접속
+  문자열(`mysql+pymysql://root:<비밀번호>@...`)에 그대로 들어가므로 `@`(주소 구분자) · `%`(퍼센트 인코딩)는
+  연결을 깨고, 따옴표 · 역슬래시 · 공백은 `.env` · MySQL 옵션 파일에서 따로 풀어야 합니다. Setup 과
+  `setup_target.PASSWORD_CHARS` 가 같은 규칙을 씁니다.
+
+### 15.5 업그레이드 · 제거
+
+- **업그레이드 판정** — 설치 폴더에 `installer\install_state.ini` 와 `.env` 가 있으면 업그레이드입니다. 설정 화면을
+  건너뛰고, 파일을 바꾸기 전에(`PrepareToInstall`) `OrcusMySQL` 을 멈추며, 실행 중인 컨트롤러 · 파이썬 모듈은
+  Restart Manager 가 닫기를 묻습니다. `runtime\Lib\site-packages` 는 비우고 새로 넣고(새 판에서 빠진 패키지가 남지 않게),
+  `.env` 와 `backend\pipeline_config.json`(파서 On/Off)은 그대로 둡니다.
+- **제거** — 실행 중인 프로그램을 닫을지 묻고, 서비스를 멈춰 지운 뒤, 데이터베이스 파일을 지울지 묻습니다
+  (기본 '아니요', 무인 제거는 `/DELETEDBDATA=1` 일 때만). 방화벽 규칙도 지웁니다. **보관소는 어떤 경우에도 남기고**,
+  `.env` · `logs\` · `data\` 도 남습니다. '이 PC 의 MySQL' 로 설치했다면 그 MySQL 과 데이터베이스는 건드리지 않습니다.
+
+### 15.6 새 PC 에서만 드러나던 문제 (설치 파일을 만들며 고친 것)
+
+| 문제 | 개발 PC 에서 안 보였던 이유 | 고친 곳 |
+| :--- | :--- | :--- |
+| 대시보드가 켜지자마자 꺼짐 (Streamlit 첫 실행 이메일 질문) | 오래전에 콘솔에서 답해 둔 `credentials.toml` 이 있음 | 컨트롤러 `EnsureStreamlitCredentials` (10.3) |
+| 재부팅 직후 DB 접속 실패 (`cryptography` 없음) | 다른 클라이언트가 먼저 접속해 서버 인증 캐시가 차 있음 | `tools/requirements.txt` · 런타임 (2.3) |
+| 동봉 판 대신 사용자 폴더 패키지를 불러옴 | 개발 PC 는 원래 그 패키지를 씀 | 런타임 `sitecustomize.py` (15.2) |
+| 쿠키 로그인 유지가 꺼짐 | 개발 PC 에만 `streamlit-cookies-controller` 가 깔려 있었음 (requirements 에 없었음) | `tools/requirements.txt` · 런타임 |
+
+### 15.7 시험
+
+- **단위** — `backend/tests/test_setup_target.py` (pytest, MySQL 없음).
+- **시험용 판** (`build_installer.py --test`) — 관리자 권한 없이 설치 · 제거되고(`PrivilegesRequired=lowest`), 서비스 대신
+  mysqld 를 백그라운드로 띄우며(`no_service`, 제거 · 업그레이드 때 `setup_target.py stop-test-mysql` 로 끔), VC++ 런타임 ·
+  방화벽 · 바로 가기는 건너뛰고, AppId 가 달라 정식 판과 섞이지 않습니다. 나머지 설치 흐름은 정식 판과 같습니다.
+  이 판으로 무인 설치 → 동봉 런타임만으로 앱 · 대시보드 · 컨트롤러 · 관리 창 실행 → 보관소 원본으로 수집기가 DB 와
+  parquet 을 채우는 흐름 → 업그레이드 → 제거(데이터 남김) → 같은 데이터로 재설치 → 제거(데이터 삭제) → 기존 MySQL
+  모드 → 설치 마법사 화면(감지 · 입력 검사 · 진행 문구)을 확인했습니다.
+- **정식 판에서만 도는 부분** — 서비스 등록 · 방화벽 규칙 · VC++ 런타임 설치는 관리자 권한이 있어야 해서 시험용 판으로는
+  돌지 않습니다. 실제 설치할 PC(또는 빈 Windows 가상 머신)에서 한 번 설치해 보고 `logs\install.log` 를 확인하세요.
 
 ---
 

@@ -1,119 +1,351 @@
+"""공구 마스터 입력기 — ISO 14649 형식 파일(CSV · XLSX)로 `tool` 테이블을 통째로 교체한다.
+
+파일 형식은 docs/tool_iso14649.csv 와 같다. 첫 줄이 열 이름(TOOL_COLUMNS)이고, 빈 칸은 '모름'이라
+NULL 로 들어간다(DEFAULT 로 채우지 않는다 — 모르는 코너 R 이 0 으로 저장되면 거짓이 된다).
+대시보드 '공구 마스터' 화면의 업로드와, 수집기(Watchdog)가 감시 폴더에서 공구 마스터 파일을
+발견했을 때 이 모듈을 부른다.
+
+교체 절차
+  1. 파일 전체를 먼저 검사한다. 한 칸이라도 틀리면 **DB 를 건드리지 않고** 이유를 돌려준다.
+  2. 기존 공구를 모두 지우고 파일 내용을 넣는다 (한 트랜잭션).
+  3. 가공 이력(workingstep)의 공구 연결을 T번호 기준으로 다시 맺는다.
+  4. tool_id 를 1번부터 다시 매기고, DB 내용을 그대로 내보낸 CSV 를 보관소에
+     '공구 마스터.csv' 로 남긴다. 무엇을 올렸든(CSV · XLSX) 보관본은 이 한 가지 형식이다.
+
+옛 실험실 시트(실험실 공구 정리.xlsx — 회사명 / 공구 종류 / 규격 / 5축 가공기 열)는 받지 않는다.
+그 시트에는 ISO 분류와 치수가 없어서, 받아들이면 조사해 채운 공구 마스터를 덮어써 버린다.
+'보관소에서 원본 복원' 이 옛 시트를 감시 폴더로 되돌려 놓아도 공구 마스터는 그대로 남는다.
+"""
+import csv
+import io
 import os
-import re
-import shutil
-import pandas as pd
+import sys
+from dataclasses import dataclass, field
+from decimal import Decimal, InvalidOperation
+
+BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
+if BACKEND_DIR not in sys.path:
+    sys.path.insert(0, BACKEND_DIR)
+
+from sqlalchemy import text
+
 from DB.database import SessionLocal, engine
 from DB.models import Tool, Workingstep
-from sqlalchemy import text
+import vault_layout
 from vault_manager import get_vault_path
 
-# 공구 마스터 원본 엑셀 보관 위치: archive_vault 루트.
-# 원본(machining_raw_data)에서도 공구 엑셀은 루트에 놓이므로 보관소도 같은 자리를 쓴다.
-# 업로드된 파일명과 무관하게 항상 이 이름으로 최신본 1개만 덮어쓴다.
-TOOL_MASTER_VAULT_FILENAME = "실험실 공구 정리.xlsx"
-TOOL_MASTER_VAULT_REL_PATH = TOOL_MASTER_VAULT_FILENAME
-
-# DB 적재를 허용하는 공구 코드 형식: T + 1~2자리 숫자 (예: T1, T29)
-# XML 런타임의 공구 호출(T번호)과 매핑 가능한 코드만 받아들인다.
 # 공구 코드 표기·매칭 규칙은 backend/tool_codes.py 한 곳에만 둔다.
 from tool_codes import canonical_tool_code, index_by_number, tool_code_number
 
-# 공구 종류 영문 변환 매핑
-TOOL_TYPE_MAPPING = {
-    '볼 엔드밀': 'Ball End Mill',
-    '엔드밀': 'End Mill',
-    '페이스 커터': 'Face Cutter',
-    '리머': 'Reamer',
-    '드릴': 'Drill',
-    '플랫 엔드밀': 'Flat End Mill',
-    'PROBE(프루브)': 'Probe',
-    '수동 프루브': 'Manual Probe',
-    '인서트 팁': 'Insert Tip',
-    '드릴 바디': 'Drill Body',
-    '드릴 팁': 'Drill Tip',
-    'MASTER TOOL': 'Master Tool'
+# 보관소 루트(= 감시 폴더 루트와 같은 자리)에 남기는 공구 마스터 파일 이름
+TOOL_MASTER_VAULT_FILENAME = vault_layout.TOOL_MASTER_FILENAME
+TOOL_MASTER_VAULT_REL_PATH = vault_layout.tool_master_rel()
+
+# 파일 열 = 테이블 열 (순서 포함). tool_id · created_at · updated_at 은 DB 가 채운다.
+TOOL_COLUMNS = (
+    "tool_code", "manufacturer", "model_code", "iso14649_class", "hand_of_cut",
+    "cutter_diameter", "shank_diameter", "cutting_edge_length", "overall_length", "usable_length",
+    "corner_radius", "point_angle", "approach_angle", "helix_angle",
+    "number_of_teeth", "tool_material", "coating_type", "coolant_through",
+    "stock_count", "gauge_length", "memo",
+)
+DB_FILLED_COLUMNS = ("tool_id", "created_at", "updated_at")
+
+# ISO 14649-111:2010 공구 엔티티 + -10 의 touch_probe + -121(선반) 공구. 고른 근거는
+# docs/tool_iso14649_sources.md. 오타가 그대로 들어가지 않도록 이 이름만 받는다.
+ISO14649_CLASSES = frozenset({
+    "ENDMILL", "BALLNOSE_ENDMILL", "BULLNOSE_ENDMILL", "PROFILED_END_MILL", "FACEMILL",
+    "SHOULDERMILL", "SIDE_MILL", "T_SLOT_MILL", "DOVETAIL_MILL", "THREAD_MILL",
+    "TWIST_DRILL", "TAPERED_DRILL", "SPADE_DRILL", "SPOTDRILL", "STEP_DRILL",
+    "COUNTERBORE", "COUNTERSINK", "REAMING_CUTTING_TOOL", "TAPERED_REAMER",
+    "COMBINED_DRILL_AND_REAMER", "ROTATING_BORING_CUTTING_TOOL", "TAPPING_CUTTING_TOOL",
+    "COMBINED_DRILL_AND_TAP", "TOUCH_PROBE",
+    "GENERAL_TURNING_TOOL", "GROOVING_TOOL", "KNURLING_TOOL", "TURNING_THREADING_TOOL",
+})
+# 표준에 해당 엔티티가 없어 따로 둔 이름 (마스터/게이지 툴)
+LOCAL_CLASSES = frozenset({"REFERENCE_TOOL"})
+ALLOWED_CLASSES = ISO14649_CLASSES | LOCAL_CLASSES
+HAND_OF_CUT_VALUES = ("RIGHT", "LEFT", "NEUTRAL")
+
+_DECIMAL_COLUMNS = {   # (전체 자릿수, 소수 자릿수) — 스키마의 DECIMAL(p, s)
+    "cutter_diameter": (6, 3), "shank_diameter": (6, 3), "cutting_edge_length": (6, 2),
+    "overall_length": (6, 2), "usable_length": (6, 2), "corner_radius": (5, 3),
+    "point_angle": (5, 2), "approach_angle": (5, 2), "helix_angle": (4, 2), "gauge_length": (6, 3),
 }
+_INTEGER_COLUMNS = ("number_of_teeth", "stock_count")
+_STRING_LIMITS = {"manufacturer": 50, "model_code": 100, "tool_material": 30, "coating_type": 50}
+_TRUE = {"1", "TRUE", "Y", "YES"}
+_FALSE = {"0", "FALSE", "N", "NO"}
 
-SPEC_MAPPING = {
-    '보정길이': 'Offset Length',
-    '보정 길이': 'Offset Length',
-    '날장': 'Flute Length',
-    '전장': 'Overall Length',
-    '반경': 'Radius',
-    '직경': 'Diameter',
-    '각도': 'Angle',
-    '섕크': 'Shank',
-    '샹크': 'Shank',
-    '파이': 'Phi'
-}
+# 옛 실험실 시트의 열 이름. 이것이 보이고 새 열이 없으면 옛 형식이다.
+_LEGACY_MARKERS = ("5축 가공기", "공구 종류", "회사명")
+# 감시 폴더에서 공구 마스터로 다룰 파일 이름 (옛 시트도 받아서 '옛 형식'이라고 알려 준다)
+_TOOL_MASTER_NAME_HINTS = ("공구 마스터", "tool_iso14649", "실험실 공구 정리")
 
-def translate_spec(val):
-    if not val:
-        return val
-    for ko, en in SPEC_MAPPING.items():
-        val = val.replace(ko, en)
-    return val
 
-def translate_tool_type(val):
-    if val in TOOL_TYPE_MAPPING:
-        return TOOL_TYPE_MAPPING[val]
-    return val
+class ToolMasterError(Exception):
+    """파일을 반영할 수 없다. problems 에 사람이 읽을 이유가 행 번호와 함께 담긴다."""
 
-def clean_number(val):
-    if pd.isna(val) or val == '?' or str(val).strip() == '':
-        return None
-    val_str = str(val).replace('Ø', '').replace('ø', '').strip()
+    def __init__(self, summary, problems=()):
+        super().__init__(summary)
+        self.summary = summary
+        self.problems = list(problems)
+
+
+@dataclass
+class ImportResult:
+    """parse_and_insert_tools 의 결과. ok 가 False 면 DB 는 그대로다."""
+    ok: bool
+    message: str
+    problems: list = field(default_factory=list)
+    inserted: int = 0
+    mounted: int = 0
+    deleted: int = 0
+    linked: int = 0
+    unlinked: int = 0
+    resequenced: int = 0
+    archived: str = ""
+
+    @property
+    def unmounted(self):
+        return self.inserted - self.mounted
+
+
+def is_tool_master_file(file_name):
+    """수집기가 공구 마스터로 넘길 파일인지 (이름과 확장자로 판단)."""
+    base = os.path.basename(file_name)
+    ext = os.path.splitext(base)[1].lower()
+    return ext in (".csv", ".xlsx") and any(h in base for h in _TOOL_MASTER_NAME_HINTS)
+
+
+# ---------------------------------------------------------------------------
+# 읽기
+# ---------------------------------------------------------------------------
+def _cell_text(value):
+    """엑셀 칸 값을 CSV 와 같은 글자로. 6.8 이 6.800000001 같은 꼴로 바뀌지 않게 한다."""
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    if isinstance(value, float):
+        return format(Decimal(repr(value)).normalize(), "f")
+    return str(value).strip()
+
+
+def _read_table(file_path):
+    """(열 이름 목록, [(파일 행 번호, 칸 목록), ...]). 빈 줄은 건너뛴다."""
+    ext = os.path.splitext(file_path)[1].lower()
+    if ext == ".xlsx":
+        from openpyxl import load_workbook
+        wb = load_workbook(file_path, read_only=True, data_only=True)
+        try:
+            raw = [[_cell_text(v) for v in row] for row in wb.worksheets[0].iter_rows(values_only=True)]
+        finally:
+            wb.close()
+    elif ext == ".csv":
+        # 엑셀에서 'CSV' 로 저장하면 한국어 Windows 는 CP949 로 쓴다. UTF-8 이 아니면 그쪽으로 읽는다.
+        for encoding in ("utf-8-sig", "cp949"):
+            try:
+                with open(file_path, encoding=encoding, newline="") as f:
+                    raw = [[c.strip() for c in row] for row in csv.reader(f)]
+                break
+            except UnicodeDecodeError:
+                continue
+        else:
+            raise ToolMasterError("파일 인코딩을 읽지 못했습니다 (UTF-8 또는 CP949 CSV 여야 합니다).")
+    else:
+        raise ToolMasterError(f"지원하지 않는 파일 형식입니다: {ext} (CSV 또는 XLSX)")
+
+    if not raw:
+        raise ToolMasterError("빈 파일입니다.")
+    header = [h.strip() for h in raw[0]]
+    while header and header[-1] == "":        # 엑셀이 남기는 오른쪽 빈 열
+        header.pop()
+    body = []
+    for line_no, cells in enumerate(raw[1:], start=2):
+        cells = list(cells) + [""] * max(len(header) - len(cells), 0)
+        if any(c != "" for c in cells):
+            body.append((line_no, cells))
+    return header, body
+
+
+def _to_decimal(raw, precision, scale):
     try:
-        return float(val_str)
-    except ValueError:
-        return None
+        value = Decimal(raw)
+    except InvalidOperation:
+        raise ValueError(f"숫자가 아닙니다 ('{raw}')")
+    if not value.is_finite() or value < 0:
+        raise ValueError(f"0 이상의 숫자여야 합니다 ('{raw}')")
+    exponent = value.normalize().as_tuple().exponent
+    if isinstance(exponent, int) and -exponent > scale:
+        raise ValueError(f"소수점 아래 {scale}자리까지만 됩니다 ('{raw}')")
+    if value >= Decimal(10) ** (precision - scale):
+        raise ValueError(f"{Decimal(10) ** (precision - scale)} 보다 작아야 합니다 ('{raw}')")
+    return value
 
-def clean_int(val):
-    if pd.isna(val) or val == '?' or str(val).strip() == '':
-        return None
+
+def _to_int(raw):
     try:
-        return int(float(str(val).strip()))
-    except ValueError:
-        return None
-
-def clean_string(val):
-    if pd.isna(val) or val == '?':
-        return None
-    return str(val).strip()
+        value = Decimal(raw)
+    except InvalidOperation:
+        raise ValueError(f"정수가 아닙니다 ('{raw}')")
+    if value != value.to_integral_value() or value < 0:
+        raise ValueError(f"0 이상의 정수여야 합니다 ('{raw}')")
+    return int(value)
 
 
-def normalize_tool_code(val):
-    """엑셀의 공구 코드를 표준 표기(두 자리 0 채움)로 정규화한다.
+def _normalize_row(cells_by_name):
+    """한 행을 DB 에 넣을 값으로 바꾼다. 문제는 (열, 이유) 목록으로 돌려준다."""
+    row, problems = {}, []
+    for col in TOOL_COLUMNS:
+        raw = cells_by_name.get(col, "")
+        try:
+            if raw == "":
+                row[col] = None
+            elif col == "tool_code":
+                code = canonical_tool_code(raw)
+                if code is None:
+                    raise ValueError(f"T번호 형식이 아닙니다 ('{raw}', 예: T06). 미장착이면 비워 두세요")
+                row[col] = code
+            elif col == "iso14649_class":
+                value = raw.upper()
+                if value not in ALLOWED_CLASSES:
+                    raise ValueError(f"정해 둔 분류명이 아닙니다 ('{raw}')")
+                row[col] = value
+            elif col == "hand_of_cut":
+                value = raw.upper()
+                if value not in HAND_OF_CUT_VALUES:
+                    raise ValueError(f"RIGHT / LEFT / NEUTRAL 중 하나여야 합니다 ('{raw}')")
+                row[col] = value
+            elif col in _DECIMAL_COLUMNS:
+                row[col] = _to_decimal(raw, *_DECIMAL_COLUMNS[col])
+            elif col in _INTEGER_COLUMNS:
+                row[col] = _to_int(raw)
+            elif col == "coolant_through":
+                value = raw.upper()
+                if value not in _TRUE | _FALSE:
+                    raise ValueError(f"1 / 0 (또는 TRUE / FALSE) 이어야 합니다 ('{raw}')")
+                row[col] = value in _TRUE
+            else:
+                limit = _STRING_LIMITS.get(col)
+                if limit and len(raw) > limit:
+                    raise ValueError(f"{limit}자를 넘습니다 ({len(raw)}자)")
+                row[col] = raw
+        except ValueError as e:
+            row[col] = None
+            problems.append((col, str(e)))
 
-    T4 / t4 / 'T 4' / 'T04' 는 모두 'T04' 로 통일하고,
-    T19-TIP·설명 문구처럼 형식에 맞지 않는 칸은 None 을 돌려준다.
+    # 장착 공구(T번호 있음)는 분류·직경·날 수가 반드시 있어야 한다 (DB 의 CHECK 와 같은 규칙)
+    if row.get("tool_code"):
+        for col in ("iso14649_class", "cutter_diameter", "number_of_teeth"):
+            if row.get(col) is None and not any(p[0] == col for p in problems):
+                problems.append((col, "장착 공구(T번호 있음)는 비워 둘 수 없습니다"))
+    return row, problems
+
+
+def parse_tool_master(file_path):
+    """파일을 읽어 검사를 통과한 행 목록을 돌려준다. 틀린 곳이 있으면 ToolMasterError."""
+    header, body = _read_table(file_path)
+
+    if "iso14649_class" not in header and any(m in header for m in _LEGACY_MARKERS):
+        raise ToolMasterError(
+            "옛 실험실 공구 시트 형식이라 반영하지 않았습니다.",
+            ["ISO 14649 형식(docs/tool_iso14649.csv 와 같은 열)의 CSV · XLSX 를 올려 주세요. "
+             "대시보드 '공구 마스터' 화면에서 현재 공구 마스터를 CSV 로 내려받아 고쳐 쓰면 됩니다."])
+
+    problems = []
+    unknown = [h or "(빈 이름)" for h in header if h not in TOOL_COLUMNS and h not in DB_FILLED_COLUMNS]
+    missing = [c for c in TOOL_COLUMNS if c not in header]
+    duplicated = sorted({h for h in header if h and header.count(h) > 1})
+    if unknown:
+        problems.append(f"알 수 없는 열: {', '.join(unknown)}")
+    if missing:
+        problems.append(f"없는 열: {', '.join(missing)}")
+    if duplicated:
+        problems.append(f"두 번 나온 열: {', '.join(duplicated)}")
+    if problems:
+        raise ToolMasterError("열 구성이 공구 마스터 형식과 다릅니다.", problems)
+    if not body:
+        raise ToolMasterError("공구 행이 하나도 없습니다.")
+
+    rows, seen_codes = [], {}
+    for line_no, cells in body:
+        if any(c != "" for c in cells[len(header):]):
+            problems.append(f"{line_no}행: 열 이름이 없는 칸에 값이 있습니다")
+        row, row_problems = _normalize_row(dict(zip(header, cells)))
+        problems += [f"{line_no}행 {col}: {why}" for col, why in row_problems]
+        code = row.get("tool_code")
+        if code:
+            if code in seen_codes:
+                problems.append(f"{line_no}행 tool_code: {code} 가 {seen_codes[code]}행에도 있습니다")
+            else:
+                seen_codes[code] = line_no
+        rows.append(row)
+    if problems:
+        raise ToolMasterError(f"{len(problems)}곳이 형식에 맞지 않습니다.", problems)
+    return rows
+
+
+# ---------------------------------------------------------------------------
+# 내보내기 (대시보드 내려받기 · 보관소 보관본)
+# ---------------------------------------------------------------------------
+def _cell_out(value):
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    if isinstance(value, Decimal):
+        text_value = format(value, "f")
+        return text_value.rstrip("0").rstrip(".") if "." in text_value else text_value
+    return str(value)
+
+
+def rows_to_csv(rows):
+    """행 목록(열 이름 → 값)을 업로드 형식 CSV(UTF-8 BOM, bytes)로. 내용이 같으면 바이트도 같다."""
+    buf = io.StringIO(newline="")
+    writer = csv.writer(buf)
+    writer.writerow(TOOL_COLUMNS)
+    writer.writerows([_cell_out(row[col]) for col in TOOL_COLUMNS] for row in rows)
+    return buf.getvalue().encode("utf-8-sig")
+
+
+def export_tool_master_csv():
+    """현재 공구 마스터를 업로드 형식 그대로의 CSV(UTF-8 BOM, bytes)로 내보낸다.
+
+    올린 파일을 그대로 다시 내려받으면 같은 내용이 되도록, tool_id 순서(= 올린 행 순서)를 지킨다.
     """
-    return canonical_tool_code(clean_string(val))
+    with engine.connect() as conn:
+        result = conn.execute(text(f"SELECT {', '.join(TOOL_COLUMNS)} FROM tool ORDER BY tool_id"))
+        rows = [dict(zip(TOOL_COLUMNS, r)) for r in result]
+    for row in rows:
+        if row["coolant_through"] is not None:      # MySQL BOOLEAN 은 0/1 정수로 돌아온다
+            row["coolant_through"] = bool(row["coolant_through"])
+    return rows_to_csv(rows)
 
 
-def archive_tool_excel(file_path):
-    """
-    파싱에 사용한 원본 엑셀을 archive_vault/실험실 공구 정리.xlsx 로 복사 보관한다.
-    보관 폴더에 남아 있던 이전 원본은 모두 지우고 새 파일만 남긴다(최신본 1개 유지).
-    (파일이 삭제되어도 자동 복구하지 않는 단순 보관용이며, 실패해도 DB 동기화는 계속 진행한다)
+def archive_tool_master():
+    """DB 의 공구 마스터를 보관소 루트에 '공구 마스터.csv' 로 남긴다. 보관 경로(실패하면 None).
+
+    보관소를 감시 폴더로 되돌리면(보관소에서 원본 복원) 수집기가 이 파일로 공구 마스터를 다시 채운다.
     """
     try:
-        if not file_path or not os.path.exists(file_path):
-            return None
+        # 내용을 먼저 다 만든 뒤 임시 파일에 쓰고 바꿔 끼운다. 파일을 먼저 열면 그 순간 기존
+        # 보관본이 비워져, 내보내기가 실패했을 때 보관소에 빈 파일만 남는다.
+        data = export_tool_master_csv()
         dest = get_vault_path(TOOL_MASTER_VAULT_FILENAME)
-        if os.path.abspath(file_path) == os.path.abspath(dest):
-            return dest
-
-        # 이름이 고정이라 그냥 덮어쓰면 된다.
-        #
-        # 예전에는 보관 폴더 안의 파일을 전부 지우고 새로 복사했다. 보관소 루트로 자리를
-        # 옮기면 그 순회가 보관소 전체를 쓸어버리므로, 목록 순회·삭제를 아예 없앤다.
-        shutil.copy2(file_path, dest)
+        tmp = dest + ".tmp"
+        with open(tmp, "wb") as f:
+            f.write(data)
+        os.replace(tmp, dest)
         return dest
     except Exception as e:
-        print(f"    - [경고] 공구 엑셀 원본 보관 실패: {e}")
+        print(f"    - [경고] 공구 마스터 보관 실패: {e}")
         return None
 
+
+# ---------------------------------------------------------------------------
+# 교체
+# ---------------------------------------------------------------------------
 def resequence_tool_ids():
     """
     tool_id를 1번부터 빈 번호 없이 다시 부여한다.
@@ -158,8 +390,9 @@ def relink_workingsteps(db):
     """
     공구 마스터를 교체한 뒤 workingstep의 공구 연결을 tool_code 기준으로 다시 맺는다.
     전체 교체 과정에서 tool_id가 새로 부여되므로, XML이 남긴 xml_tool_code(없으면 tool_number)로 재매칭한다.
-    이번 엑셀에 없는 공구 번호를 호출한 Workingstep은 tool_id가 NULL로 남지만
-    tool_number / xml_tool_code는 그대로 보존되므로, 나중에 엑셀에 그 공구를 추가하면 다시 연결된다.
+    이번 파일에 없는 공구 번호를 호출한 Workingstep은 tool_id가 NULL로 남지만
+    tool_number / xml_tool_code는 그대로 보존되므로, 나중에 그 공구를 장착 공구로 넣으면 다시 연결된다.
+    미장착 재고(tool_code 없음)는 T번호가 없으므로 연결 대상이 아니다.
     반환값: (연결된 Workingstep 수, 연결되지 않은 Workingstep 수)
     """
     # 매칭은 표기가 아니라 **번호**로 한다.
@@ -187,89 +420,107 @@ def relink_workingsteps(db):
     return linked, unlinked
 
 
-def parse_and_insert_tools(file_path):
-    print(f"\n  -> [Tool Inserter] 엑셀 파일 로드 중: {os.path.basename(file_path)}")
+def replace_tool_master(rows):
+    """검사를 통과한 행으로 공구 마스터를 통째로 교체한다. 통계 dict 를 돌려준다.
 
+    ORM 객체가 아니라 Core INSERT 에 모든 열을 명시해 넣는다. 그래야 빈 칸이 확실히 NULL 로
+    들어간다(열을 빼면 DB 가 DEFAULT 로 채운다 — 모르는 코너 R 이 0, 모르는 날 수가 1 이 된다).
+    """
     db = SessionLocal()
     try:
-        # Excel 파일 읽기
-        df = pd.read_excel(file_path)
-
-        # 1) 엑셀 전체를 먼저 정규화해 모은다 (같은 공구 코드가 여러 번 나오면 마지막 행 기준)
-        parsed_tools = {}
-        skipped_count = 0
-        duplicate_count = 0
-
-        for index, row in df.iterrows():
-            company = clean_string(row.get('회사명 '))
-            raw_tool_type = clean_string(row.get('공구 종류'))
-            tool_type = translate_tool_type(raw_tool_type) if raw_tool_type else None
-            diameter = clean_number(row.get('직경'))
-            spec = translate_spec(clean_string(row.get('규격')))
-            teeth = clean_int(row.get('날 수'))
-            stock = clean_int(row.get('총 개수'))
-            tool_code = normalize_tool_code(row.get('5축 가공기', row.get('Tool Code', row.get('공구 번호', row.get('공구코드')))))
-            memo = clean_string(row.get('Unnamed: 9', row.get('비고', row.get('Memo'))))
-            
-            # 유효성 검사: T* / T** 형식의 공구 코드가 아니면 XML 런타임 공구 호출과 매핑이 불가능하므로 무조건 스킵한다.
-            # (미입력이거나 T19-TIP·설명 문구 등 규격이 아닌 값은 DB에 적재하지 않는다)
-            if not tool_code:
-                skipped_count += 1
-                continue
-
-            if tool_code in parsed_tools:
-                duplicate_count += 1
-
-            parsed_tools[tool_code] = {
-                "company_name": company,
-                "tool_type": tool_type,
-                "cutter_diameter": diameter,
-                "specification": spec,
-                "tool_teeth": teeth,
-                "stock_count": stock,
-                "memo": memo,
-            }
-
-        # 안전장치: 열 이름이 다르거나 파일이 깨져 유효한 공구가 한 건도 없으면 기존 마스터를 지우지 않는다.
-        if not parsed_tools:
-            db.rollback()
-            print(f"    - [오류] 유효한 공구(T*/T** 코드)를 찾지 못해 교체를 취소했습니다. "
-                  f"기존 공구 마스터는 그대로 유지됩니다. (검사한 행: {len(df)}건)")
-            return
-
-        # 2) 전체 교체: 기존 공구 마스터를 모두 지우고 이번 엑셀 내용만 남긴다.
-        #    workingstep.tool_id는 FK(ON DELETE SET NULL)로 비워지고, 아래에서 tool_code 기준으로 다시 연결한다.
-        deleted_count = db.query(Tool).delete(synchronize_session=False)
-        db.flush()
-
-        for tool_code, values in parsed_tools.items():
-            db.add(Tool(tool_code=tool_code, **values))
-        db.flush()
-
-        # 3) 가공 이력(Workingstep)의 공구 연결 복구
+        deleted = db.query(Tool).delete(synchronize_session=False)
+        db.execute(Tool.__table__.insert(), [{col: row[col] for col in TOOL_COLUMNS} for row in rows])
         linked, unlinked = relink_workingsteps(db)
-
         db.commit()
-        print(f"    - 공구 마스터 교체 완료! (기존 삭제: {deleted_count}건, 신규 등록: {len(parsed_tools)}건, "
-              f"코드 형식 불일치 제외: {skipped_count}건, 중복 코드 병합: {duplicate_count}건)")
-        print(f"    - Workingstep 공구 재연결: 연결 {linked}건 / 미연결 {unlinked}건(엑셀에 없는 공구 번호)")
-
-        # 삽입/삭제 이력 때문에 tool_id가 4번부터 시작하는 등 번호가 비지 않도록 1번부터 다시 정렬한다
-        try:
-            resequenced = resequence_tool_ids()
-            if resequenced:
-                print(f"    - tool_id 정리 완료: {resequenced}건의 번호를 1번부터 빈 번호 없이 다시 부여했습니다")
-        except Exception as e:
-            print(f"    - [경고] tool_id 정리 실패: {e}")
-
-        # 파싱이 성공한 경우에만 원본 엑셀을 고정 파일명으로 보관한다
-        archived_path = archive_tool_excel(file_path)
-        if archived_path:
-            print(f"    - 원본 엑셀 보관: {archived_path}")
-        print("")
-        
-    except Exception as e:
+    except Exception:
         db.rollback()
-        print(f"    - [오류] 공구 DB 동기화 실패: {e}")
+        raise
     finally:
         db.close()
+
+    # 삭제·삽입으로 밀린 번호를 1번부터 다시 정렬한다 (가공 이력 연결도 함께 옮긴다).
+    # 교체는 이미 커밋됐으므로, 여기서 실패해도 교체 실패로 보고하지 않고 경고만 남긴다.
+    try:
+        resequenced = resequence_tool_ids()
+    except Exception as e:
+        print(f"    - [경고] tool_id 정리 실패 (공구 마스터 교체는 완료): {e}")
+        resequenced = 0
+    return {
+        "deleted": deleted,
+        "inserted": len(rows),
+        "mounted": sum(1 for r in rows if r["tool_code"]),
+        "linked": linked,
+        "unlinked": unlinked,
+        "resequenced": resequenced,
+    }
+
+
+def _read_or_report(file_path):
+    """파일을 검사해 (행 목록, None) 또는 (None, 실패 ImportResult) 를 돌려준다."""
+    print(f"\n  -> [Tool Inserter] 공구 마스터 파일 읽는 중: {os.path.basename(file_path)}")
+    try:
+        return parse_tool_master(file_path), None
+    except ToolMasterError as e:
+        print(f"    - [반영 안 함] {e.summary} 기존 공구 마스터는 그대로입니다.")
+        for problem in e.problems[:30]:
+            print(f"        · {problem}")
+        if len(e.problems) > 30:
+            print(f"        · … 외 {len(e.problems) - 30}곳")
+        return None, ImportResult(ok=False, message=e.summary, problems=e.problems)
+    except Exception as e:
+        print(f"    - [오류] 공구 마스터 파일을 읽지 못했습니다: {e}")
+        return None, ImportResult(ok=False, message=f"파일을 읽지 못했습니다: {e}")
+
+
+def parse_and_insert_tools(file_path):
+    """파일로 공구 마스터를 교체한다 (대시보드 업로드 — 사람이 고른 파일이라 항상 반영).
+
+    ImportResult 를 돌려준다. 수집기는 sync_from_watch_folder 를 쓴다.
+    """
+    rows, failure = _read_or_report(file_path)
+    if failure:
+        return failure
+    return _apply(rows)
+
+
+def sync_from_watch_folder(file_path):
+    """수집기용: 감시 폴더의 공구 마스터 파일을 반영하되, 반영할 이유가 없으면 건너뛴다.
+
+    수집기는 기동할 때 감시 폴더의 기존 파일을 모두 다시 처리한다. 보관소 복원으로 놓인
+    '공구 마스터.csv' 가 감시 폴더에 그대로 남아 있으면, 그 뒤 대시보드에서 올린 새 공구 마스터가
+    재시작할 때마다 옛 파일로 조용히 되돌아간다. 그래서 두 경우는 반영하지 않는다.
+      - 내용이 지금 DB 와 같다            → 이미 반영됨 (재시작마다 다시 쓰지 않는다)
+      - 내용이 다른데 마지막으로 반영된 보관본보다 오래된 파일이다 → 되돌림 방지, 경고만
+    DB 를 초기화한 뒤 복원하면 DB 가 비어 있고 파일은 보관본보다 오래되지 않으므로 다시 채워진다.
+    """
+    rows, failure = _read_or_report(file_path)
+    if failure:
+        return failure
+    if rows_to_csv(rows) == export_tool_master_csv():
+        print("    - 지금 공구 마스터와 내용이 같아 건너뜁니다.")
+        return ImportResult(ok=True, message="이미 반영된 내용입니다.")
+    vault_copy = get_vault_path(TOOL_MASTER_VAULT_FILENAME)
+    if os.path.exists(vault_copy) and os.path.getmtime(vault_copy) > os.path.getmtime(file_path):
+        print(f"    - [반영 안 함] 마지막으로 반영된 공구 마스터({vault_copy})보다 오래된 파일입니다. "
+              f"이 파일로 바꾸려면 대시보드 '공구 마스터' 화면에서 올리세요.")
+        return ImportResult(ok=False, message="마지막으로 반영된 공구 마스터보다 오래된 파일입니다.")
+    return _apply(rows)
+
+
+def _apply(rows):
+    try:
+        stats = replace_tool_master(rows)
+    except Exception as e:
+        print(f"    - [오류] 공구 DB 교체 실패 (기존 공구 마스터 유지): {e}")
+        return ImportResult(ok=False, message=f"DB 교체에 실패했습니다: {e}")
+
+    result = ImportResult(ok=True, message="공구 마스터를 교체했습니다.",
+                          archived=archive_tool_master() or "", **stats)
+    print(f"    - 공구 마스터 교체 완료: {result.inserted}건 (장착 {result.mounted} · "
+          f"미장착 {result.unmounted}), 기존 {result.deleted}건 삭제")
+    print(f"    - Workingstep 공구 재연결: 연결 {result.linked}건 / 미연결 {result.unlinked}건"
+          f"(장착 공구에 없는 T번호)")
+    if result.archived:
+        print(f"    - 보관: {result.archived}")
+    print("")
+    return result

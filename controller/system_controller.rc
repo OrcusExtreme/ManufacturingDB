@@ -6,8 +6,8 @@
 1 ICON "..\\assets\\logo.ico"
 
 VS_VERSION_INFO VERSIONINFO
-FILEVERSION     3, 0, 0, 0
-PRODUCTVERSION  3, 0, 0, 0
+FILEVERSION     3, 1, 0, 0
+PRODUCTVERSION  3, 1, 0, 0
 FILEFLAGSMASK   0x3fL
 FILEFLAGS       0x0L
 FILEOS          VOS_NT_WINDOWS32
@@ -20,11 +20,11 @@ BEGIN
         BEGIN
             VALUE "CompanyName",      "Machine Tool Intelligence Lab"
             VALUE "FileDescription",  "Manufacturing DB Controller"
-            VALUE "FileVersion",      "3.0.0.0"
+            VALUE "FileVersion",      "3.1.0.0"
             VALUE "InternalName",     "system_controller"
             VALUE "OriginalFilename", "system_controller.exe"
             VALUE "ProductName",      "Manufacturing DB Controller"
-            VALUE "ProductVersion",   "3.0.0.0"
+            VALUE "ProductVersion",   "3.1.0.0"
         END
     END
     BLOCK "VarFileInfo"

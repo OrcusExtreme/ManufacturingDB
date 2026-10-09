@@ -1,0 +1,51 @@
+﻿tool_code,manufacturer,model_code,iso14649_class,hand_of_cut,cutter_diameter,shank_diameter,cutting_edge_length,overall_length,usable_length,corner_radius,point_angle,approach_angle,helix_angle,number_of_teeth,tool_material,coating_type,coolant_through,stock_count,gauge_length,memo
+T01,YG-1,,ENDMILL,RIGHT,2,6,8,60,,0,,,45,3,CARBIDE,,,5,,ALU-CUT 3날 스퀘어 추정: E5D7002008(무코팅) 또는 GED7002008(DLC). 생크 각인으로 확정
+T02,YG-1,,ENDMILL,RIGHT,4,6,16,65,,0,,,45,3,CARBIDE,,,5,,ALU-CUT 3날 스퀘어: E5D7004016(무코팅) 또는 GED7004016(DLC). 생크 각인으로 확정
+T03,YG-1,,ENDMILL,RIGHT,6,6,17,60,,0,,,,3,CARBIDE,,,8,,후보: ALU-CUT E5D70060/GED70060(비틀림 45°) 또는 ALU-CUT HPC E5I44060/JAI44060(37°). 생크 각인으로 확정
+T04,,,ENDMILL,RIGHT,6,,,,,0,,,,2,,,,1,,제조사·형번 미상 (실험실 시트 '?')
+T05,Renishaw,,TOUCH_PROBE,NEUTRAL,6,,,,,,,,,0,,,0,1,,스핀들 터치 프로브(모델 미상). Ø6은 스타일러스 볼 직경으로 추정 - 교정된 전기적 반경은 별도 관리
+T06,WIDIN,,ENDMILL,RIGHT,12,12,,,,0,,,45,3,CARBIDE,DLC,,5,,시트 분류 '엔드밀'에 따라 플랫으로 둠. 시트 형번 WAR503은 카탈로그상 코너R 시리즈(WAR503120 R0.5·날장 32·전장 80 / WAR503121 R1.0·45·100) - 날장·전장은 실측으로 확정
+T07,Sandvik Coromant,R390-016A16-11L,SHOULDERMILL,RIGHT,16,16,10,100,25,0.8,,90,,2,,,1,1,,"CoroMill 390 인서트형. 인서트 R390-11T308M-PM(RE0.8, 재고 88·사용 4) - 재종 미기재"
+T08,WIDIN,,ENDMILL,RIGHT,20,20,45,100,,0,,,45,3,CARBIDE,UNCOATED,,4,,"시트 분류 '엔드밀'에 따라 플랫으로 둠. 시트 형번 WAR303은 카탈로그상 코너R 시리즈(Ø20 WAR3032010~2050, R1~R5 - 날장 45·전장 100은 공통)"
+T09,OSG,,ENDMILL,RIGHT,8,8,19,60,,0,,,30,4,CARBIDE,,,4,,"4날 스퀘어 단날장 후보: GS-EMS GS9520080K(FX 코팅) / WXL-EMS-8(EDP 3130580, WXL) / 단종 WX-EMS-8(3013080, WX)"
+T11,WIDIN,,BALLNOSE_ENDMILL,RIGHT,5,,,,,2.5,,,50,2,CARBIDE,UNCOATED,,5,,Alu-Wave WAB312 볼(카탈로그 최소 Ø6/R3). 시트의 '5'가 R5(Ø10)일 수 있음 - 직경 실측 필요
+T16,OSG,GP3D1068K,TWIST_DRILL,RIGHT,6.8,7,34,74,22,,140,,30,2,CARBIDE,WDI,,2,,GP-3D 초경 드릴. 시트 'GD-3D1068K'는 오기로 판단. usable_length=유효가공깊이
+T17,YG-1,,TWIST_DRILL,RIGHT,8,8,41,79,,,,,30,2,CARBIDE,,,3,,DIN 6537 단형(3xD) 초경 - Dream Drill 9개 시리즈가 같은 치수(예: DH423080). 각인·오일홀 확인
+T18,OSG,GP3D1090K,TWIST_DRILL,RIGHT,9,9,43,84,27,,140,,30,2,CARBIDE,WDI,,2,,GP-3D 초경 드릴. 시트 'GD-3D1090K'는 오기로 판단. usable_length=유효가공깊이
+T19,YESTOOL,KRUZ 215 + IDP 215,SPADE_DRILL,RIGHT,21.5,25,,,,,130,,,2,CARBIDE,Y+,1,3,,바디 KRUZ 215(3개)+교체식 팁 IDP 215(9개). 시트 20Ø는 오기 - IDP 215=Ø21.5. 바디 깊이기호(T/P/H/L) 미기재로 전장 미확정
+T20,NIKKEN,9-ZMAC20-40V,ROTATING_BORING_CUTTING_TOOL,RIGHT,19.8,,,,40,,,,,1,,,1,1,,조정식 정밀 보링 헤드(시트엔 리머·9-ZMA20-40V). 범위 Ø19.8~25.2 - 세팅 직경 실측 필요. 인서트 3MP-C2/C4(R0.2/0.4)
+T22,NIKKEN,,TOUCH_PROBE,NEUTRAL,6,,,,,,,,,0,,,0,1,,수동식 에지 파인더(LED·CNC 신호 없음). Universal Micro Touch(UMT) 계열 Ø6 추정 - 생크 형식 미확인
+T23,,,REFERENCE_TOOL,NEUTRAL,8,,,,,,,,,0,,,0,1,152.21,마스터 툴(공구 길이 보정 기준). REFERENCE_TOOL은 ISO 14649에 없는 자체 분류
+T29,KYOCERA,MFWN90125R,FACEMILL,RIGHT,125,,8,63,,,,90,,6,,,1,26,,6날 코스피치: -6T-M(보어 Ø40) 또는 -6T(Ø38.1) - 접미사 확인. 재고 26은 인서트 수로 보임(사용 6). 인서트 WNMU0806(RE0.8)
+,,,,,9.7,,,,,,,,,,,,,,,[엑셀 2행] 직경 9.7 외 제조사·종류·규격·날 수·수량 모두 '?' - 확인 필요
+,,,BALLNOSE_ENDMILL,RIGHT,,,,,,,,,,4,,,,,,"[엑셀 3행] 4날 볼 엔드밀, 제조사·직경·규격 '?' - 확인 필요"
+,KYOCERA,,FACEMILL,RIGHT,125,,8,63,,,,90,,8,,,1,20,,"시트 형번 'MTP90125R-22'은 Kyocera에 없음 - 125·8날·90°가 MFWN90125R-8T-M(보어 Ø40)/-8T(Ø38.1)과 일치(추정). 시트 '사용X'·사용 8, 재고 20은 인서트 수로 보임"
+,KYOCERA,,FACEMILL,RIGHT,80,,8,50,,,,90,,5,,,1,5,,시트 형번 'MTP90080R'은 Kyocera에 없음 - 80·5날·90°가 MFWN90080R-5T-M(보어 Ø27)/-5T(Ø25.4)와 일치(추정)
+,KYOCERA,,GROOVING_TOOL,RIGHT,,,,,,,,,,,,,,1,,"선반용 외경 홈가공 홀더(KGM, 자동선반용, ISO 14649-121). 시트 'KGMR1212X-2' → KGMR1212JX-2(전장 120) 또는 KGMR1212F-2-85(85) 추정. 사각 생크 12×12, 홈폭 2.0~3.0"
+,OSG,GP3D1100K,TWIST_DRILL,RIGHT,10,10,47,89,29,,140,,30,2,CARBIDE,WDI,,3,,GP-3D 초경 드릴. 시트 'GD-3D1100K'는 오기로 판단. usable_length=유효가공깊이
+,OSG,GP3D1120K,TWIST_DRILL,RIGHT,12,12,55,102,33,,140,,30,2,CARBIDE,WDI,,3,,GP-3D 초경 드릴. 시트 'GD-3D1120K'는 오기로 판단. usable_length=유효가공깊이
+,OSG,GP3D1160K,TWIST_DRILL,RIGHT,16,16,68,115,38,,140,,30,2,CARBIDE,WDI,,3,,GP-3D 초경 드릴. 시트 'GD-3D1160K'는 오기로 판단. usable_length=유효가공깊이
+,OSG,GP3D1200K,TWIST_DRILL,RIGHT,20,20,79,131,50,,140,,30,2,CARBIDE,WDI,,3,,GP-3D 초경 드릴. 시트 'GD-3D1200K'는 오기로 판단. usable_length=유효가공깊이
+,OSG,,ENDMILL,RIGHT,10,10,25,75,,0,,,,4,CARBIDE,,,3,,시트 규격 75*25*10. 4날 4개 사이즈(10·12·16·20)를 모두 가진 시리즈는 GS-EMS뿐 → GS9620100K 유력. 같은 치수 SP4FX10X25·T4F100B 등은 비틀림각이 달라 비움
+,OSG,,ENDMILL,RIGHT,12,12,26,75,,0,,,30,4,CARBIDE,,,3,,시트 규격 75*26*12. 후보 GS-EMS GS9520120K(유력) / WXL-EMS-12(3130620) / WX-EMS-12
+,OSG,,ENDMILL,RIGHT,16,16,32,100,,0,,,30,4,CARBIDE,,,3,,시트 규격 100*32*16. 후보 GS-EMS GS9520160K(유력) / WXL-EMS-16(3130660)
+,OSG,,ENDMILL,RIGHT,20,20,38,105,,0,,,30,4,CARBIDE,,,3,,시트 규격 105*38*20. 후보 GS-EMS GS9520200K(유력) / WXL-EMS-20(3130700) / WX-EMS-20
+,OSG,,ENDMILL,RIGHT,12,12,30,80,,0,,,30,2,CARBIDE,,,1,,"시트 규격 80*30*12, 직경 칸 비어 있음 - 이 치수의 OSG 2날은 모두 Ø12. 후보 GS-EDS GS9619120K / TS-EDS T2F120B / SP2FX12X30"
+,OSG,,ENDMILL,RIGHT,9,10,,70,,0,,,30,2,CARBIDE,,,4,,시트 '플랫 엔드밀 70*2*10'(날장 2는 오기로 보임)·사용 1. 후보 GS9519090K(날장 19) / T2F090 / SP2FX9X22(22)
+,Sandvik Coromant,R390-11T308M-PM,,RIGHT,,,10,,,0.8,,90,,,,,,88,,"CoroMill 390 인서트 - 공구 본체가 아니라 ISO 14649 cutting_component 라 분류 비움. T07·R390-016A16L-11L용, 사용 4. 인서트당 날 2개·두께 3.59. 재종 미기재"
+,Sandvik Coromant,R390-016A16L-11L,SHOULDERMILL,RIGHT,16,16,10,145,25,0.8,,90,,2,,,1,1,,"CoroMill 390, T07(R390-016A16-11L)과 전장만 다름(145). 시트 '미장착'·사용 1. 인서트 R390-11T308M-PM"
+,WIDIN,,ENDMILL,RIGHT,20,20,,,,0,,,45,2,CARBIDE,UNCOATED,,14,,Alu-Wave WAE302 2날 스퀘어. 후보 WAE302200(날장 50·전장 100) / WAE302200-55(55·110). 사용 1
+,WIDIN,,ENDMILL,RIGHT,20,20,45,100,,0,,,45,2,CARBIDE,UNCOATED,,4,,"시트 분류 '엔드밀'에 따라 플랫으로 둠. 시트 형번 WAR302는 카탈로그상 코너R 시리즈(Ø20 WAR3022010~2050, R1~R5 - 날장 45·전장 100은 공통). 사용 0"
+,WIDIN,,ENDMILL,RIGHT,5,6,,,,0,,,45,3,CARBIDE,UNCOATED,,4,,Alu-Wave WAE303 3날 스퀘어. 후보 WAE303050-06(날장 6·전장 45) / 050(17·55) / 051(22·60) / 052(26·70)
+,YG-1,,BALLNOSE_ENDMILL,RIGHT,10,10,18,100,,5,,,30,2,,,,7,,"시트 규격 10*10*18*100. 6개 사이즈를 모두 가진 2날 볼: E2480·EQ480(HSS-Co8), EP933(분말HSS), SG8A38·SEM813(초경) - 재질·코팅이 갈려 비움. 예: E2480100"
+,YG-1,,BALLNOSE_ENDMILL,RIGHT,3,6,8,60,,1.5,,,30,2,,,,5,,"시트 규격 3*6*8*60. 6개 사이즈를 모두 가진 2날 볼: E2480·EQ480(HSS-Co8), EP933(분말HSS), SG8A38·SEM813(초경) - 재질·코팅이 갈려 비움. 예: E2480030"
+,YG-1,,BALLNOSE_ENDMILL,RIGHT,4,6,8,70,,2,,,30,2,,,,5,,"시트 규격 4*6*8*70. 6개 사이즈를 모두 가진 2날 볼: E2480·EQ480(HSS-Co8), EP933(분말HSS), SG8A38·SEM813(초경) - 재질·코팅이 갈려 비움. 예: E2480901"
+,YG-1,,BALLNOSE_ENDMILL,RIGHT,5,6,10,80,,2.5,,,30,2,,,,13,,"시트 규격 5*6*10*80. 6개 사이즈를 모두 가진 2날 볼: E2480·EQ480(HSS-Co8), EP933(분말HSS), SG8A38·SEM813(초경) - 재질·코팅이 갈려 비움. 예: E2480902"
+,YG-1,,BALLNOSE_ENDMILL,RIGHT,6,6,12,90,,3,,,30,2,,,,7,,"시트 규격 6*6*12*90. 6개 사이즈를 모두 가진 2날 볼: E2480·EQ480(HSS-Co8), EP933(분말HSS), SG8A38·SEM813(초경) - 재질·코팅이 갈려 비움. 예: E2480903"
+,YG-1,,BALLNOSE_ENDMILL,RIGHT,8,8,14,100,,4,,,30,2,,,,1,,"시트 규격 8*8*14*100. 6개 사이즈를 모두 가진 2날 볼: E2480·EQ480(HSS-Co8), EP933(분말HSS), SG8A38·SEM813(초경) - 재질·코팅이 갈려 비움. 예: E2480905"
+,YG-1,,TWIST_DRILL,RIGHT,7,8,34,79,,,,,30,2,CARBIDE,,,1,,시트 규격 7.0*8*34*79. DIN 6537 단형(3xD) - Dream Drill 8개 시리즈가 같은 치수(예: DH423070). 선단각 140°(DH·DTX·DGN)/118°(D5432)
+,YG-1,,ENDMILL,RIGHT,10,10,27,75,,0,,,,3,CARBIDE,,,7,,시트 규격 10*10*27*75. ALU-CUT E5D70100/GED70100(45°) 유력 - T01~T03과 같은 계열. 같은 치수 E5I44100/JAI44100(37°)
+,YG-1,,ENDMILL,RIGHT,5,6,17,55,,0,,,,3,CARBIDE,,,8,,시트 규격 5*6*17*55. ALU-CUT E5D70050/GED70050(45°) 유력 - T01~T03과 같은 계열. 같은 치수 E5I44050/JAI44050(37°)
+,YG-1,,ENDMILL,RIGHT,8,8,22,70,,0,,,,3,CARBIDE,,,8,,시트 규격 8*8*22*70. ALU-CUT E5D70080/GED70080(45°) 유력 - T01~T03과 같은 계열. 같은 치수 E5I44080/JAI44080(37°)
+,JJTOOLS,4SUB 100 180 S10,BALLNOSE_ENDMILL,RIGHT,10,10,18,100,,5,,,45,4,CARBIDE,JCRO,,10,,SUS용 4날 볼. 시트엔 제조사 '4SUB'(시리즈 코드)·규격 '5R*10 100 180 S10'. 사용 7
+,JJTOOLS,3SUE 100 220 S10,ENDMILL,RIGHT,10,10,22,70,,0,,,45,3,CARBIDE,JCRO,,5,,SUS용 3날 스퀘어. 시트엔 제조사 'JJ TOOL'. 형번의 100은 직경 코드(전장은 70). 사용 1

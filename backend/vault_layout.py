@@ -11,7 +11,7 @@
       {Project}/{Part}/{JobID}/XML · NC · TDMS · Log · Surface_Roughness
                               /processed_parquet · etc
       {Project}/{Part}/CAD_Files/
-      실험실 공구 정리.xlsx
+      공구 마스터.csv
 
 왜 바꿨나
 ---------
@@ -83,11 +83,13 @@ def kind_dir_rel(source_folder, kind):
 
 
 def tool_master_rel(file_name=None):
-    """보관소 루트의 공구 마스터 엑셀 (raw_data 루트와 같은 자리)."""
+    """보관소 루트의 공구 마스터 파일 (raw_data 루트와 같은 자리)."""
     return file_name or TOOL_MASTER_FILENAME
 
 
-TOOL_MASTER_FILENAME = "실험실 공구 정리.xlsx"
+# 공구 마스터 보관본. tool_inserter 가 반영에 성공할 때마다 DB 내용을 이 이름의 CSV 로 덮어쓴다.
+# (예전 이름 '실험실 공구 정리.xlsx' 는 ISO 14649 형식 이전의 실험실 시트다 — tool_inserter 설명 참고)
+TOOL_MASTER_FILENAME = "공구 마스터.csv"
 
 
 # ---------------------------------------------------------------------------
