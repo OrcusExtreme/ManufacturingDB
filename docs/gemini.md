@@ -57,7 +57,7 @@ CNC 공작기계 한 번의 가공에서 쏟아지는 **서로 다른 여섯 종
 ```
 Part (부품)
  └─ Workplan (NC 프로그램 단위의 가공 계획)       ← 정적, 1개
-     ├─ Workingstep (공구 호출 순서 · 절삭조건)    ← 정적
+     ├─ Workingstep (공구 · 절삭조건 단위 공정)    ← 정적
      └─ Job (1회 가공 실행 이력)                   ← 동적, N개
          ├─ MachineLog / Inspection / EnvMemo      (각 1:1)
          └─ SurfaceRoughness                        (1:N)
@@ -178,7 +178,10 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
   **지우면 안 됩니다.** 이 import 가 있어야 모델이 `Base.metadata` 에 등록됩니다.
 - **기동 시 보정** — `backend/DB/schema_patch.py` 의 `ensure_schema()` 가 `PENDING_COLUMNS` 목록을
   보고 **빠진 컬럼만** `ALTER TABLE ADD COLUMN` 합니다. 몇 번을 실행해도 안전하며,
-  수집 파이프라인이 시작할 때 자동으로 호출됩니다.
+  새 컬럼을 읽는 모듈이 시작할 때마다 부릅니다: 수집 파이프라인 · TDMS 변환기 · REST API(lifespan) ·
+  대시보드(`components/common.py` 를 처음 불러올 때) · 더미 데이터 청소. 컨트롤러는 모듈을 하나씩 켜고
+  `run_system.py` 는 청소를 수집기보다 먼저 돌리므로, 한 곳에서만 부르면 나머지가 없는 컬럼을 SELECT 해
+  1054(Unknown column) 로 실패합니다.
 
 ---
 
@@ -317,19 +320,25 @@ NC 파일 경로는 `workplan_file_archive` 로 옮겼습니다. `nc_hash` 는 �
 > 해시를 모르는 상태라 `'NOHASH'` 로 들어가고, 나중에 NC 를 읽을 때 `nc_parser` 가 채웁니다.
 > 채우지 않으면 같은 부품에 Workplan 이 두 개 생기고 앞의 것이 고아가 됩니다.
 
-#### `workingstep` — 공구 호출 단위 공정
+#### `workingstep` — 공구 · 절삭조건 단위 공정
+
+같은 공구로, 같은 절삭조건(S·F)으로 이어서 깎은 구간이 한 행입니다. NC 가 있으면 공구 교환과
+S·F 변화에서 나누고([6.2](#62-nc-파서-parsersnc_parserpy)), NC 가 없을 때만 XML 의 `ToolNumbers` 로
+공구당 한 행을 만듭니다. 공구 하나로 조건을 바꿔 가며 깎은 실험은 조건 수만큼 행이 생깁니다
+(2026-11-11 O1110: 공구 3개 · 32행).
 
 | 컬럼 | 타입 | 설명 |
 | :--- | :--- | :--- |
 | `step_id` **PK** | INT AI | |
 | `workplan_id` **FK** | INT | → `workplan`, CASCADE |
 | `tool_id` **FK** | INT | → `tool`, ON DELETE SET NULL |
-| `operation_type` | VARCHAR(50) | 가공 방식 |
-| `step_order` | INT NOT NULL | 공구 호출 순서 |
+| `operation_type` | VARCHAR(50) | 가공 방식 (사람이 DB 테이블 화면에서 적는 칸) |
+| `step_order` | INT NOT NULL | 가공 순서 (공구 교환 · 절삭조건 변화마다 1씩 증가) |
 | `tool_number` | INT NOT NULL | 호출된 공구 번호 |
 | `xml_tool_code` | VARCHAR(50) | 표준 표기 공구 코드 (`T06`). 매칭은 `tool_number` 로 한다 |
-| `feed_rate` | FLOAT | 이송속도 mm/min (NC 파싱) |
+| `feed_rate` | FLOAT | 이송속도 mm/min (NC 파싱, 패스의 대표 F) |
 | `spindle_speed` | FLOAT | 주축 회전수 RPM (NC 파싱) |
+| `depth_of_cut` | FLOAT | 절입 깊이 mm (NC 파싱, 공작물 Z0 기준). 패스마다 깊이가 다르면 NULL |
 
 #### `tool` — 공구 마스터
 
@@ -659,16 +668,20 @@ enable_{종류}=false    → 그 종류만 건너뛴다
 
 1. 루트 태그가 `WorkModel` 이 아니면 건너뜀
 2. 같은 Job 폴더의 NC 파일을 `job_layout.find_files(job_dir, NC, ('.nc',))` 로 탐색
-   (`backup`, `old` 가 이름에 든 파일은 제외) → MD5 앞 8자리를 `nc_hash` 로
+   (파일 이름에 `backup` · `old` 가 **단어로** 든 파일은 제외 — `O1110_old.nc` 는 빠지고
+   `Mold.nc` 나 `MoldBase/` 폴더 안의 NC 는 남는다) → MD5 앞 8자리를 `nc_hash` 로
 3. **Part upsert** — 이름으로 찾고 없으면 생성.
    프로젝트·부품 이름은 XML 내부 값보다 **폴더 구조를 우선**합니다. XML 내부 값이 부정확한
    경우가 많아서입니다.
 4. **Workplan upsert** — `(part_code, program_code, nc_hash)` 로 조회.
    없고 해시를 아는 경우, 같은 부품·프로그램의 `NOHASH` 행이 있으면 **그 행의 해시를 채워
    재사용**합니다(고아 Workplan 방지).
-5. **Workingstep 생성** — `ToolNumbers/int` 목록을 순회. 새 Workplan 일 때만 생성합니다
-   (정적 계획이므로 한 번만).
-6. **NC 절삭조건 동기화** — `sync_workplan_nc_cutting_conditions()` 호출
+5. **Workingstep — NC 기준** — `sync_workplan_nc_cutting_conditions(..., commit=False)` 로
+   NC 를 조건별 스텝으로 만듭니다(새 Workplan 이든 재사용이든). 이 함수는 parse_xml 의
+   트랜잭션 안에서 flush 까지만 하고, DB 오류는 위로 올려 Part·Workplan 과 함께 rollback 됩니다.
+6. **Workingstep — XML 대체** — NC 를 찾지 못했거나 읽지 못한 **새** Workplan 에서만
+   `ToolNumbers/int` 로 공구당 한 행을 만듭니다. 나중에 NC 가 도착하면 `parse_nc` 가 조건별로 다시 만듭니다.
+   `ToolNumbers` 는 그와 별개로 늘 `job.tool_conditions` 를 채웁니다.
 7. **Job upsert** — `job_id` PK 또는 `source_folder` 로 조회.
    `source_folder` 는 **반드시 실제 디스크 폴더와 일치**해야 합니다. 어긋나면 같은 폴더의 다른
    파일이 Job 을 못 찾아 중복 Job 을 만들고, 다운로드·복구가 폴더를 "유실됨"으로 오판합니다.
@@ -680,30 +693,65 @@ enable_{종류}=false    → 그 종류만 건너뛴다
 
 ### 6.2 NC 파서 (`parsers/nc_parser.py`)
 
-**`parse_nc_cutting_conditions(nc_input)`** — G코드에서 공구 호출 단위로 `(T, S, F)` 를 뽑습니다.
-경로·바이트열·문자열을 모두 받으며, 인코딩은 `utf-8 → cp949 → euc-kr → latin1` 순으로 시도합니다.
+**`parse_nc_cutting_conditions(nc_input)`** — G코드를 워킹스텝 단위로 나눠
+`(T, S, F, 절입 깊이)` 를 뽑습니다. 경로·바이트열·문자열을 모두 받으며, 인코딩은
+`utf-8 → cp949 → euc-kr → latin1` 순으로 시도합니다. 반환 dict 에는 `pass_count`(그 스텝으로 합친
+절삭 패스 수, 절삭 없이 호출만 된 공구는 0)도 들어 있습니다(DB 에는 저장하지 않음).
 
-파싱 규칙:
+**워킹스텝 분리 규칙** — 한 스텝 = 같은 공구로, 같은 절삭조건(S·F)으로 이어서 깎은 구간.
+
+예전에는 공구 교환에서만 끊어서, 공구 하나로 조건을 바꿔 가며 깎은 실험(2026-11-11 O1110:
+공구 3개로 조건 32개)이 공구당 한 행으로 뭉치고 그 행에는 마지막 S 와 첫 F 가 섞여
+실제로 깎은 적 없는 조합(T1: S9500 / F150)이 적혔습니다.
+
+| 용어 | 규칙 |
+| :--- | :--- |
+| 경계 | ① 공구 교환 — M6 이 있는 프로그램은 M6 에서(T 만 적힌 줄은 다음 공구 예약), 없는 프로그램은 T 가 바뀔 때 ② 같은 공구 안에서 절삭 패스의 S 나 대표 F 가 바로 앞 패스와 다를 때 |
+| 절삭 패스 | 급속 이동(G0) · 원점 복귀(G28/G30) 사이에 이어지는 절삭 이동(G1/G2/G3, 고정 사이클). 깎는 도중 S 가 바뀌면 거기서 끊는다 |
+| 대표 F | 그 패스에서 **XY 로 가장 길게** 깎은 이송. CAM 은 Z 진입을 낮은 F 로, 그것도 소재 위 높은 곳부터 내리는 일이 많아(AUTOMA 출력: Z49.5 → Z-2 를 F400, 절삭은 F600) 거리나 줄 수로 세면 진입 이송이 대표가 된다 |
+| 보조 패스 | XY 이동 없이 Z 로만 움직인 패스(수직 진입)와, 같은 공구의 다른 패스는 Z0 아래로 내려가는데 Z0 위에서만 움직인 패스(공중 이송). 경계를 만들지 않는다. 공구 구간 전체가 보조 패스뿐이면(G1 드릴링 · 고정 사이클) 그것들로 스텝을 만든다 |
+| 절입 깊이 | 공작물 좌표 Z0 을 소재 윗면으로 보고 패스가 내려간 가장 낮은 Z 의 깊이(mm). Z0 위에서만 깎았거나 Z 를 모르면(G28 뒤 Z 미지령) NULL. 한 스텝의 패스들이 같은 깊이일 때만 적고, 섞이면 NULL |
+
+깊이는 **경계가 아닙니다.** 깊이로 나누면 CAM 의 층 가공이 층마다 쪼개집니다
+(O0912(EDGECAM) T6 은 같은 조건으로 Z-3 / Z-4 를 번갈아 깎아 8개로 갈라진다). 그래서 S·F 는
+그대로 두고 깊이만 바꾼 패스들은 한 스텝이 되고, 그 스텝의 절입 깊이는 비어 있습니다.
+
+위치는 공작물 좌표로 추적합니다(G90/G91, G17/G18/G19 원호 길이, I·J 만 적은 제자리 원호 포함).
+축 글자가 있어도 이동이 아닌 코드(G04 · G10), 위치를 잃는 코드(G28 · G30 · G31 · G52 · G53 · G65 · G66),
+G92 좌표 설정을 구분합니다.
 
 | 대상 | 정규식 | 비고 |
 | :--- | :--- | :--- |
-| 공구 교체 | `(?<![#A-Z])M0?6(?![0-9])` + `T(\d+)` | M6 + T 가 같은 줄이면 새 스텝 시작 |
-| 주축 회전수 | `(?<![#A-Z])S(\d+(?:\.\d*)?)` | 마지막 값 채택 |
-| 이송속도 | `(?<![#A-Z])F(\d+(?:\.\d*)?)` | 절삭(G1/G2/G3 또는 축 이동) 값 중 **최빈값** |
+| 공구 교체 | `(?<![#A-Z])M0?6(?![0-9])` + `T(\d+)` | T 는 예약, M6 에서 교체 |
+| 주축 회전수 | `(?<![#A-Z])S(\d+(?:\.\d*)?)` | 패스가 시작될 때의 값 |
+| 이송속도 | `(?<![#A-Z])F(\d+(?:\.\d*)?\|\.\d+)` | 패스별 대표 F (위 규칙) |
+| G 코드 | `(?<![#A-Z])G0*(\d{1,2})(?:\.\d+)?(?![0-9])` | `G90G00G54` 처럼 붙여 쓴 형태, `G54.1` 도 |
 
 `(?<![#A-Z])` 는 `G43H6` 의 `H6`, `#100` 같은 변수를 공구 번호로 오인하지 않기 위한 것입니다.
-주석 `( ... )`, `< ... >`, `; ...` 과 `%` 줄은 먼저 제거합니다.
+주석 `( ... )`, `< ... >`, `; ...` 과 `%` 줄은 먼저 제거합니다(`T01 M6 (T13_FACEMILL)` 의 T13 은 무시).
 
 `compact` 포맷(`S3800M3`, `G1Z-2F710`, `M6T6`)과 공백 구분 포맷을 모두 지원합니다.
 
-**`sync_workplan_nc_cutting_conditions(db, workplan_id, ...)`**
+**`sync_workplan_nc_cutting_conditions(db, workplan_id, nc_file_path=None, nc_content=None, commit=True)`**
+
+NC 가 있으면 NC 가 스텝 목록의 기준입니다. NC 는 넘겨받은 내용 → 파일 경로 → NC 아카이브(BLOB →
+원본 경로) 순으로 찾습니다.
 
 ```python
 db.flush()   # ← 반드시 먼저. 이유는 아래
-existing_steps = db.query(Workingstep).filter(...).all()
-if existing_steps:   # 기존 스텝에 조건만 채운다 (공구번호 매칭 → 실패 시 step_order)
-else:                # 스텝이 없으면 NC 기준으로 새로 만든다
+existing = db.query(Workingstep).filter(...).order_by(step_order).all()
+if 공구 순서가 NC 결과와 같다:   # 값(S · F · 절입 깊이)만 맞춘다 — step_id · operation_type 유지
+else:                            # 지우고 NC 기준으로 다시 만든다
 ```
+
+- 예전 규칙(공구당 한 행)이나 XML `ToolNumbers` 로 만든 스텝은 모양이 달라 다시 만들어집니다.
+  `step_id` 를 참조하는 테이블은 없습니다. 사람이 적은 `operation_type` 은 공구 번호로 대응이
+  분명할 때(그 공구의 옛 행이 모두 같은 값)만 새 행으로 옮깁니다.
+- 같은 NC 로 다시 불러도 행이 바뀌지 않습니다(같은 모양 → 값만 맞춤).
+- NC 를 못 찾거나 절삭 블록이 없으면 아무것도 바꾸지 않고 `False`. NC 를 읽다 실패해도 `False` 이고 행은 그대로입니다.
+- `commit=False` 는 호출한 쪽(`xml_parser`)이 트랜잭션을 쥐고 있을 때 씁니다. flush 까지만 하고 DB 오류는
+  그대로 올려 보냅니다. 예전에는 이 함수가 도중에 commit/rollback 해서 `xml_parser` 가 아직 커밋하지 않은
+  Part · Workplan 까지 같이 확정하거나 날렸습니다.
 
 > **`db.flush()` 가 없으면 스텝이 두 배로 생깁니다.** `xml_parser` 는 Workingstep 을
 > `db.add()` 로 세션에 담아두기만 한 채 이 함수를 부릅니다. 세션이 `autoflush=False` 라
@@ -1623,10 +1671,11 @@ tdms_files/Job_{job_id}/...           <- job_id 로만 묶여 있다
 
 | 파일 | 실행 방법 | 내용 |
 | :--- | :--- | :--- |
-| `test_nc_parser.py` | `pytest` | NC 절삭조건 파싱 4케이스 |
+| `test_nc_parser.py` | `pytest` | 워킹스텝 분리 규칙(공구 교환 + S·F 변화) · 대표 F · 보조 패스 · 절입 깊이. 실측 NC(`fixtures/`: 2026-11-11 O1110 32스텝, O0912 EDGECAM) 포함 |
+| `test_nc_workingstep_sync.py` | `pytest` | NC 기준 워킹스텝 재구성(예전 공구당 한 행 → 조건별), 멱등, 트랜잭션, XML · NC 도착 순서, 백업 NC 판정 (SQLite) |
 | `test_controller_integration.py` | `pytest` | 토글·파서 skip·프로세스 수명·exe 동작 |
 | `test_tdms_alignment.py` | **단독 실행** | 합성 TDMS 로 31개 검사 |
-| `verify_e2e_cutting_conditions.py` | **단독 실행** | 실제 DB 연동 E2E 검증 (테스트 행을 만들었다 지움) |
+| `verify_e2e_cutting_conditions.py` | **단독 실행** | 실제 DB 연동 E2E 검증: O1110 → 32행 · 절입 깊이 · 재동기화 · 화면 쿼리 (테스트 행을 만들었다 지움, 시작 때 `ensure_schema`) |
 | `test_user_management.py` | `pytest` | 가입 신청 · 승인 · 멤버 삭제 (SQLite) |
 | `test_tool_master_parse.py` | `pytest` | 공구 마스터 파일 검사 · 수집기 반영 판단 (DB 없음) |
 | `test_reset_options.py` | `pytest` | 초기화 항목 조합 · 모듈 감지 · 보관소 보호 · 명령줄 (DB 없음) |
@@ -1635,7 +1684,7 @@ tdms_files/Job_{job_id}/...           <- job_id 로만 묶여 있다
 | `test_setup_target.py` | `pytest` | 설치 마무리: `.env` 쓰기 · `my.ini` · 입력 검사 · `sc` 출력 해석 · Setup 과의 약속 (MySQL 없음) |
 
 ```bash
-python -m pytest backend/tests/test_nc_parser.py backend/tests/test_controller_integration.py -q
+python -m pytest backend/tests/test_nc_parser.py backend/tests/test_nc_workingstep_sync.py backend/tests/test_controller_integration.py -q
 python backend/tests/test_tdms_alignment.py
 python backend/tests/verify_e2e_cutting_conditions.py
 ```

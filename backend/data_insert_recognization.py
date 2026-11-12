@@ -459,6 +459,14 @@ def start_pipeline(watch_dir):
     except Exception as v_err:
         print(f"[경고] 원본 복원 검증 백그라운드 시작 실패: {v_err}")
 
+    # 가공 시각의 외기 온습도·날씨는 파서가 아니라 별도 스레드가 채운다 (backend/weather_service.py).
+    # 파서 안에서 인터넷을 부르면 네트워크가 느릴 때 이 워커 하나로 도는 수집 전체가 멈춘다.
+    try:
+        from weather_service import start_weather_autofill
+        start_weather_autofill()
+    except Exception as w_err:
+        print(f"[경고] 날씨 자동 기록 시작 실패: {w_err}")
+
     event_handler = MachiningDataHandler()
     
     print(f"[알림] 기존 파일 스캔 중... ({watch_dir})")

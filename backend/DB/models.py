@@ -200,21 +200,31 @@ class Tool(Base):
 
 
 class Workingstep(Base):
+    """Workplan 안의 가공 단위 — 같은 공구로, 같은 절삭조건(S·F)으로 이어서 깎은 구간.
+
+    NC 가 있으면 공구 교환과 S·F 변화에서 나눈다(규칙은 parsers/nc_parser.py 의
+    "워킹스텝 분리 규칙" 한 곳). 공구 하나로 조건을 바꿔 가며 깎은 실험은 조건마다 한 행이다.
+    NC 가 없을 때만 XML 의 ToolNumbers(공구 호출 순서)로 공구당 한 행을 만든다.
+    """
     __tablename__ = "workingstep"
-    __table_args__ = {'comment': 'ISO14649 Workingstep: Workplan 내의 개별 가공 단위(공구 호출 순서)'}
+    __table_args__ = {'comment': 'ISO14649 Workingstep: Workplan 내의 개별 가공 단위 (공구 교환 · 절삭조건 변화마다 한 행)'}
 
     step_id = Column(Integer, primary_key=True, autoincrement=True)
     workplan_id = Column(Integer, ForeignKey("workplan.workplan_id", ondelete="CASCADE"), nullable=False)
     tool_id = Column(Integer, ForeignKey("tool.tool_id", ondelete="SET NULL"), comment='연결된 공구 ID')
     operation_type = Column(String(50), comment='가공방식 (MachiningOperation 병합)')
-    
-    step_order = Column(Integer, nullable=False, comment='공구 호출 순서 (Index)')
+
+    step_order = Column(Integer, nullable=False, comment='가공 순서 (공구 교환 · 절삭조건 변화마다 1씩 증가)')
     tool_number = Column(Integer, nullable=False, comment='호출된 공구 번호 (예: 11, 15, 16, 17)')
     # 표준 표기로 적는다 (NC/XML 이 T6 으로 적어도 T06 으로 기록).
     # 공구 마스터와의 연결은 아래 tool_number(정수)로 한다.
     xml_tool_code = Column(String(50), comment='호출 공구 표준 표기 (T06 형태)')
     feed_rate = Column(Float, comment='가공 이송속도 (mm/min, NC코드 파싱)')
     spindle_speed = Column(Float, comment='스핀들 주축 회전수 (RPM, NC코드 파싱)')
+    # 공작물 좌표 Z0 을 소재 윗면으로 보고 이 스텝의 절삭 패스가 내려간 깊이.
+    # 패스마다 깊이가 다르면(층을 나눠 내려가는 가공) 한 값으로 말할 수 없어 비운다.
+    # 깊이는 스텝을 나누는 기준이 아니다 (nc_parser 의 분리 규칙 참고).
+    depth_of_cut = Column(Float, comment='절입 깊이 (mm, NC코드 파싱: 공작물 Z0 기준, 깊이가 섞인 스텝은 NULL)')
 
     workplan = relationship("Workplan", back_populates="workingsteps")
     tool = relationship("Tool", back_populates="workingsteps")
@@ -264,6 +274,44 @@ class Job(Base):
     # 파일 경로는 전부 이쪽에 있다. job.file_archive.tdms_raw_path 처럼 읽는다.
     file_archive = relationship("JobFileArchive", back_populates="job",
                                 cascade="all, delete-orphan", uselist=False)
+    tool_assignments = relationship("JobToolAssignment", back_populates="job",
+                                    cascade="all, delete-orphan")
+
+
+class JobToolAssignment(Base):
+    """Job 에서 T번호(매거진 포트)마다 실제로 꽂혀 있던 공구. 업로드 화면에서 사람이 지정한다.
+
+    Workingstep.tool_id 와 무엇이 다른가
+      Workingstep 은 Workplan(NC 프로그램)에 속해 같은 NC 를 돌린 Job 들이 함께 쓰고, 공구 연결은
+      '지금 공구 마스터의 T번호' 로 자동으로 맺는다. 공구 마스터를 교체하면 과거 것까지 다시 맺는다.
+      이 테이블은 '그 Job 에서 실제로 쓴 공구' 다. 같은 NC 를 다시 돌릴 때 공구를 바꿔 끼웠어도
+      Job 마다 따로 남고, T번호가 없는 미장착 재고도 고를 수 있다.
+
+    왜 스냅샷을 같이 두나
+      공구 마스터는 파일로 통째로 교체되고 tool_id 도 새로 매겨진다(tool_inserter). tool_id 만 들고
+      있으면 교체 뒤에 그 공구가 무엇이었는지 알 수 없다. 지정할 때의 제원을 스냅샷으로 남기고,
+      교체 뒤에는 제원이 정확히 한 행과 같을 때만 tool_id 를 다시 잇는다
+      (tool_assignment.relink_job_tool_assignments). 이을 행이 없으면 스냅샷이 근거로 남는다.
+
+    tool_id 와 tool_snapshot 이 모두 NULL 인 행은 '사람이 확인했지만 공구 마스터에 없는 공구' 다.
+    이 행이 있으면 T번호 자동 연결로 대신하지 않는다.
+    """
+    __tablename__ = "job_tool_assignment"
+    __table_args__ = {'comment': 'Job 별 T번호 -> 실제 사용 공구 (업로드 때 지정, 공구 마스터 교체와 무관하게 유지)'}
+
+    job_id = Column(Integer, ForeignKey("job.job_id", ondelete="CASCADE"), primary_key=True,
+                    autoincrement=False, comment='가공 이력')
+    tool_number = Column(Integer, primary_key=True, autoincrement=False,
+                         comment='NC/XML 이 부른 공구 번호 (T6 -> 6, 공구 호출 전 구간은 0)')
+    tool_id = Column(Integer, ForeignKey("tool.tool_id", ondelete="SET NULL"),
+                     comment='지정한 공구 마스터 행 (마스터 교체 뒤 스냅샷 제원으로 다시 연결)')
+    source = Column(String(10), nullable=False, comment='MANUAL: 화면에서 지정·확인')
+    tool_snapshot = Column(JSON, comment='지정 시점 공구 제원 (공구 마스터 CSV 와 같은 글자 표기)')
+    assigned_by = Column(String(50), comment='지정한 작업자')
+    assigned_at = Column(DateTime, comment='지정 시각')
+
+    job = relationship("Job", back_populates="tool_assignments")
+    tool = relationship("Tool")
 
 
 class MachineLog(Base):
@@ -325,14 +373,21 @@ class EnvMemo(Base):
     env_id = Column(Integer, primary_key=True, autoincrement=True)
     job_id = Column(Integer, ForeignKey("job.job_id", ondelete="CASCADE"), nullable=False, unique=True)
     worker_name = Column(String(50), comment='작업자')
-    temperature = Column(Float, comment='온도')
-    humidity = Column(Float, comment='습도')
+    # 사람이 업로드 화면에서 적는 칸이다. 비어 있으면 가공 시각의 외기 값을 자동으로 채운다
+    # (backend/weather_service.py). 어느 칸이 자동인지는 weather_source 에 남는다.
+    temperature = Column(Float, comment='온도 (℃, 수기 · 비어 있으면 가공 시각 외기 자동)')
+    humidity = Column(Float, comment='습도 (%, 수기 · 비어 있으면 가공 시각 외기 자동)')
     # 가공 시작시각(job.start_time)에서 자동으로 채운다 (영어: Monday~Sunday).
     # 파생값이라 사람이 입력하지 않는다 — 아래 _sync_day_of_week 참고.
     day_of_week = Column(String(10), comment='요일 (job.start_time 에서 자동 계산, 영어)')
     chip_shape = Column(String(100), comment='칩 형태')
     abnormal_noise = Column(String(100), comment='이상 소음')
     free_memo = Column(Text, comment='자유 메모')
+    # 가공 시각의 날씨 (backend/weather_service.py 가 채운다). 온도·습도 칸은 수기 값과 외기 값이
+    # 같은 칸에 섞이므로, 자동으로 채운 칸의 이름을 weather_source 에 남겨 분석할 때 가른다.
+    weather = Column(String(30), comment='날씨 (가공 시각 외기, 자동: 맑음/구름많음/흐림/비/눈 …)')
+    weather_source = Column(String(100), comment="자동으로 채운 칸과 출처 (예: 'open-meteo:temperature,humidity,weather')")
+    weather_time = Column(DateTime, comment='자동 기록에 쓴 기준 정시 (KST). NULL 이면 아직 자동 기록 전')
 
     job = relationship("Job", back_populates="env_memo")
 

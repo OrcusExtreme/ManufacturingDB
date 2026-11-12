@@ -12,7 +12,9 @@ from vault_manager import PROCESSED_ROOT
 import job_layout
 import vault_layout
 from .filters import render_search_filters, render_job_table
+from .tool_picker import render_job_tools
 from cad_viewer_component import find_cad_file_name, render_cad_viewer
+from weather_service import describe as describe_weather
 
 
 # 카드 안에 들어가는 그래프/표 높이를 한곳에서 관리해, 화면 전체가 같은 세로 리듬으로 정렬되게 한다.
@@ -407,6 +409,8 @@ def _render_analysis_tab(target_job_id, job_info, sr_df):
                     ("온도 / 습도",
                      f"{temp_val:.1f} °C / {hum_val:.1f} %" if pd.notnull(temp_val) and pd.notnull(hum_val)
                      else f"{_fmt(temp_val)} / {_fmt(hum_val)}"),
+                    # 날씨 칸이 생기기 전(스키마 보정 전)의 DB 에서도 카드가 깨지지 않게 .get 으로 읽는다.
+                    ("날씨", _fmt(env_row.get('weather'))),
                     ("작업자", _fmt(env_row['worker_name'])),
                     ("요일", _fmt(env_row['day_of_week'])),
                     ("칩 형태", _fmt(env_row['chip_shape'])),
@@ -414,8 +418,20 @@ def _render_analysis_tab(target_job_id, job_info, sr_df):
                     # 메모 값 자체가 '없음'일 수 있어, 미입력 표기는 다른 항목과 같은 '-'로 통일한다.
                     ("수기 메모", _fmt(env_row['free_memo'])),
                 ])
+                # 온도·습도 칸에는 사람이 적은 값과 가공 시각 외기 값(자동)이 섞일 수 있어 어느 쪽인지 밝힌다.
+                weather_time = env_row.get('weather_time')
+                auto_note = describe_weather(env_row.get('weather_source'),
+                                             weather_time if pd.notnull(weather_time) else None)
+                if auto_note:
+                    st.caption(auto_note)
             else:
                 _empty_note("환경 및 메모 데이터 없음")
+
+    # ── 사용 공구: T번호마다 실제로 쓴 공구. 업로드 때 지정한 공구가 있으면 그것, 없으면 T번호 자동 연결.
+    with st.container(border=True):
+        _card_header(":material/build:", "사용 공구 (T번호 → 공구 마스터)")
+        from .auth_view import current_worker_name
+        render_job_tools(target_job_id, worker_name=current_worker_name())
 
     # ── 그래프 패널: 파형 3종을 하나의 패널로 묶고, 세 카드는 서로 높이를 맞춘다.
     with st.container(border=True):

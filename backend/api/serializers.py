@@ -69,7 +69,18 @@ def job_to_full_dict(job: Any) -> Dict[str, Any]:
     data["inspection"] = model_to_dict(job.inspection) if job.inspection else None
 
     # 5. 환경 및 작업자 메모 (EnvMemo)
+    #    온도·습도는 수기 값이거나 가공 시각 외기 자동 값이다. 어느 칸이 자동인지는 weather_source 에 있다.
     data["env_memo"] = model_to_dict(job.env_memo) if job.env_memo else None
+
+    # 5-1. T번호마다 실제로 쓴 공구 (업로드 때 지정한 공구 > 공구 마스터의 같은 T번호 자동 연결)
+    try:
+        from sqlalchemy.orm import object_session
+        from tool_assignment import job_tool_rows
+        session = object_session(job)
+        data["tools"] = job_tool_rows(session.connection(), job.job_id) if session else None
+    except Exception as e:      # 공구 표를 못 만들어도 나머지 프로필은 돌려준다
+        print(f"[API] Job {getattr(job, 'job_id', '?')} 공구 목록을 만들지 못했습니다: {e}")
+        data["tools"] = None
 
     # 6. 파일 아카이브 경로 메타데이터 (JobFileArchive)
     if hasattr(job, "file_archive") and job.file_archive:

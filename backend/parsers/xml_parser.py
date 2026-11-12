@@ -1,4 +1,5 @@
 import os
+import re
 import hashlib
 import xml.etree.ElementTree as ET
 from sqlalchemy import text
@@ -13,6 +14,10 @@ from integrity import sha256_bytes
 from tool_codes import format_tool_code, index_by_number, tool_number_from_label
 from job_manager import (discard_orphan_workplan, ensure_env_memo,
                          _same_part_scope as job_manager_same_part)
+
+# 'O1110_old.nc' · 'backup_O1110.nc' · 'O1110(OLD).nc' 는 걸리고 'Mold.nc' · 'Holder.nc' 는 안 걸린다.
+_STALE_NC_NAME_RE = re.compile(r'(?<![a-z])(backup|old)(?![a-z])', re.IGNORECASE)
+
 
 def safe_float(val, default=0.0):
     try:
@@ -49,8 +54,11 @@ def parse_xml(file_path, job_id):
         job_dir = job_layout.job_dir_of(file_path)
         nc_files = job_layout.find_files(job_dir, job_layout.NC_DIR, ('.nc',))
 
-        # 백업 파일 매핑 방지 필터링
-        valid_nc_files = [f for f in nc_files if 'backup' not in f.lower() and 'old' not in f.lower()]
+        # 백업·이전 판 NC 는 매핑하지 않는다. 판정은 파일 이름에서만, 단어 단위로 한다.
+        # 예전에는 전체 경로에 부분 문자열로 검사해서 'Mold' · 'Holder' 처럼 폴더 이름에
+        # old 가 들어간 Job 은 NC 를 통째로 놓쳤다 (해시 NOHASH, 워킹스텝은 XML 공구 목록으로만).
+        valid_nc_files = [f for f in nc_files
+                          if not _STALE_NC_NAME_RE.search(os.path.basename(f))]
         nc_file_path = valid_nc_files[0] if valid_nc_files else None
         
         nc_hash = "NOHASH"
@@ -194,7 +202,16 @@ def parse_xml(file_path, job_id):
                 if tool_num_in_props is not None:
                     tool_properties[tool_num_in_props] = props
                     
-        # 3. Workingstep Insert & Job 런타임 상태(tool_conditions) 구성
+        # 3. Workingstep — NC 가 있으면 NC 가 기준이다 (nc_parser 의 "워킹스텝 분리 규칙":
+        #    공구 교환 + S·F 변화). XML 의 ToolNumbers 는 공구 호출 목록일 뿐이라 같은 공구로
+        #    조건을 바꿔 가며 깎은 구간을 나누지 못한다 (2026-11-11 O1110: 조건 32개가 3행으로 뭉쳤다).
+        #    commit=False: 이 함수가 쥔 트랜잭션 안에서 flush 까지만 한다. DB 오류는 아래 except 로
+        #    올라와 Part·Workplan 과 함께 rollback 된다. (예전에는 동기화 함수가 도중에 commit 했다)
+        from parsers.nc_parser import sync_workplan_nc_cutting_conditions
+        steps_from_nc = sync_workplan_nc_cutting_conditions(
+            db, workplan_id, nc_file_path=nc_file_path, nc_content=nc_binary_data, commit=False)
+
+        # Job 런타임 상태(tool_conditions) 구성
         tool_conditions_list = []
         tool_numbers_node = root.find('ToolNumbers')
         if tool_numbers_node is not None:
@@ -206,8 +223,9 @@ def parse_xml(file_path, job_id):
                 props = tool_properties.get(tool_num, {})       # 매칭은 번호로
                 target_tool_id = tool_by_number.get(tool_num)
 
-                # 새로운 Workplan일 경우에만 Workingstep을 생성(정적 계획이므로 1번만 생성)
-                if is_new_workplan:
+                # NC 를 찾지 못했거나 읽지 못한 새 Workplan 에서만 ToolNumbers 로 공구당 한 행씩
+                # 만든다 (정적 계획이므로 한 번만). 나중에 NC 가 들어오면 parse_nc 가 조건별로 다시 만든다.
+                if is_new_workplan and not steps_from_nc:
                     step = Workingstep(
                         workplan_id=workplan_id,
                         tool_id=target_tool_id,
@@ -231,13 +249,6 @@ def parse_xml(file_path, job_id):
                     "offsets": offsets
                 })
 
-        # NC 코드가 존재하면 Workingstep의 feed_rate, spindle_speed 동기화
-        try:
-            from parsers.nc_parser import sync_workplan_nc_cutting_conditions
-            sync_workplan_nc_cutting_conditions(db, workplan_id, nc_file_path=nc_file_path, nc_content=nc_binary_data)
-        except Exception as e_nc:
-            print(f"[XML Parser] NC 가공조건 동기화 중 경고 ({workplan_id}): {e_nc}")
-        
         # 4. Job Upsert (런타임 실행 이력)
         start_time_text = root.findtext('StartTime')
         end_time_text = root.findtext('FinishTime')

@@ -245,7 +245,7 @@
     </div>
 
     <script>
-        // 14개 테이블 노드 좌표
+        // 15개 테이블 노드 좌표
         const nodes = {
             "part": {"x": 360, "y": 30, "w": 110, "h": 56, "name": "Part"},
             "tool": {"x": 30, "y": 170, "w": 100, "h": 56, "name": "Tool"},
@@ -253,6 +253,7 @@
             "workplan": {"x": 440, "y": 170, "w": 120, "h": 56, "name": "Workplan"},
             "workingstep": {"x": 25, "y": 330, "w": 125, "h": 56, "name": "Workingstep"},
             "job": {"x": 445, "y": 330, "w": 110, "h": 56, "name": "Job"},
+            "job_tool_assignment": {"x": 200, "y": 322, "w": 160, "h": 56, "name": "JobToolAssignment"},
             "workplan_file_archive": {"x": 640, "y": 330, "w": 165, "h": 56, "name": "WorkplanFileArchive"},
             "machine_log": {"x": 25, "y": 490, "w": 125, "h": 56, "name": "MachineLog"},
             "inspection": {"x": 235, "y": 490, "w": 115, "h": 56, "name": "Inspection"},
@@ -270,6 +271,8 @@
             {"from": "tool", "to": "workingstep", "type": "1:N", "path": "M 80 226 L 80 330"},
             {"from": "workplan", "to": "workingstep", "type": "1:N", "path": "M 465 226 C 465 290, 150 280, 150 345"},
             {"from": "workplan", "to": "job", "type": "1:N", "path": "M 500 226 L 500 330"},
+            {"from": "job", "to": "job_tool_assignment", "type": "1:N", "path": "M 445 350 L 360 350"},
+            {"from": "tool", "to": "job_tool_assignment", "type": "1:N", "path": "M 120 226 C 120 280, 280 270, 280 322"},
             {"from": "workplan", "to": "workplan_file_archive", "type": "1:1", "path": "M 535 226 C 535 285, 720 270, 720 330"},
             {"from": "job", "to": "machine_log", "type": "1:N", "path": "M 445 375 C 280 400, 87 420, 87 490"},
             {"from": "job", "to": "inspection", "type": "1:1", "path": "M 465 386 C 465 440, 292 430, 292 490"},

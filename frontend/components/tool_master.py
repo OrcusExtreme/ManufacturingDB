@@ -69,7 +69,9 @@ def _import_section():
 
     st.warning(
         "기존 공구 마스터를 모두 지우고 이 파일 내용으로 교체합니다. 가공 이력의 공구 연결은 T번호 "
-        "기준으로 다시 맺습니다. 파일에 형식 오류가 한 곳이라도 있으면 아무것도 바꾸지 않습니다.",
+        "기준으로 다시 맺습니다. 다만 업로드 때 Job 마다 지정한 공구는 T번호가 아니라 지정 당시 제원으로 "
+        "다시 찾으므로 그 Job 의 기록은 바뀌지 않습니다. 파일에 형식 오류가 한 곳이라도 있으면 아무것도 "
+        "바꾸지 않습니다.",
         icon=":material/warning:",
     )
     confirmed = st.checkbox("기존 공구 마스터를 지우고 교체하는 데 동의합니다.", key="tm_chk_replace")
@@ -100,10 +102,14 @@ def _import_section():
         return
 
     archived = "" if result.archived else " (보관소 보관본 저장은 실패 — 서버 로그 확인)"
+    job_note = ""
+    if result.job_linked or result.job_unlinked:
+        job_note = (f" Job 별 지정 공구 {result.job_linked}건 다시 연결 · {result.job_unlinked}건은 새 마스터에 "
+                    f"같은 제원이 없어 지정 당시 제원으로만 남음.")
     st.session_state[FLASH_KEY] = (
         f"공구 마스터를 교체했습니다: {result.inserted}건 (장착 {result.mounted} · 미장착 "
         f"{result.unmounted}). 가공 이력 공구 연결 {result.linked}건 · 미연결 {result.unlinked}건."
-        f"{archived}")
+        f"{job_note}{archived}")
     st.cache_data.clear()
     st.rerun()
 

@@ -303,6 +303,10 @@ def recover_all_jobs(base_output_dir="recovered_data"):
                     "worker_name": memo.worker_name,
                     "temperature": memo.temperature,
                     "humidity": memo.humidity,
+                    # 온도·습도 중 자동(가공 시각 외기)으로 채운 칸과 그 기준 시각
+                    "weather": memo.weather,
+                    "weather_source": memo.weather_source,
+                    "weather_time": memo.weather_time.isoformat(sep=" ") if memo.weather_time else None,
                     "day_of_week": memo.day_of_week,
                     "chip_shape": memo.chip_shape,
                     "abnormal_noise": memo.abnormal_noise,

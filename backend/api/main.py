@@ -7,12 +7,27 @@ BACKEND_DIR = os.path.dirname(CURRENT_DIR)
 if BACKEND_DIR not in sys.path:
     sys.path.insert(0, BACKEND_DIR)
 
+import asyncio
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.routers import overview, parts, tools, jobs, export
 
+
+@asynccontextmanager
+async def lifespan(_app):
+    # 새 기능으로 늘어난 컬럼(예: workingstep.depth_of_cut)이 빠져 있으면 서빙 전에 채운다.
+    # 컨트롤러는 모듈을 하나씩 켜므로 API 가 수집기보다 먼저 뜰 수 있고, 그러면 ORM 조회가
+    # 없는 컬럼을 SELECT 해 1054(Unknown column) 로 실패한다. 이미 있으면 아무 것도 하지 않는다.
+    from DB.schema_patch import ensure_schema
+    await asyncio.to_thread(ensure_schema)
+    yield
+
+
 app = FastAPI(
+    lifespan=lifespan,
     title="공작기계지능화실험실 제조 DB REST API",
     description=(
         "공작기계지능화실험실(Machine Tool Intelligence Lab)의 통합 제조 데이터베이스(ISO 14649 STEP-NC) "

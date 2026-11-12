@@ -80,7 +80,7 @@ def list_workingsteps(
     limit: int = Query(100, ge=1, le=500),
     db: Session = Depends(get_db)
 ):
-    """단위 공정(Workingstep: 공구 호출 순서 및 F/S 가공조건) 목록을 조회합니다."""
+    """단위 공정(Workingstep: 공구 교환 · S/F 변화마다 한 행, 회전수 · 이송 · 절입 깊이) 목록을 조회합니다."""
     query = db.query(Workingstep)
     if workplan_id is not None:
         query = query.filter(Workingstep.workplan_id == workplan_id)

@@ -31,6 +31,9 @@ PENDING_COLUMNS = [
     ("workingstep", "spindle_speed",
      "ADD COLUMN spindle_speed FLOAT NULL "
      "COMMENT '스핀들 주축 회전수 (RPM, NC코드 파싱)'"),
+    ("workingstep", "depth_of_cut",
+     "ADD COLUMN depth_of_cut FLOAT NULL "
+     "COMMENT '절입 깊이 (mm, NC코드 파싱: 공작물 Z0 기준, 깊이가 섞인 스텝은 NULL)'"),
     ("workplan_file_archive", "nc_file_sha256",
      "ADD COLUMN nc_file_sha256 VARCHAR(64) NULL "
      "COMMENT 'NC 파일 SHA-256 체크섬'"),
@@ -40,6 +43,22 @@ PENDING_COLUMNS = [
     ("cad_file_archive", "file_sha256",
      "ADD COLUMN file_sha256 VARCHAR(64) NULL "
      "COMMENT 'CAD 파일 SHA-256 체크섬'"),
+    ("env_memo", "weather",
+     "ADD COLUMN weather VARCHAR(30) NULL "
+     "COMMENT '날씨 (가공 시각 외기, 자동: 맑음/구름많음/흐림/비/눈 …)'"),
+    ("env_memo", "weather_source",
+     "ADD COLUMN weather_source VARCHAR(100) NULL "
+     "COMMENT '자동으로 채운 칸과 출처 (예: open-meteo:temperature,humidity,weather)'"),
+    ("env_memo", "weather_time",
+     "ADD COLUMN weather_time DATETIME NULL "
+     "COMMENT '자동 기록에 쓴 기준 정시 (KST). NULL 이면 아직 자동 기록 전'"),
+]
+
+# 새 기능으로 생긴 '테이블'. 컬럼과 달리 ALTER 로 붙일 수 없어 models.py 정의 그대로 만든다.
+# 예전에는 테이블을 DB 초기화(reset_database_and_storage)와 설치(setup_target)의 create_all 만
+# 만들어서, 이미 쓰던 DB 에는 새 테이블이 생기지 않았다. 없는 것만 만들고, 있으면 건드리지 않는다.
+PENDING_TABLES = [
+    "job_tool_assignment",
 ]
 
 
@@ -82,13 +101,33 @@ def _backfill_part_name(conn, verbose):
               f"part_code는 숫자 키라 자동으로 채우지 않으니 직접 이름을 지정해 주세요.")
 
 
+def _create_missing_tables(conn, verbose):
+    """PENDING_TABLES 중 없는 테이블을 models.py 정의로 만든다. 만든 테이블 이름 목록."""
+    from sqlalchemy import inspect
+    from DB.database import Base
+    import DB.models  # noqa: F401  모든 모델을 Base.metadata 에 올린다
+
+    existing = set(inspect(conn).get_table_names())
+    missing = [name for name in PENDING_TABLES if name not in existing]
+    if missing:
+        Base.metadata.create_all(bind=conn, tables=[Base.metadata.tables[name] for name in missing])
+        if verbose:
+            for name in missing:
+                print(f"[스키마 보정] {name} 테이블을 만들었습니다.")
+    return missing
+
+
 def ensure_schema(verbose=True):
-    """빠진 컬럼을 추가한다. 반환값은 실제로 추가한 (테이블, 컬럼) 목록."""
+    """빠진 테이블·컬럼을 추가한다.
+
+    반환값은 실제로 추가한 (테이블, 컬럼) 목록이다. 테이블을 통째로 만든 경우는 (테이블, '*') 로 적는다.
+    """
     from DB.database import engine
 
     added = []
     try:
         with engine.begin() as conn:
+            added += [(name, "*") for name in _create_missing_tables(conn, verbose)]
             for table, column, ddl in PENDING_COLUMNS:
                 if _column_exists(conn, table, column):
                     continue

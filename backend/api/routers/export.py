@@ -20,6 +20,7 @@ MODEL_MAP = {
     "surface_roughness": models.SurfaceRoughness,
     "inspection": models.Inspection,
     "env_memo": models.EnvMemo,
+    "job_tool_assignment": models.JobToolAssignment,
     "cad_file_archive": models.CadFileArchive,
     "workplan_file_archive": models.WorkplanFileArchive,
     "job_file_archive": models.JobFileArchive,

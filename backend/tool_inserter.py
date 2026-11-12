@@ -27,7 +27,7 @@ BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
 if BACKEND_DIR not in sys.path:
     sys.path.insert(0, BACKEND_DIR)
 
-from sqlalchemy import text
+from sqlalchemy import inspect, text
 
 from DB.database import SessionLocal, engine
 from DB.models import Tool, Workingstep
@@ -103,6 +103,9 @@ class ImportResult:
     deleted: int = 0
     linked: int = 0
     unlinked: int = 0
+    # 업로드 때 사람이 지정한 Job 공구(job_tool_assignment) 중 새 마스터에서 다시 찾은 것 / 못 찾은 것
+    job_linked: int = 0
+    job_unlinked: int = 0
     resequenced: int = 0
     archived: str = ""
 
@@ -346,11 +349,22 @@ def archive_tool_master():
 # ---------------------------------------------------------------------------
 # 교체
 # ---------------------------------------------------------------------------
+# tool.tool_id 를 들고 있는 테이블. resequence_tool_ids 는 외래키 검사를 끈 채 번호를 옮기므로
+# (그동안은 ON UPDATE/DELETE 동작도 돌지 않는다) 여기 빠진 테이블은 엉뚱한 공구를 가리키게 된다.
+TOOL_REF_TABLES = ("workingstep", "job_tool_assignment")
+
+
+def _tool_ref_tables(conn):
+    """TOOL_REF_TABLES 중 이 DB 에 실제로 있는 것 (스키마 보정 전의 DB 도 있다)."""
+    existing = set(inspect(conn).get_table_names())
+    return [t for t in TOOL_REF_TABLES if t in existing]
+
+
 def resequence_tool_ids():
     """
     tool_id를 1번부터 빈 번호 없이 다시 부여한다.
     기존 정렬 순서는 그대로 두고, 삭제 등으로 생긴 중간 빈 번호만 앞으로 당긴다.
-    workingstep.tool_id 참조도 같은 트랜잭션에서 함께 옮기므로 가공 이력 연결은 유지된다.
+    tool_id 를 참조하는 테이블(TOOL_REF_TABLES)도 같은 트랜잭션에서 함께 옮기므로 가공 이력 연결은 유지된다.
     반환값: 번호가 실제로 바뀐 공구 수
     """
     with engine.begin() as conn:
@@ -367,16 +381,19 @@ def resequence_tool_ids():
 
         # PK 충돌을 피하기 위해 전체를 임시 번호 구간으로 밀어둔 뒤 1번부터 다시 부여한다.
         offset = max(old_ids) + 1000
+        ref_tables = _tool_ref_tables(conn)
         conn.execute(text("SET FOREIGN_KEY_CHECKS = 0"))
         try:
             conn.execute(text("UPDATE tool SET tool_id = tool_id + :off"), {"off": offset})
-            conn.execute(text("UPDATE workingstep SET tool_id = tool_id + :off WHERE tool_id IS NOT NULL"),
-                         {"off": offset})
+            for table in ref_tables:
+                conn.execute(text(f"UPDATE {table} SET tool_id = tool_id + :off WHERE tool_id IS NOT NULL"),
+                             {"off": offset})
             for new_id, old_id in enumerate(old_ids, start=1):
                 conn.execute(text("UPDATE tool SET tool_id = :new_id WHERE tool_id = :old_id"),
                              {"new_id": new_id, "old_id": old_id + offset})
-                conn.execute(text("UPDATE workingstep SET tool_id = :new_id WHERE tool_id = :old_id"),
-                             {"new_id": new_id, "old_id": old_id + offset})
+                for table in ref_tables:
+                    conn.execute(text(f"UPDATE {table} SET tool_id = :new_id WHERE tool_id = :old_id"),
+                                 {"new_id": new_id, "old_id": old_id + offset})
         finally:
             # 커넥션이 풀에 반납되기 전에 반드시 원복한다 (FK 검사 해제가 다른 작업으로 새는 것 방지)
             conn.execute(text("SET FOREIGN_KEY_CHECKS = 1"))
@@ -426,11 +443,17 @@ def replace_tool_master(rows):
     ORM 객체가 아니라 Core INSERT 에 모든 열을 명시해 넣는다. 그래야 빈 칸이 확실히 NULL 로
     들어간다(열을 빼면 DB 가 DEFAULT 로 채운다 — 모르는 코너 R 이 0, 모르는 날 수가 1 이 된다).
     """
+    # 늦게 불러온다: tool_assignment 가 이 모듈의 표기 규칙(_cell_out)을 가져다 쓴다.
+    from tool_assignment import relink_job_tool_assignments
+
     db = SessionLocal()
     try:
         deleted = db.query(Tool).delete(synchronize_session=False)
         db.execute(Tool.__table__.insert(), [{col: row[col] for col in TOOL_COLUMNS} for row in rows])
         linked, unlinked = relink_workingsteps(db)
+        # 사람이 Job 마다 지정한 공구는 T번호가 아니라 지정할 때의 제원(스냅샷)으로 다시 찾는다.
+        # 그래서 공구를 다른 포트로 옮기거나 마스터를 고쳐 올려도 그 Job 의 기록은 바뀌지 않는다.
+        job_linked, job_unlinked = relink_job_tool_assignments(db.connection())
         db.commit()
     except Exception:
         db.rollback()
@@ -451,6 +474,8 @@ def replace_tool_master(rows):
         "mounted": sum(1 for r in rows if r["tool_code"]),
         "linked": linked,
         "unlinked": unlinked,
+        "job_linked": job_linked,
+        "job_unlinked": job_unlinked,
         "resequenced": resequenced,
     }
 
@@ -520,6 +545,9 @@ def _apply(rows):
           f"미장착 {result.unmounted}), 기존 {result.deleted}건 삭제")
     print(f"    - Workingstep 공구 재연결: 연결 {result.linked}건 / 미연결 {result.unlinked}건"
           f"(장착 공구에 없는 T번호)")
+    if result.job_linked or result.job_unlinked:
+        print(f"    - Job 별 지정 공구 재연결: 연결 {result.job_linked}건 / 미연결 {result.job_unlinked}건"
+              f"(새 마스터에 같은 제원의 공구가 없어 지정 당시 스냅샷으로만 남음)")
     if result.archived:
         print(f"    - 보관: {result.archived}")
     print("")

@@ -219,7 +219,7 @@ def render_search_filters(key_prefix="ws"):
             j.job_id, j.start_time, p.project_code, p.part_name as part_name, j.machining_type,
             j.cutting_seconds, j.is_finish,
             i.surface_roughness_ra, i.surface_roughness_rz, i.pass_fail,
-            e.worker_name, e.temperature, e.humidity, e.free_memo,
+            e.worker_name, e.temperature, e.humidity, e.weather, e.free_memo,
             m.max_spindle_load, m.avg_spindle_rpm, m.alarm_count
         FROM job j
         LEFT JOIN machine_log m ON j.job_id = m.job_id
@@ -257,6 +257,7 @@ JOB_TABLE_COLUMN_CONFIG = {
     "worker_name": "작업자",
     "temperature": "온도(°C)",
     "humidity": "습도(%)",
+    "weather": "날씨",
     "free_memo": "작업자 메모",
     "max_spindle_load": "최대 부하(%)",
     "avg_spindle_rpm": "평균 RPM",
@@ -264,7 +265,7 @@ JOB_TABLE_COLUMN_CONFIG = {
 }
 
 
-# 전체 17개 컬럼을 항상 펼치면 가로 스크롤 없이는 읽을 수 없어서, 기본은 아래 핵심 컬럼만 보여준다.
+# 전체 18개 컬럼을 항상 펼치면 가로 스크롤 없이는 읽을 수 없어서, 기본은 아래 핵심 컬럼만 보여준다.
 JOB_TABLE_ESSENTIAL_COLUMNS = [
     "job_id", "start_time", "part_name", "machining_type",
     "cutting_seconds", "surface_roughness_ra", "pass_fail", "worker_name",
@@ -297,6 +298,7 @@ def render_job_table(job_df, key=None, selectable=False, show_all_columns=True):
         "worker_name": "작업자",
         "temperature": st.column_config.NumberColumn("온도(°C)", format="%.1f"),
         "humidity": st.column_config.NumberColumn("습도(%)", format="%.1f"),
+        "weather": "날씨",
         "free_memo": "작업자 메모",
         "max_spindle_load": st.column_config.NumberColumn("최대 부하(%)", format="%.1f"),
         "avg_spindle_rpm": st.column_config.NumberColumn("평균 RPM", format="%.0f"),

@@ -7,7 +7,11 @@ import job_layout
 
 from .common import PROJECT_ROOT, RAW_DATA_DIR, engine, load_data
 from .auth_view import current_worker_name
+from .tool_picker import render_tool_picker
 from cad_viewer_component import render_cad_viewer
+import tool_assignment as ta
+from tool_codes import format_tool_code
+from weather_service import place_name as weather_place_name
 
 # Job 드롭다운에서 '새로 만든다'를 뜻하는 항목.
 # Job 폴더 이름은 DB 가 부여하는 PK 를 따라가므로 사람이 직접 적지 않는다.
@@ -181,6 +185,16 @@ def _save_job_attributes(job_id, worker_name, values, is_new_job):
             conn.execute(_text(f"UPDATE env_memo SET {sets} WHERE job_id=:jid"),
                          {**env, "jid": job_id})
 
+            # 온도·습도 칸에는 가공 시각 외기 값이 자동으로 들어가 있을 수 있다(weather_service).
+            # 사람이 적은 칸은 '자동으로 채운 칸' 표시에서 빼야 분석할 때 실내 측정값과 외기 값을 가를 수 있다.
+            typed = [k for k in ("temperature", "humidity") if k in env]
+            if typed:
+                try:
+                    from weather_service import mark_manual
+                    mark_manual(conn, job_id, typed)
+                except Exception as e:      # 표시를 못 고쳐도 사람이 적은 값은 저장한다
+                    print(f"[데이터 삽입] 자동 기록 표시를 고치지 못했습니다 (Job {job_id}): {e}")
+
         # --- inspection ---
         ins = _filled({
             "dimension_tolerance": values.get("dimension_tolerance"),
@@ -205,6 +219,58 @@ def _save_job_attributes(job_id, worker_name, values, is_new_job):
         conn.commit()
 
     return written
+
+
+@st.cache_data(show_spinner=False)
+def _tools_in_uploaded_nc(nc_bytes):
+    # 15MB NC 를 화면이 다시 그려질 때마다 파싱하지 않도록 내용 기준으로 캐시한다.
+    return ta.tools_called_in_nc(nc_bytes)
+
+
+@st.cache_data(show_spinner=False)
+def _tools_in_uploaded_xml(xml_bytes):
+    return ta.tools_called_in_xml(xml_bytes)
+
+
+def _render_tool_section(file_nc, file_xml, job_pk, disabled):
+    """사용한 공구 번호마다 공구 마스터의 어느 공구였는지 고른다. 저장할 지정을 돌려준다.
+
+    공구 번호는 올리는 NC 에서 읽는다(워킹스텝 분리 규칙과 같아서 스텝 수도 수집 뒤와 같다).
+    NC 가 없으면 XML 의 공구 목록, 둘 다 없으면 이 Job 에 이미 들어간 워킹스텝에서 읽는다.
+    파일은 아직 디스크에 쓰기 전이라 업로드한 내용(바이트열)을 그대로 파싱한다.
+    """
+    st.markdown("---")
+    st.markdown("#### 사용 공구")
+
+    called, origin = {}, None
+    try:
+        if file_nc is not None:
+            called, origin = dict(_tools_in_uploaded_nc(file_nc.getvalue())), f"NC `{file_nc.name}`"
+        elif file_xml is not None:
+            called = dict(_tools_in_uploaded_xml(file_xml.getvalue()))
+            origin = f"XML `{file_xml.name}` 의 공구 목록"
+    except Exception as e:
+        st.warning(f"업로드한 파일에서 공구 번호를 읽지 못했습니다: {e}", icon=":material/warning:")
+
+    existing = {}
+    if job_pk is not None:
+        with engine.connect() as conn:
+            existing = ta.load_assignments(conn, job_pk)
+            if not called:
+                called = ta.tools_in_job_workplan(conn, job_pk)
+                origin = "이 Job 에 이미 들어간 NC" if called else None
+        for number in existing:        # 전에 지정했는데 이번 목록에 없는 번호도 보여 준다
+            called.setdefault(number, {"steps": None})
+
+    if not called:
+        st.caption("NC 또는 XML 을 올리면 사용한 공구 번호가 여기에 나타나고, 각 번호가 공구 마스터의 "
+                   "어느 공구였는지 고를 수 있습니다.")
+        return {}
+
+    st.caption(f"{origin}에서 읽은 공구 번호입니다. 기본값은 공구 마스터에서 같은 T번호로 장착된 공구입니다. "
+               "실제로 다른 공구를 꽂았다면 바꿔 주세요 (미장착 재고도 고를 수 있습니다). "
+               "여기서 정한 공구는 이 Job 의 기록으로 남아, 나중에 공구 마스터를 교체해도 바뀌지 않습니다.")
+    return render_tool_picker(called, existing, key_prefix="dl", disabled=disabled)
 
 
 def _to_float(text_value):
@@ -328,9 +394,11 @@ def render_data_upload():
         st.caption("XML, NC 파일은 최대 15MB 제한, 기타 파일은 제한이 없습니다.")
 
     existing_files_info = {}
+    existing_job_pk = None
     if existing_job_folder:
         existing_files_info = _existing_files(
             os.path.join(base_raw_dir, project_name, part_name, existing_job_folder))
+        existing_job_pk = _job_id_of(project_name, part_name, existing_job_folder)
 
     off = not job_ready
     col_f1, col_f2 = st.columns(2)
@@ -348,6 +416,9 @@ def render_data_upload():
                              types=["log"], done_name=existing_files_info.get('log'), disabled=off)
         file_others = _uploader("기타 참고용 파일 (여러 개)", "uploader_others",
                                 multiple=True, disabled=off)
+
+    # ------------------------------------------------------------ 사용 공구
+    tool_picks = _render_tool_section(file_nc, file_xml, existing_job_pk, disabled=off) if job_ready else {}
 
     # ------------------------------------------------------------ 가공 기록 입력
     st.markdown("---")
@@ -370,6 +441,8 @@ def render_data_upload():
         st.markdown("**환경**")
         meta["temperature"] = _to_float(st.text_input("온도 (℃)", key="dl_temp", disabled=off))
         meta["humidity"] = _to_float(st.text_input("습도 (%)", key="dl_hum", disabled=off))
+        st.caption(f"비워 두면 가공 시작시각 기준 {weather_place_name()} 외기 온습도와 날씨가 자동으로 "
+                   "기록됩니다 (가공 시각부터 반나절쯤 지나 반영). 직접 적은 값이 우선합니다.")
     with m2:
         st.markdown("**관찰**")
         meta["chip_shape"] = st.text_input("칩 형태", key="dl_chip", disabled=off)
@@ -454,6 +527,16 @@ def render_data_upload():
         os.makedirs(target_job_dir, exist_ok=True)
         attr_job_id = _job_id_of(project_name, part_name, existing_job_folder)
 
+    # 공구 지정은 파일을 놓기 전에 기록한다. 수집기는 이 테이블을 건드리지 않지만, 먼저 적어 두면
+    # 파일 저장 중에 화면이 끊겨도 사람이 고른 내용은 남는다.
+    tool_written = []
+    if attr_job_id is not None and tool_picks:
+        try:
+            with engine.begin() as conn:
+                tool_written = ta.save_assignments(conn, attr_job_id, tool_picks, assigned_by=worker_name)
+        except Exception as e:
+            st.warning(f"공구 지정을 기록하지 못했습니다 (파일 업로드는 계속합니다): {e}")
+
     def save_file(uploaded_file, dest_dir):
         if not uploaded_file:
             return 0
@@ -502,4 +585,7 @@ def render_data_upload():
     st.success(f"성공적으로 {saved_count}개의 파일을 업로드했습니다! (메인 폴더: {msg_dir})")
     if attr_written:
         st.success("가공 기록 반영: " + " · ".join(attr_written), icon=":material/edit_note:")
+    if tool_written:
+        st.success("공구 지정 반영: " + " · ".join(format_tool_code(n) or str(n) for n in tool_written),
+                   icon=":material/build:")
     st.info("데이터가 계층형 폴더에 저장되었으며, 백엔드 Watchdog에 의해 파이프라인 처리가 시작됩니다.")

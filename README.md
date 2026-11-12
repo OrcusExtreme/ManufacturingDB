@@ -10,7 +10,7 @@
   <a href="https://www.sqlalchemy.org/"><img src="https://img.shields.io/badge/SQLAlchemy-2.0%2B-red.svg" alt="ORM" /></a>
   <a href="https://streamlit.io/"><img src="https://img.shields.io/badge/Streamlit-1.61%2B-FF4B4B.svg" alt="Frontend" /></a>
   <a href="https://www.iso.org/"><img src="https://img.shields.io/badge/Standard-ISO%2014649%20(STEP--NC)-green.svg" alt="Standard" /></a>
-  <a href="https://github.com/OrcusExtreme/ManufacturingDB"><img src="https://img.shields.io/badge/Release-V3.1.0-brightgreen.svg" alt="Release" /></a>
+  <a href="https://github.com/OrcusExtreme/ManufacturingDB"><img src="https://img.shields.io/badge/Release-V3.2.0-brightgreen.svg" alt="Release" /></a>
 </p>
 
 공작기계지능화실험실(Machine Tool Intelligence Lab)의 **통합 제조 데이터베이스 및 가공 데이터 분석 시스템**입니다.  
@@ -22,41 +22,51 @@
 
 ### 1. ISO 14649(STEP-NC) 표준 기반 데이터 모델링
 - **정적 공정 계획(Static Planning)과 동적 가공 실행(Dynamic Execution)의 분리 설계**
-- `Part(부품)` ➔ `Workplan(NC 가공계획)` ➔ `Workingstep(단위공정/공구호출)` ↔ `Tool(공구 마스터)` 구조의 계층형 공정 모델링
+- `Part(부품)` ➔ `Workplan(NC 가공계획)` ➔ `Workingstep(단위공정: 공구 교환 및 절삭조건 S/F 변화 단위)` ↔ `Tool(공구 마스터)` 구조의 계층형 공정 모델링
+- **단위 공정(Workingstep) 세분화**: 단순 공구 호출 단위가 아닌 공구 교환 및 절삭조건(주축회전수 S, 이송속도 F) 변화마다 행을 분리하여, 단일 공구 조건 변경 실험의 정밀 추적 및 절입 깊이(`depth_of_cut`, 공작물 Z0 기준) 자동 추출
 - 동일 Workplan 조건에서 반복 수행되는 실험 가공 차수(`Job`)의 1:N 이력 관리
 
-### 2. 스토리지 계층 구조 및 백업 체계
+### 2. 가공 차수별 공구 지정 및 환경 데이터 자동 수집
+- **Job별 실제 사용 공구 지정 (`job_tool_assignment`)**:
+  - 가공 차수마다 실제 매거진 포트 또는 미장착 재고에서 사용된 공구를 T번호 기준으로 매핑
+  - 지정 당시의 공구 제원 스냅샷을 영구 보존하여 공구 마스터 전체 교체 또는 매거진 포트 재배치 시에도 과거 가공 데이터 불변성 보장
+  - NC 파일 업로드 시 즉시 T번호 파싱 프리뷰 제공 및 업로드 후 워크스페이스에서 사후 수정 지원
+- **가공 시각 외기 온습도·날씨 자동 기록 (`weather_service`)**:
+  - 온습도 수기 입력이 누락된 Job에 대해 가공 시작 시각 기준 기상 모델 격자 데이터(Open-Meteo Historical Weather API)를 1시간 주기로 자동 조회 및 보충
+  - 안정적 관측 데이터 확보를 위해 12시간 지연 수집 및 출처(`weather_source`), 기준 시각(`weather_time`) 명시
+
+### 3. 스토리지 계층 구조 및 백업 체계
 - **MySQL RDBMS**: B-Tree 인덱스 기반 조건 검색, 다차원 조인 및 통계 쿼리 처리
 - **Apache Parquet**: 12.8kHz 고주파 시계열 센서 데이터 및 단면 표면조도 곡선을 Snappy 컬럼형 압축 포맷으로 저장 및 시각화
 - **File Vault**: 원본 파일의 무결성 보존을 위한 디렉터리 분리 (프로젝트 외부 경로 지정을 통해 소스 변경 시에도 백업 격리)
 - **LONGBLOB 이중화**: 덤프 파일 단독 복구를 위해 15MB 이하 주요 원본 파일(XML, NC, CAD 등)을 DB 내 바이너리로 이중 보관
 - **초기화 시 보관소 격리**: 데이터베이스 및 런타임 데이터 초기화 시 백업 보관소(`archive_vault`)는 삭제 대상에서 제외
 
-### 3. 실시간 자동 수집 파이프라인
+### 4. 실시간 자동 수집 파이프라인
 - `machining_raw_data/` 디렉터리 내 신규 파일 유입 시 파일 락(Lock) 해제를 감지하여 자동 파싱 트리거 (Watchdog)
 - 자료 유형별 파서 자동 분기 (`XML`, `TDMS`, `NC`, `Log`, `CSV`, `STEP`/`STL`)
 - **디렉터리 자동 정돈**: 수집 폴더 내 투입된 파일을 확장자 규칙에 따라 `XML/`, `Log/`, `TDMS/`, `NC/` 하위 디렉터리로 자동 분류 (`backend/job_layout.py`)
 - **TDMS 파싱 최적화**: 메모리 가용량 기반의 단일 패스(Single-pass) 읽기와 지연 로딩 전환을 통해 대용량 센서 파일 파싱 속도 개선
 - 백그라운드 변환 데몬(`tdms_visualizer.py`)을 통한 시간 도메인 지표 및 FFT 주파수 스펙트럼 Parquet 자동 생성
 
-### 4. 제조 DB Controller (Win32 GUI)
+### 5. 제조 DB Controller (Win32 GUI)
 - `system_controller.exe`를 통해 4대 서브프로세스(Streamlit 대시보드, Watchdog 수집기, TDMS 변환기, REST API 서버)의 통합 제어 및 실시간 로그 스트리밍 지원
 - 프로세스 재시작 없이 파서 활성화/비활성화 및 파이프라인 일시정지 제어 (`backend/pipeline_config.json`)
 - Windows Job Object 기반 프로세스 그룹 관리로 컨트롤러 비정상 종료 시 자식 프로세스 자동 회수
 - 외부 스크립트 실행 방식으로 구성되어 파이썬 소스 수정 시 컨트롤러 재컴파일 불필요
 - 사용자 관리(가입 승인/거절, 계정 조회/삭제) 및 스토리지 선택적 초기화 GUI 내장
 
-### 5. Streamlit 기반 웹 통합 대시보드 (Port 8501)
-- 가공 차수(Job) 다차원 필터링 및 상세 분석 (Plotly 기반 센서 Envelope, FFT, 3D CAD Z-up 뷰어, 표면조도 프로파일)
-- 데이터 수동 업로드, 메타데이터/가공환경/품질검사 입력 일원화
+### 6. Streamlit 기반 웹 통합 대시보드 (Port 8501)
+- 가공 차수(Job) 다차원 필터링 및 상세 분석 (Plotly 기반 센서 Envelope, FFT, 3D CAD Z-up 뷰어, 표면조도 프로파일, 실제 사용 공구 현황)
+- 데이터 수동 업로드, 메타데이터/가공환경/품질검사/사용공구 매핑 입력 일원화
 - ISO 14649 공정 트리 조회 및 공구 마스터(장착/미장착) 일괄 관리
 - 인터랙티브 ERD 기반 테이블 탐색기 및 데이터 드릴다운 ZIP 다운로드 지원
 - PBKDF2-HMAC-SHA256 해시 기반 로컬 인증 및 세션 영속화
 
-### 6. 제조 DB REST API 서버 (Port 8000)
+### 7. 제조 DB REST API 서버 (Port 8000)
 - 외부 시스템, 연계 분석 장비 및 AI/LLM 파이프라인 연동을 위한 FastAPI 기반 RESTful 서비스
 - **전체 데이터 익스포트 (`GET /api/v1/export/all`)**: 15개 테이블의 전체 가공 및 계측 데이터를 단일 JSON으로 추출
-- **계층형 프로필 조회 (`GET /api/v1/jobs/{job_id}/full`)**: 공정 계획, 공구, 로그, 조도, 품질 데이터를 계층 구조의 단일 컨텍스트로 제공
+- **계층형 프로필 조회 (`GET /api/v1/jobs/{job_id}/full`)**: 공정 계획, 공구 매핑, 로그, 조도, 품질 데이터를 계층 구조의 단일 컨텍스트로 제공
 - **OpenAPI / Swagger UI (`http://localhost:8000/docs`)**: 인터랙티브 API 문서 및 스키마 명세 지원
 
 ---
@@ -90,11 +100,12 @@
     ├─ job_layout.py — 확장자 기반 하위 디렉터리 자동 분류
     ├─ pipeline_control.py — 파서 활성화 상태 및 일시정지 플래그 확인
     ├─ 파싱 엔진 [parsers/]
-    │    xml · nc · tdms · log · roughness · cad  (+ job_manager · tool_inserter)
+    │    xml · nc · tdms · log · roughness · cad  (+ job_manager · tool_inserter · tool_assignment)
+    ├─ weather_service — 1시간 주기 미기록 Job 외기 온습도·날씨 자동 보충 (Open-Meteo)
     ├─ integrity_monitor — 30분 주기 백그라운드 SHA-256 무결성 검증
     └─ 오류 격리 ─▶ data/failed_data (DLQ)
          │
-         ├──▶ MySQL RDBMS (SQLAlchemy ORM)   정규화 데이터 적재
+         ├──▶ MySQL RDBMS (SQLAlchemy ORM)   15개 테이블 정규화 데이터 적재
          ├──▶ Archive Vault                  원본 파일 보관소 (프로젝트 외부)
          └──▶ MySQL LONGBLOB                 주요 메타/형상 원본 파일 (15MB 이하)
 
@@ -106,7 +117,7 @@
 
  ③ Streamlit UI (:8501)
     ├─ Read  ◀── MySQL · Parquet 스토리지 · Archive Vault · 원본 디렉터리
-    ├─ Write ──▶ MySQL (메타데이터 수정, Cascade 삭제, 공구 마스터 갱신)
+    ├─ Write ──▶ MySQL (메타데이터 수정, Cascade 삭제, 공구 마스터 갱신, Job 공구 매핑)
     ├─ Write ──▶ raw_data (수동 데이터 삽입 → 수집기 파이프라인 재진입)
     └─ recovery_engine.py ──▶ 복구 ZIP 생성 및 로컬 복원
 
@@ -116,7 +127,7 @@
 
 ---
 
-## 데이터베이스 스키마 구조
+## 데이터베이스 스키마 구조 (ISO 14649)
 
 ```mermaid
 erDiagram
@@ -131,14 +142,16 @@ erDiagram
     Job ||--o| EnvMemo : "1:1"
     Job ||--o{ SurfaceRoughness : "1:N"
     Job ||--o| JobFileArchive : "1:1"
+    Job ||--o{ JobToolAssignment : "1:N"
+    Tool ||--o{ JobToolAssignment : "1:N"
     SurfaceRoughness ||--o| SurfaceRoughnessArchive : "1:1"
     MachineLog ||--o| LogFileArchive : "1:1"
 ```
 
 | 도메인 | 테이블명 | 설명 |
 | :--- | :--- | :--- |
-| **마스터 & 공정 계획** | `part`, `workplan`, `tool`, `workingstep`, `cad_file_archive` | 부품 마스터, NC 공정 계획(부품·프로그램·NC해시 복합 유니크 제약), 공구 제원(ISO 14649 분류 및 치수, 매거진 장착/재고 관리), 단위 공정 순서 및 절삭 가공 조건(Feed/Spindle), 3D 형상 파일 관리 |
-| **가공 실행 & 품질** | `job`, `machine_log`, `surface_roughness`, `inspection`, `env_memo` | 가공 차수 이력(가공 시간, 거리, 에러), CNC 1Hz 부하 통계, 다지점 표면조도 프로파일, 치수공차 판정(PASS/FAIL), 가공 환경 데이터 |
+| **마스터 & 공정 계획** | `part`, `workplan`, `tool`, `workingstep`, `cad_file_archive` | 부품 마스터, NC 공정 계획(부품·프로그램·NC해시 복합 유니크 제약), 공구 제원(ISO 14649 분류 및 치수, 매거진 장착/재고 관리), 단위 공정 순서 및 절삭 가공 조건(Feed/Spindle/절입 깊이 `depth_of_cut`), 3D 형상 파일 관리 |
+| **가공 실행 & 품질** | `job`, `job_tool_assignment`, `machine_log`, `surface_roughness`, `inspection`, `env_memo` | 가공 차수 이력(가공 시간, 거리, 에러), Job별 실제 사용 공구(T번호 → 공구 마스터, 지정 당시 제원 스냅샷 보존), CNC 1Hz 부하 통계, 다지점 표면조도 프로파일, 치수공차 판정(PASS/FAIL), 온습도(수기 입력 및 외기 자동 수집)·날씨(`weather`, `weather_source`, `weather_time`)·가공 환경 데이터 |
 | **아카이브 & 백업** | `workplan_file_archive`, `job_file_archive`, `surface_roughness_archive`, `log_file_archive` | 원본 디렉터리 경로(`*_raw_path`) 및 LONGBLOB 백업 데이터 |
 
 - 원본 파일 경로는 메타데이터 테이블(`job`, `workplan` 등)과 분리하여 아카이브 테이블(`*_archive`)에서 관리합니다.
@@ -175,10 +188,12 @@ ManufacturingDB/
 │   ├── vault_layout.py               #   보관소 내부 경로 산출 규칙
 │   ├── file_archive.py               #   아카이브 레코드 조회 및 생성
 │   ├── job_manager.py                #   Job 레코드 생성 및 검증
+│   ├── tool_assignment.py            #   Job별 사용 공구 지정 및 제원 스냅샷 관리
+│   ├── weather_service.py            #   가공 시각 외기 온습도·날씨 자동 기록 데몬 (Open-Meteo)
 │   ├── recovery_engine.py            #   보관소 및 DB 기반 복원 엔진
 │   ├── tdms_visualizer.py            #   TDMS Parquet/FFT 변환 백그라운드 데몬
 │   ├── tdms_alignment.py             #   NC 블록 대조 가공 구간 판별 및 시간축 정렬
-│   ├── tool_inserter.py              #   ISO 14649 공구 마스터 검증 및 일괄 적재
+│   ├── tool_inserter.py              #   ISO 14649 공구 마스터 검증 및 일괄 적재 (스냅샷 기반 재연결)
 │   ├── pipeline_control.py           #   파이프라인 상태 제어 인터페이스
 │   ├── pipeline_config.json          #   파서 활성화 및 일시정지 상태 설정 파일
 │   ├── integrity.py                  #   SHA-256 기반 원본 무결성 검증
@@ -193,12 +208,22 @@ ManufacturingDB/
 │   ├── normalize_name_casing.py      #   디렉터리 대소문자 표준화 도구
 │   ├── DB/
 │   │   ├── database.py               #   SQLAlchemy 엔진 및 세션 설정
-│   │   ├── models.py                 #   ORM 스키마 정의 (14개 테이블)
-│   │   └── schema_patch.py           #   기동 시 스키마 컬럼 보정 패치
+│   │   ├── models.py                 #   ORM 스키마 정의 (15개 테이블)
+│   │   └── schema_patch.py           #   기동 시 스키마 테이블/컬럼 자동 보정 패치
 │   ├── parsers/                      #   자료 유형별 파서
 │   │   ├── xml_parser.py  nc_parser.py  tdms_parser.py
 │   │   └── log_parser.py  roughness_parser.py  cad_parser.py
+│   ├── api/                          #   FastAPI REST API 서비스
+│   │   ├── main.py                   #   API 앱 진입점 및 lifespan 스키마 보정
+│   │   ├── serializers.py            #   데이터 직렬화 (스냅샷 공구·절삭조건·날씨 포함)
+│   │   └── routers/                  #   jobs, parts, export 라우터
 │   └── tests/                        #   단위 테스트 및 시스템 통합 검증 스크립트
+│       ├── fixtures/                 #   실측 NC 파일 검증 데이터 (O1110, O0912 EDGECAM)
+│       ├── test_nc_parser.py         #   워킹스텝 분리 규칙 및 절삭조건 파싱 테스트
+│       ├── test_nc_workingstep_sync.py # NC 기준 워킹스텝 재구성 및 동기화 무결성 테스트
+│       ├── test_tool_assignment.py   #   Job별 공구 지정 및 마스터 교체 후 매칭 테스트
+│       ├── test_weather_service.py   #   외기 온습도·날씨 자동 기록 단위 테스트
+│       └── verify_e2e_cutting_conditions.py # 절삭조건 E2E 데이터베이스 연동 검증
 │
 ├── frontend/                         # Streamlit 웹 대시보드
 │   ├── dashboard.py                  #   대시보드 메인 진입점
@@ -207,10 +232,11 @@ ManufacturingDB/
 │   └── components/                   #   화면별 서브 컴포넌트
 │       ├── home_view.py              #   홈 대시보드 화면
 │       ├── filters.py                #   다단계 검색 필터
-│       ├── job_workspace.py          #   Job 상세 분석 및 관리 화면
-│       ├── master_tree.py            #   ISO 14649 공정 계층 트리뷰
+│       ├── job_workspace.py          #   Job 상세 분석 및 관리 화면 (실제 사용 공구 현황/수정)
+│       ├── master_tree.py            #   ISO 14649 공정 계층 트리뷰 (RPM, mm/min, 절입 깊이)
 │       ├── tool_master.py            #   공구 마스터 조회 및 파일 교체
-│       ├── data_upload.py            #   수동 데이터 업로드 화면
+│       ├── tool_picker.py            #   T번호별 공구 선택 및 Job 사용 공구 현황 공용 컴포넌트
+│       ├── data_upload.py            #   수동 데이터 업로드 화면 (NC 즉시 분석 및 공구 지정)
 │       ├── db_explorer.py            #   DB 테이블 조회 및 편집기
 │       ├── download_center.py        #   데이터 일괄 다운로드 센터
 │       └── recovery.py               #   백업 생성 및 시스템 복원
@@ -278,6 +304,12 @@ PYTHONPATH=backend
 
 # 원본 백업 보관소 외부 경로 지정 (권장)
 ORCUS_VAULT_ROOT=D:\Orcus\archive_vault
+
+# (선택) 가공 시각 외기 온습도·날씨 자동 기록 설정 (기본값: 활성화, 창원시 마산합포구 기준)
+# WEATHER_AUTOFILL=1
+# WEATHER_LATITUDE=35.1702
+# WEATHER_LONGITUDE=128.5728
+# WEATHER_PLACE_NAME=창원시 마산합포구
 ```
 
 #### 원본 백업 보관소 외부 지정 정책
@@ -323,6 +355,9 @@ python tools/run_system.py
 ```bash
 # REST API 서버 단독 실행 (Port 8000)
 tools\run_api.bat              # 또는 python tools/run_api.py
+
+# 가공 시각 외기 온습도·날씨 자동 보충 수동 실행
+python backend/weather_service.py
 ```
 
 ### 5. 서비스 접속 정보
@@ -361,16 +396,20 @@ python installer\build_installer.py --test    # 로컬 테스트용 경량 빌�
 2. **Job 워크스페이스**:
    - 프로젝트, 부품, 가공차수, 실험일자, 장비 기준의 5단계 캐스케이딩 필터를 통한 가공 데이터 검색
    - 시간 도메인 Envelope, 주파수 FFT 스펙트럼, 1Hz CNC 로그 추이, 단면 표면조도 프로파일 시각화
+   - `사용 공구` 카드: T번호별 실제 사용된 공구 제원 스냅샷 확인 및 사후 수정 기능 제공
    - 불필요 가공 데이터 삭제 시 하위 연관 레코드의 원자적 연쇄 삭제(`CASCADE`) 지원
 3. **계층형 마스터 데이터**:
    - ISO 14649 기반 공정 계층(`Part ➔ Workplan ➔ Workingstep ➔ Tool`) 탐색
-   - 단위 공정별 절삭 가공 조건(주축 회전수 RPM, 이송속도 mm/min) 및 Part별 3D CAD(STEP/STL) 뷰어 지원
+   - 단위 공정별 절삭 가공 조건(주축 회전수 RPM, 이송속도 mm/min, 절입 깊이 mm) 및 Part별 3D CAD(STEP/STL) 뷰어 지원
 4. **공구 마스터 관리**:
    - ISO 14649 규격 기반 공구 제원(치수, 날 수, 재질, 장착 상태) 관리
    - 표준 CSV 템플릿 다운로드 및 수정본 업로드를 통한 공구 마스터 일괄 갱신
-5. **데이터 삽입**:
+   - 공구 마스터 전체 교체 시에도 기존 가공 차수(Job)의 공구 매핑은 지정 당시의 제원 스냅샷을 기반으로 자동 재연결
+5. **데이터 삽입 (수동 업로드)**:
    - 3D 형상 모델, XML, NC, TDMS, Log, 표면조도 CSV 웹 수동 업로드 인터페이스
+   - NC 파일 선택 즉시 T번호, 공구별 스텝 수, S/F 조건 범위 프리뷰 제공 및 공구 마스터(장착/미장착 재고) 매핑 지원
    - 업로드 시점에 가공 분류, 환경 데이터(온습도, 작업자, 이상 소음 등), 품질 점검(치수공차, 합불 판정) 동시 입력
+   - 온습도 미입력 시 가공 시작 시각 기준 기상 모델 격자 데이터 자동 수집 연동
 6. **DB 테이블 탐색기**:
    - 인터랙티브 ERD 연동 테이블 실시간 조회, 다중 조건 필터링, 컬럼 정렬 및 CSV 내보내기
    - 데이터 무결성 보호를 위해 테이블 직접 수정 시 관리자 인증 절차 적용
@@ -382,7 +421,46 @@ python installer\build_installer.py --test    # 로컬 테스트용 경량 빌�
 
 ---
 
+## 세부 기술 규격
+
+### 1. 가공 시각 외기 온습도·날씨 자동 기록 (Weather Service)
+데이터 수집 파이프라인 구동 시 1시간 주기로 온습도 및 날씨 정보가 누락된 Job을 탐색하여 자동 보충합니다 (`backend/weather_service.py`).
+
+- **보충 정책**: 수동 업로드 시 사용자가 입력한 온습도는 절대 덮어쓰지 않으며, 비어 있는 항목만 보충합니다.
+- **실측/예보 분리**: 가공 당일 예보 데이터가 섞이는 것을 방지하기 위해 가공 시작 시각 기준 **12시간이 경과한 후**에 안정화된 기상 데이터를 조회합니다.
+- **출처 추적성**: 실측 환경값과 외부 기상 수집값을 구별할 수 있도록 `env_memo.weather_source`에 수집 출처(예: `open-meteo:temperature,humidity,weather`)를 기록하고, 수집 기준 시각(`weather_time`)을 저장합니다.
+- **데이터 제공처**: [Open-Meteo](https://open-meteo.com/) Historical Weather API (CC BY 4.0, 비상업 무료, API 키 불필요)를 사용하며 기준 위치는 공작기계지능화실험실 인근(창원시 마산합포구) 기상 모델 격자값입니다.
+
+### 2. Job별 공구 매핑 및 제원 스냅샷 체계 (Job Tool Assignment)
+공구 마스터의 교체 및 포트 이동이 과거 가공 이력 데이터에 영향을 주지 않도록 스냅샷 기반의 매핑 구조를 제공합니다 (`backend/tool_assignment.py`).
+
+- **15번째 ORM 테이블 (`job_tool_assignment`)**: 가공 차수(`job_id`), 공구 번호(`tool_number`), 공구 ID(`tool_id`)와 함께 매핑 시점의 공구 제원(이름, 분류, 직경, 유효길이, 전장, 날수 등)을 독립 컬럼으로 스냅샷 저장합니다.
+- **마스터 교체 시 불변성**: 새로운 공구 마스터 CSV/XLSX 업로드로 `tool` 테이블이 전체 교체되더라도, 기존 Job의 공구 기록은 T번호가 아닌 **지정 당시의 제원 스냅샷**을 기준으로 새 마스터에서 일치하는 공구를 찾아 재연결합니다. 일치하는 공구가 없더라도 스냅샷 제원은 영구 보존됩니다.
+
+---
+
 ## 릴리즈 노트 (Release Notes)
+
+### [V3.2.0] - 2026-11-12
+- **ISO 14649 워킹스텝(Workingstep) 세분화 및 절삭조건·절입깊이 파싱 고도화**:
+  - 단위공정(Workingstep) 분리 기준을 단순 공구 호출 단위에서 **공구 교환 및 절삭조건(주축회전수 S, 이송속도 F) 변경 단위**로 전면 세분화
+  - 가공 공작물 Z0 기준의 **절입 깊이(`depth_of_cut`)** 자동 산출 및 `workingstep` 테이블 컬럼 신설
+  - NC 코드 파서(`nc_parser.py`) 고도화: 대표 F 선정, 보조 패스 필터링, 정규식 안전 패턴 강화
+  - `sync_workplan_nc_cutting_conditions`: NC 파일 기반 워킹스텝 재구성 멱등성 및 트랜잭션 안전성 확보
+  - 실측 NC 데이터(O1110 32스텝, O0912 EDGECAM) 검증 테스트 픽스처 구축 및 검증 통과
+- **Job별 실제 사용 공구 지정 및 제원 스냅샷 체계 (`job_tool_assignment`)**:
+  - 가공 차수(Job)와 실제 공구(Tool)를 매핑하는 15번째 ORM 테이블 `job_tool_assignment` 신설
+  - 지정 당시의 공구 제원 스냅샷을 영구 보존하여 공구 마스터 전체 교체 또는 매거진 포트 재배치 시에도 과거 가공 데이터 불변성 보장
+  - 업로드 화면(`data_upload.py`)의 NC 파싱 즉시 T번호 매핑 UI 및 Job 워크스페이스(`job_workspace.py`) 내 사후 수정 기능 구현
+  - 공용 컴포넌트 `frontend/components/tool_picker.py` 신설
+- **가공 시각 외기 온습도 및 날씨 자동 수집 (`weather_service`)**:
+  - 가공 환경 정보 수기 입력이 누락된 Job에 대해 가공 시각 기준 외기 온습도와 날씨를 자동 보충하는 백그라운드 서비스 구축
+  - Open-Meteo Historical Weather API 연동 (창원시 마산합포구 기준, 1시간 주기, 안정적 데이터 수집을 위한 12시간 지연 조회)
+  - 실측 환경값과 자동 수집값을 구분하기 위한 출처(`weather_source`) 및 기준 시각(`weather_time`) 추적성 확보
+- **REST API 엔드포인트 및 직렬화 스키마 확장**:
+  - Jobs, Parts, Export API에 `depth_of_cut`, `job_tool_assignment`, 기상 정보 필드 추가 반영
+- **테스트 스위트 및 엔드투엔드(E2E) 검증 강화**:
+  - `verify_e2e_cutting_conditions.py`, `test_nc_workingstep_sync.py`, `test_tool_assignment.py`, `test_weather_service.py` 단위/통합 테스트 추가 및 검증 완료
 
 ### [V3.1.0] - 2026-10-09
 - **제조 DB REST API 서버 신설 (FastAPI 기반, Port 8000)**:

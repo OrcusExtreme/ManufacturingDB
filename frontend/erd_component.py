@@ -30,8 +30,8 @@ TABLE_METADATA = {
     },
     "workingstep": {
         "label": "Workingstep",
-        "kr_name": "공구 호출 단위 공정",
-        "desc": "Workplan 내의 개별 가공 단위(공구 번호, 가공방식, 호출 순서)",
+        "kr_name": "공구 · 절삭조건 단위 공정",
+        "desc": "Workplan 내의 개별 가공 단위 (공구 교환 · S·F 변화마다 한 행: 공구 번호, 회전수, 이송, 절입 깊이, 가공 순서)",
         "color": "#fb923c"
     },
     "job": {
@@ -39,6 +39,12 @@ TABLE_METADATA = {
         "kr_name": "실가공 이력 (Job)",
         "desc": "실제 장비에서 1회 수행된 실가공 이력 데이터의 핵심 엔티티",
         "color": "#4ade80"
+    },
+    "job_tool_assignment": {
+        "label": "JobToolAssignment",
+        "kr_name": "Job 별 사용 공구 지정",
+        "desc": "업로드 때 T번호마다 고른 실제 공구 (공구 마스터 행 + 지정 당시 제원 스냅샷, 마스터 교체와 무관하게 유지)",
+        "color": "#fb923c"
     },
     "workplan_file_archive": {
         "label": "WorkplanFileArchive",
@@ -67,7 +73,7 @@ TABLE_METADATA = {
     "env_memo": {
         "label": "EnvMemo",
         "kr_name": "환경 및 작업자 메모",
-        "desc": "작업자 정보, 소재 로트 번호, 공장 온도/습도, 절삭유 상태 메모",
+        "desc": "작업자, 온도/습도(수기 · 비어 있으면 가공 시각 외기 자동), 날씨(자동), 칩 형태, 이상 소음, 메모",
         "color": "#facc15"
     },
     "surface_roughness": {

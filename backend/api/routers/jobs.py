@@ -80,9 +80,26 @@ def get_job_inspection(job_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="해당 Job의 품질 검사 결과를 찾을 수 없습니다.")
     return model_to_dict(insp)
 
+@router.get("/jobs/{job_id}/tools")
+def get_job_tools(job_id: int, db: Session = Depends(get_db)):
+    """특정 Job 에서 T번호마다 실제로 쓴 공구를 가공 순서대로 조회합니다.
+
+    업로드 때 사람이 지정한 공구가 있으면 그것(basis='지정'), 없으면 공구 마스터에서 같은 T번호로
+    장착된 공구(basis='자동')입니다. 지정한 공구가 공구 마스터에서 빠졌으면 in_master=false 이고
+    spec 에 지정 당시 제원이 들어 있습니다.
+    """
+    if not db.query(Job.job_id).filter(Job.job_id == job_id).first():
+        raise HTTPException(status_code=404, detail="가공 이력(Job)을 찾을 수 없습니다.")
+    from tool_assignment import job_tool_rows
+    return {"job_id": job_id, "items": job_tool_rows(db.connection(), job_id)}
+
 @router.get("/jobs/{job_id}/env-memo")
 def get_job_env_memo(job_id: int, db: Session = Depends(get_db)):
-    """특정 Job의 작업자 이름, 온·습도 환경, 칩 형태, 자유 메모를 조회합니다."""
+    """특정 Job의 작업자 이름, 온·습도 환경, 날씨, 칩 형태, 자유 메모를 조회합니다.
+
+    온도·습도는 사람이 적은 값이거나, 비어 있던 칸을 가공 시각의 외기 값으로 자동으로 채운 값입니다.
+    weather_source 에 자동으로 채운 칸이 적혀 있습니다 (예: 'open-meteo:temperature,humidity,weather').
+    """
     memo = db.query(EnvMemo).filter(EnvMemo.job_id == job_id).first()
     if not memo:
         raise HTTPException(status_code=404, detail="해당 Job의 작업자/환경 메모를 찾을 수 없습니다.")

@@ -7,6 +7,7 @@ if backend_dir not in sys.path:
 
 from DB.database import SessionLocal
 from DB.models import Part, Workplan, Workingstep, Job, WorkplanFileArchive
+from DB.schema_patch import ensure_schema
 
 # 한 Workplan 안에서 같은 순서를 두 행이 나눠 가질 수는 없다. 아래 컬럼들은 만든 경로에 따라
 # 한쪽에만 값이 있을 수 있어(XML 경로는 tool_id/operation_type, NC 경로는 이송·회전수),
@@ -98,6 +99,10 @@ def _contentless_workplans(db, used_ids):
 
 
 def run_cleanup():
+    # tools/run_system.py 는 수집기(스키마 보정)보다 이 정리를 먼저 돌린다. 새로 생긴 컬럼
+    # (예: workingstep.depth_of_cut)이 아직 없으면 아래 ORM 조회가 1054(Unknown column) 로
+    # 통째로 실패하므로 먼저 맞춘다. 이미 있으면 아무 것도 하지 않는다.
+    ensure_schema()
     db = SessionLocal()
     try:
         # Find all dummy workplans

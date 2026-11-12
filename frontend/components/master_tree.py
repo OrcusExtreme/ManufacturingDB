@@ -85,6 +85,7 @@ def render_master_tree():
                                ws.xml_tool_code AS '사용 공구',
                                ws.spindle_speed AS '주축회전수 (RPM)',
                                ws.feed_rate AS '이송속도 (mm/min)',
+                               ws.depth_of_cut AS '절입 깊이 (mm)',
                                t.manufacturer AS '제조사',
                                t.iso14649_class AS 'ISO 14649 분류',
                                t.cutter_diameter AS '직경',
@@ -105,6 +106,11 @@ def render_master_tree():
                             disp_df[column] = disp_df[column].apply(
                                 lambda v: f"{int(v):,}" if pd.notnull(v) else "-"
                             )
+                        # 깊이는 0.5 처럼 소수가 본값이라 정수로 자르지 않는다 (2.0 -> '2').
+                        # 비어 있으면 Z0 위에서만 깎았거나 한 스텝에 깊이가 섞인 경우다.
+                        disp_df['절입 깊이 (mm)'] = disp_df['절입 깊이 (mm)'].apply(
+                            lambda v: f"{v:g}" if pd.notnull(v) else "-"
+                        )
                         st.dataframe(disp_df, width="stretch", hide_index=True)
                     else:
                         st.info("등록된 Workingstep이 없습니다.")
