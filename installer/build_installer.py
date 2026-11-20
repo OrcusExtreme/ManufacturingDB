@@ -4,6 +4,8 @@
     python installer\\build_installer.py --test    # 시험용: 관리자 권한 없이 설치·제거까지 돌려 볼 수 있는 판
 
 결과물은 build\\installer\\ 아래에 모으고(git 이 추적하지 않는 폴더) 완성된 설치 파일만 dist\\ 에 둔다.
+판 번호는 README 릴리즈 노트 맨 위(### [Vx.y.z])다. README 배지·대시보드·컨트롤러(.rc)의 번호가 다르면
+정식 판은 만들지 않는다 (VERSION_MARKS).
 
   1. 파이썬 런타임   python.org 공식 배포본(zip)을 받아 풀고 installer\\requirements-runtime.txt 를 설치한다
                      → stage\\runtime. 파이썬 버전과 패키지 목록이 그대로면 다시 만들지 않는다.
@@ -24,6 +26,7 @@ import os
 import re
 import shutil
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -149,10 +152,19 @@ def download(url, dest, sha256=None):
     return dest
 
 
+def _clear_readonly_and_retry(func, path, exc):
+    """읽기 전용 속성이 붙은 파일·폴더는 Windows 가 지우지 못한다. MySQL 설치본에서 복사한 폴더(copytree 가
+    속성까지 옮긴다)가 그렇게 남아 다음 빌드의 rmtree 가 '액세스 거부'로 멈췄다. 속성을 풀고 다시 지운다."""
+    if not isinstance(exc, PermissionError):
+        raise exc
+    os.chmod(path, stat.S_IWRITE)
+    func(path)
+
+
 def rmtree(path):
     path = Path(path)
     if path.exists():
-        shutil.rmtree(path)
+        shutil.rmtree(path, onexc=_clear_readonly_and_retry)
 
 
 def isolated_env(**extra):
@@ -374,7 +386,10 @@ def selftest_mysql(staged):
         if proc is not None:
             proc.kill()
             proc.wait()
-        shutil.rmtree(root, ignore_errors=True)
+        try:        # 담은 MySQL 의 읽기 전용 폴더까지 지운다 (ignore_errors 로는 100MB 넘게 임시 폴더에 남는다)
+            shutil.rmtree(root, onexc=_clear_readonly_and_retry)
+        except OSError as e:
+            say(f"  · [주의] 임시 폴더를 다 지우지 못했습니다: {root} ({e})")
 
 
 # ---------------------------------------------------------------------------
@@ -436,6 +451,42 @@ def app_version():
     if not m:
         raise SystemExit("[빌드 실패] README.md 릴리즈 노트에서 판 번호(### [Vx.y.z])를 찾지 못했습니다. --version 으로 주세요.")
     return m.group(1)
+
+
+# 판 번호가 적힌 곳. README 릴리즈 노트 맨 위(### [Vx.y.z])가 기준이고, 판을 올릴 때 함께 고친다.
+# 예전에 대시보드·컨트롤러의 번호를 올리는 것을 잊어 V3.2.0 을 내고도 v3.1.0 으로 보였다.
+VERSION_MARKS = (
+    ("README.md", r"badge/Release-V(\d+\.\d+\.\d+)-", "배지"),
+    ("frontend/dashboard.py", r">v(\d+\.\d+\.\d+)</span>", "대시보드 사이드바"),
+    ("controller/system_controller.rc", r"FILEVERSION\s+(\d+),\s*(\d+),\s*(\d+),\s*0", "FILEVERSION"),
+    ("controller/system_controller.rc", r"PRODUCTVERSION\s+(\d+),\s*(\d+),\s*(\d+),\s*0", "PRODUCTVERSION"),
+    ("controller/system_controller.rc", r'"FileVersion",\s*"(\d+)\.(\d+)\.(\d+)\.0"', "FileVersion"),
+    ("controller/system_controller.rc", r'"ProductVersion",\s*"(\d+)\.(\d+)\.(\d+)\.0"', "ProductVersion"),
+)
+
+
+def version_mismatches(version, project=PROJECT):
+    """판 번호가 적힌 곳 중 version 과 다른 곳 — ['frontend/dashboard.py (대시보드 사이드바): 3.1.0', ...]."""
+    wrong = []
+    for rel, pattern, label in VERSION_MARKS:
+        m = re.search(pattern, (Path(project) / rel).read_text(encoding="utf-8"))
+        found = ".".join(m.groups()) if m else None
+        if found != version:
+            wrong.append(f"{rel} ({label}): {found or '찾지 못함'}")
+    return wrong
+
+
+def check_version_marks(version, test):
+    """정식 판은 판 번호가 모두 같아야 만든다. 시험용은 알리기만 한다."""
+    wrong = version_mismatches(version)
+    if not wrong:
+        say(f"  · 판 번호 확인: README 배지 · 대시보드 · 컨트롤러 모두 {version}")
+        return
+    listing = "\n".join(f"    {w}" for w in wrong)
+    if test:
+        say(f"  · [주의] 판 번호가 {version} 과 다른 곳이 있습니다 (시험용이라 계속합니다):\n{listing}")
+        return
+    raise SystemExit(f"[빌드 실패] 판 번호가 {version} 과 다른 곳이 있습니다. 함께 고친 뒤 다시 빌드하세요:\n{listing}")
 
 
 def stage_app(version):
@@ -574,6 +625,7 @@ def main(argv=None):
     iscc = find_iscc(args.iscc)
     version = args.version or app_version()
     say(f"제조 DB 설치 파일 빌드 · 판 {version}{' (시험용)' if args.test else ''} · ISCC {iscc}")
+    check_version_marks(version, args.test)
     STAGE.mkdir(parents=True, exist_ok=True)
 
     build_runtime(args.rebuild_runtime)

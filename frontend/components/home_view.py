@@ -59,7 +59,7 @@ def render_home_view(on_navigate, show_erd_dialog_fn):
     with r1_c4:
         with st.container(border=True):
             st.markdown("##### :material/cloud_upload: 데이터 삽입")
-            st.caption("XML, NC, TDMS, Log, 조도 CSV 수동 업로드")
+            st.caption("TDMS·NC(필수), 장비 로그·조도 CSV(선택) 수동 업로드")
             if st.button("바로가기 →", key="qa_data_upload", width="stretch"):
                 on_navigate("데이터 삽입")
 

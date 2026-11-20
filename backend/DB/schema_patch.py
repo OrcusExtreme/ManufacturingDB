@@ -52,6 +52,15 @@ PENDING_COLUMNS = [
     ("env_memo", "weather_time",
      "ADD COLUMN weather_time DATETIME NULL "
      "COMMENT '자동 기록에 쓴 기준 정시 (KST). NULL 이면 아직 자동 기록 전'"),
+    ("job", "summary_source",
+     "ADD COLUMN summary_source VARCHAR(10) NULL "
+     "COMMENT '가공 요약 출처: TDMS(CNC 채널+NC 코드) / XML(예전 Job) / NULL(임시값)'"),
+    ("machine_log", "stats_source",
+     "ADD COLUMN stats_source VARCHAR(10) NULL "
+     "COMMENT '최대·평균 값 출처: TDMS / LOG'"),
+    ("machine_log", "machine_indicators",
+     "ADD COLUMN machine_indicators JSON NULL "
+     "COMMENT '장비 로그의 장비 계산값 요약 (열별 절삭 중 평균·최대·최소)'"),
 ]
 
 # 새 기능으로 생긴 '테이블'. 컬럼과 달리 ALTER 로 붙일 수 없어 models.py 정의 그대로 만든다.
@@ -101,6 +110,19 @@ def _backfill_part_name(conn, verbose):
               f"part_code는 숫자 키라 자동으로 채우지 않으니 직접 이름을 지정해 주세요.")
 
 
+def _backfill_summary_source(conn, verbose):
+    """summary_source 를 갓 붙였을 때, 이미 XML 로 요약을 적은 Job 을 'XML' 로 표시한다.
+
+    표시하지 않으면 그 Job 의 TDMS 를 나중에 다시 변환할 때 XML 값(시작·종료·절삭시간·거리)이
+    TDMS 계산값으로 조용히 바뀐다. 이미 쌓인 기록은 그대로 두고, 바꿀지는 사람이 정한다.
+    """
+    result = conn.execute(text(
+        "UPDATE job SET summary_source = 'XML' WHERE summary_source IS NULL AND job_id IN "
+        "(SELECT job_id FROM job_file_archive WHERE xml_file_content IS NOT NULL)"))
+    if verbose and result.rowcount:
+        print(f"[스키마 보정] XML 로 가공 요약을 적었던 Job {result.rowcount}건을 'XML' 출처로 표시했습니다.")
+
+
 def _create_missing_tables(conn, verbose):
     """PENDING_TABLES 중 없는 테이블을 models.py 정의로 만든다. 만든 테이블 이름 목록."""
     from sqlalchemy import inspect
@@ -140,6 +162,8 @@ def ensure_schema(verbose=True):
             # 기동할 때마다 돌리면 이후에 지운 이름이 매번 되살아난다.
             if ("part", "part_name") in added:
                 _backfill_part_name(conn, verbose)
+            if ("job", "summary_source") in added:
+                _backfill_summary_source(conn, verbose)
     except Exception as e:
         # 권한이 없거나 DB가 아직 준비되지 않은 상황에서 서비스 기동을 막지 않는다
         print(f"[스키마 보정 경고] {e}")

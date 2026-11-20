@@ -311,6 +311,62 @@ def canonical_names(db, project_code, part_name):
     return canon_proj, canon_part
 
 
+# ---------------------------------------------------------------------------
+# 부품 소재
+# ---------------------------------------------------------------------------
+# 소재는 예전에 장비 XML 의 MaterialCode 에서만 채웠다. TDMS·NC 에는 소재 정보가 없으므로 이제
+# 업로드 화면에서 사람이 정한다. 부품(part)마다 하나라 같은 부품의 모든 Job 에 공통이다.
+# 부품을 처음 만들 때 넣는 'Unknown' 은 '아직 모름' 을 뜻하는 자리표시자다.
+UNKNOWN_MATERIAL = "Unknown"
+MATERIAL_MAX_LENGTH = 50      # part.material_code VARCHAR(50)
+
+
+def material_is_known(value):
+    """소재 값이 실제 소재인지 ('Unknown' · 빈 값 · None · NaN 은 모름)."""
+    if value is None or value != value:      # value != value 는 NaN (화면의 DataFrame 값)
+        return False
+    text = str(value).strip()
+    return bool(text) and text.lower() != UNKNOWN_MATERIAL.lower()
+
+
+def canonical_material(db, value):
+    """입력한 소재를 이미 쓰고 있는 표기로 맞춘다 ('al6061' -> 'AL6061'). 모름이면 None.
+
+    MySQL 기본 콜레이션은 대소문자를 구분하지 않아 'AL6061' 과 'al6061' 이 섞이면 검색으로는 같은데
+    화면·내보내기에는 두 가지로 보인다. 부품 이름과 같은 이유로 먼저 쓰인 표기를 따른다.
+    """
+    text = " ".join(str(value or "").split())[:MATERIAL_MAX_LENGTH]
+    if not material_is_known(text):
+        return None
+    for (existing,) in db.query(Part.material_code).filter(Part.material_code.isnot(None)).distinct():
+        if existing and existing.lower() == text.lower():
+            return existing
+    return text
+
+
+def set_part_material(db, project_code, part_name, material):
+    """부품의 소재를 정한다. (Part, 바뀌었는지). 소재가 모름이면 (None, False) 로 아무것도 하지 않는다.
+
+    부품이 아직 없으면(CAD 만 올리는 새 부품) 만든다 — 나중에 들어오는 CAD·Job 이 이름으로 찾아 쓴다.
+    커밋은 부른 쪽이 한다.
+    """
+    material = canonical_material(db, material)
+    if material is None or not part_name:
+        return None, False
+    project_code, part_name = canonical_names(db, project_code, part_name)
+    part = db.query(Part).filter(Part.part_name == part_name).first()
+    if part is None:
+        part = Part(part_name=part_name, project_code=project_code, material_code=material)
+        db.add(part)
+        db.flush()
+        return part, True
+    if part.material_code == material:
+        return part, False
+    part.material_code = material
+    db.flush()
+    return part, True
+
+
 def canonical_folder_id(db, folder_id):
     """'{프로젝트}/{부품}/{차수}' 식별자를 DB 에 등록된 표기로 맞춘다."""
     if not folder_id:

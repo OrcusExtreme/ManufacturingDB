@@ -8,8 +8,9 @@
              동봉(bundled)  my.ini 작성 → (처음이면) 데이터 폴더 초기화 → 'OrcusMySQL' 서비스 등록·시작
                             → root 비밀번호 지정
              기존(existing) 이 PC 에서 이미 돌고 있는 MySQL 에 접속해 버전(8.0.16 이상)을 확인
-  schema   models.py 기준으로 빠진 테이블을 만들고(create_all + schema_patch), 보관소·data 폴더를 만든 뒤
-           공구 목록이 비어 있으면 installer/seed/공구 마스터.csv 로 채운다.
+  schema   models.py 기준으로 빠진 테이블을 만들고(create_all + schema_patch), 컬럼·표 설명을 맞추고
+           (업그레이드한 DB 의 옛 설명), 보관소·data 폴더를 만든 뒤 공구 목록이 비어 있으면
+           installer/seed/공구 마스터.csv 로 채운다.
   verify   앱과 같은 길(.env → DB.database)로 다시 접속해 테이블·컬럼·공구·보관소·패키지를 확인한다.
   stop-test-mysql  시험용 설치(서비스 없이 띄운 mysqld)를 끈다. 시험용 Setup 의 제거·업그레이드가 부른다.
 
@@ -771,6 +772,43 @@ def use_app_env(app_dir):
     return values
 
 
+def sync_comments():
+    """컬럼·표 설명(DB 탐색기의 '설명' 칸)을 models.py 에 맞춘다. 예전 판에서 올린 DB 에만 차이가 있다.
+
+    create_all 은 없는 테이블만 만들고 이미 있는 컬럼의 주석은 바꾸지 않아, 올린 DB 는 'XML: StartTime' 같은
+    옛 설명을 그대로 보인다. 주석만 바꾸는 일이고(칸 정의는 그대로, backend/DB/sync_column_comments.py)
+    실패해도 프로그램 동작과는 무관하므로 설치를 멈추지 않는다. 바꾼 칸마다 예전 설명을 기록에 남긴다.
+    """
+    try:
+        from DB.sync_column_comments import describe, sync
+        result = sync(apply=True, verbose=False)
+    except Exception as e:          # noqa: BLE001
+        print(f"  · [주의] 컬럼 설명을 맞추지 못했습니다: {e}")
+        print(r"    나중에 runtime\python.exe backend\DB\sync_column_comments.py --apply 로 맞출 수 있습니다.")
+        return
+    if result is None or not result["items"]:
+        print("  · 컬럼 설명이 이미 이 판과 같습니다.")
+        return
+    for item in result["applied"]:
+        print(f"  · {describe(item)}: {item['old'] or '(없음)'} -> {item['new']}")
+    skipped = len(result["items"]) - len(result["todo"])
+    print(f"  · 컬럼·표 설명 {len(result['applied'])}개를 맞췄습니다" + (f" (건너뜀 {skipped}개)" if skipped else ""))
+    for problem in result["problems"]:
+        print(f"  · [주의] {problem}")
+
+
+# 지금 규칙으로 계산되지 않은 Job: 장비 XML 값 그대로인 것(summary_source='XML'), 또는 TDMS 로 계산했지만
+# 위치 점프(G43/G49)를 빼기 전(가공 구간에 position_jumps 가 없음) 것. 예전 판에서 올린 DB 에만 있다.
+# 아직 변환 전인 Job(summary_source NULL)은 수집기가 새 규칙으로 계산하므로 세지 않는다.
+STALE_SUMMARY_SQL = """
+    SELECT COUNT(*) FROM job j JOIN job_file_archive a ON a.job_id = j.job_id
+    WHERE a.tdms_raw_path IS NOT NULL
+      AND (j.summary_source = 'XML'
+           OR (j.summary_source = 'TDMS' AND JSON_EXTRACT(j.machining_window, '$.position_jumps') IS NULL))
+"""
+RECOMPUTE_HINT = r"컨트롤러에서 [전체 중지] 뒤 tools\recompute_jobs.bat 를 실행하면 미리보기를 보고 반영할 수 있습니다"
+
+
 def cmd_schema(app_dir):
     use_app_env(app_dir)
     from sqlalchemy import inspect, text
@@ -789,6 +827,9 @@ def cmd_schema(app_dir):
     added = ensure_schema(verbose=True)
     if added:
         print(f"  · 보정한 컬럼 {len(added)}개")
+
+    step("schema_comments", "컬럼·표 설명을 이 판의 models.py 에 맞춥니다 (주석만 바꿉니다).")
+    sync_comments()
 
     step("schema_folders", "원본 백업 보관소와 data 폴더를 만듭니다.")
     import vault_manager
@@ -862,6 +903,14 @@ def cmd_verify(app_dir):
             notes.append("[주의] 공구 목록이 비어 있습니다. 대시보드 '공구 마스터' 화면에서 올리세요.")
     except Exception as e:          # noqa: BLE001
         problems.append(f"앱 설정(.env)으로 데이터베이스에 접속하지 못했습니다: {e}")
+    try:
+        with dbmod.engine.connect() as conn:
+            stale = conn.execute(text(STALE_SUMMARY_SQL)).scalar() or 0
+        if stale:
+            notes.append(f"[알림] 예전 기준(장비 XML 값, 또는 위치 점프를 포함한 총 이동거리)으로 계산된 Job {stale}건이 "
+                         f"있습니다. 새 기준(TDMS+NC)으로 바꾸려면 {RECOMPUTE_HINT}.")
+    except Exception as e:          # noqa: BLE001 — 알림일 뿐이라 확인을 실패로 만들지 않는다
+        notes.append(f"(예전 기준 Job 수를 세지 못했습니다: {e})")
 
     import vault_manager
     ok, message = vault_manager.ensure_vault_root()

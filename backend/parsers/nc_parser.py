@@ -387,6 +387,18 @@ def parse_nc_cutting_conditions(nc_input):
     if not content:
         return []
 
+    steps = _steps_from_sections(_scan_sections(content))
+
+    for idx, s in enumerate(steps, start=1):
+        s['step_order'] = idx
+        # 표준 표기로 적는다 (T6 -> T06). 매칭은 tool_number 로 하므로 표기가 바뀌어도 안전하다.
+        s['xml_tool_code'] = format_tool_code(s['tool_number'])
+
+    return steps
+
+
+def _scan_sections(content):
+    """NC 본문을 블록으로 나눠 _PassScanner 로 읽은 공구 구간 목록 (워킹스텝·절삭 거리 공용)."""
     blocks = []
     for line in content.splitlines():
         block = _COMMENT_RE.sub('', line).strip().upper()
@@ -396,14 +408,46 @@ def parse_nc_cutting_conditions(nc_input):
     scanner = _PassScanner(uses_m6=any(_M6_RE.search(b) for b in blocks))
     for block in blocks:
         scanner.read_block(block)
-    steps = _steps_from_sections(scanner.finish())
+    return scanner.finish()
 
-    for idx, s in enumerate(steps, start=1):
-        s['step_order'] = idx
-        # 표준 표기로 적는다 (T6 -> T06). 매칭은 tool_number 로 하므로 표기가 바뀌어도 안전하다.
-        s['xml_tool_code'] = format_tool_code(s['tool_number'])
 
-    return steps
+def nc_cutting_distance(nc_input) -> Optional[float]:
+    """NC 가 지령한 절삭 이동(G01~G03 · 고정 사이클)의 총 경로 길이(mm). 절삭이 없거나 못 읽으면 None.
+
+    워킹스텝 분리와 같은 위치 추적(_PassScanner)을 쓰므로 원호·증분 지령·Z 진입까지 들어간다.
+    위치를 알 수 없는 구간(G28 원점 복귀 직후 등)의 이동은 더하지 않는다.
+    실측: O1110 4336.0mm (XML 4327.5, +0.2%), O0911 527.0mm (XML 526.8, +0.04%).
+    '계획' 거리라 프로그램을 중간에 멈춘 Job 에서는 실제보다 길다.
+    """
+    content = _read_nc_text(nc_input)
+    if not content:
+        return None
+    total = sum(acc[1] for section in _scan_sections(content)
+                for p in section['passes'] for acc in p['feeds'].values())
+    return round(total, 3) if total > 0 else None
+
+
+# NC 첫머리의 프로그램 이름. FANUC 은 '<O1110.NC>' (이름형) 또는 'O1110' (번호형) 으로 적는다.
+# TDMS 의 CNC-ProgramName 과 같은 표기라 둘을 맞대어 볼 수 있다.
+_PROGRAM_NAME_RE = re.compile(r'^\s*<\s*([^<>]+?)\s*>')
+_PROGRAM_NUMBER_RE = re.compile(r'^\s*(O\d{1,5})(?![0-9])', re.IGNORECASE)
+
+
+def nc_program_name(nc_input) -> Optional[str]:
+    """NC 첫머리에 적힌 프로그램 이름. '<O1110.NC>' -> 'O1110.NC', 'O1234 (...)' -> 'O1234'. 없으면 None."""
+    content = _read_nc_text(nc_input)
+    looked = 0
+    for line in content.splitlines():
+        text = line.strip()
+        if not text or text == '%' or (text.startswith('(') and text.endswith(')')):
+            continue
+        m = _PROGRAM_NAME_RE.match(text) or _PROGRAM_NUMBER_RE.match(text)
+        if m:
+            return m.group(1).strip()
+        looked += 1
+        if looked >= 3:     # 프로그램 이름은 맨 앞에만 온다
+            break
+    return None
 
 
 def _resolve_nc_source(db, workplan_id, nc_file_path, nc_content):
@@ -562,10 +606,15 @@ def parse_nc(file_path, job_id_str=None):
         if job.workplan:
             nc_rel_for_workplan = get_rel_raw_data_path(file_path)
 
-            # program_code가 없는 경우 NC 파일명을 프로그램 코드로 임시 사용
+            # 프로그램 코드를 아직 모르면 NC 첫머리의 이름(<O1110.NC>)을 임시로 쓴다.
+            # 최종 근거는 TDMS 의 CNC-ProgramName 이다 (tdms_visualizer 가 가공 구간에서 읽어 맞춘다).
+            # 예전에는 'UNKNOWN' 과 비교했는데 임시 Workplan 의 값은 'Unknown' 이라 한 번도 실행되지
+            # 않았다. 또 파일명을 쓰면 장비가 붙인 이름이 50자를 넘어 저장이 실패할 수 있었다
+            # ('DNM200__O1110.NC__PROBE START__261111185522_O1110.NC' 는 52자).
             fallback_program = None
-            if not job.workplan.program_code or job.workplan.program_code == "UNKNOWN":
-                fallback_program = os.path.splitext(os.path.basename(file_path))[0]
+            if not job.workplan.program_code or job.workplan.program_code.lower() == "unknown":
+                fallback_program = (nc_program_name(file_path)
+                                    or os.path.splitext(os.path.basename(file_path))[0])[:50]
 
             prev_workplan_id = job.workplan_id
             adopt_workplan_identity(db, job, program_code=fallback_program,

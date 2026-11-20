@@ -10,11 +10,12 @@
   <a href="https://www.sqlalchemy.org/"><img src="https://img.shields.io/badge/SQLAlchemy-2.0%2B-red.svg" alt="ORM" /></a>
   <a href="https://streamlit.io/"><img src="https://img.shields.io/badge/Streamlit-1.61%2B-FF4B4B.svg" alt="Frontend" /></a>
   <a href="https://www.iso.org/"><img src="https://img.shields.io/badge/Standard-ISO%2014649%20(STEP--NC)-green.svg" alt="Standard" /></a>
-  <a href="https://github.com/OrcusExtreme/ManufacturingDB"><img src="https://img.shields.io/badge/Release-V3.2.0-brightgreen.svg" alt="Release" /></a>
+  <a href="https://github.com/OrcusExtreme/ManufacturingDB"><img src="https://img.shields.io/badge/Release-V3.3.0-brightgreen.svg" alt="Release" /></a>
 </p>
 
 공작기계지능화실험실(Machine Tool Intelligence Lab)의 **통합 제조 데이터베이스 및 가공 데이터 분석 시스템**입니다.  
-공작기계(CNC) 가공 과정에서 발생하는 이기종 데이터(XML 메타데이터, NC 프로그램, 12.8kHz 고주파 NI TDMS 센서 데이터, 1Hz CNC 상태 로그, 표면 조도 프로파일 CSV, 3D CAD 모델)를 Watchdog 기반으로 자동 감시·수집·파싱하여 **ISO 14649(STEP-NC) 표준 기반 RDBMS**에 정규화 적재하고, 분석용 웹 대시보드와 외부 연동용 REST API를 제공합니다.
+공작기계(CNC) 가공 과정에서 발생하는 이기종 데이터(NC 프로그램, 12.8kHz 고주파 NI TDMS 센서·CNC 데이터, 10Hz 장비 로그, 표면 조도 프로파일 CSV, 3D CAD 모델)를 Watchdog 기반으로 자동 감시·수집·파싱하여 **ISO 14649(STEP-NC) 표준 기반 RDBMS**에 정규화 적재하고, 분석용 웹 대시보드와 외부 연동용 REST API를 제공합니다.
+가공 요약(가공 시작·종료, 절삭시간, 이동거리, 완료 여부)은 **TDMS + NC 두 파일**로 계산하며, 장비 로그는 장비 계산값을 남길 때만 쓰는 선택 입력입니다. 장비가 수집 폴더에 넣는 XML 메타데이터는 보관하고 빈 칸만 보충합니다.
 
 ---
 
@@ -30,7 +31,7 @@
 - **Job별 실제 사용 공구 지정 (`job_tool_assignment`)**:
   - 가공 차수마다 실제 매거진 포트 또는 미장착 재고에서 사용된 공구를 T번호 기준으로 매핑
   - 지정 당시의 공구 제원 스냅샷을 영구 보존하여 공구 마스터 전체 교체 또는 매거진 포트 재배치 시에도 과거 가공 데이터 불변성 보장
-  - NC 파일 업로드 시 즉시 T번호 파싱 프리뷰 제공 및 업로드 후 워크스페이스에서 사후 수정 지원
+  - NC 파일 업로드 시 즉시 T번호 파싱 프리뷰 제공 및 공구 지정 (Job 워크스페이스에서는 사용 공구 제원 조회)
 - **가공 시각 외기 온습도·날씨 자동 기록 (`weather_service`)**:
   - 온습도 수기 입력이 누락된 Job에 대해 가공 시작 시각 기준 기상 모델 격자 데이터(Open-Meteo Historical Weather API)를 1시간 주기로 자동 조회 및 보충
   - 안정적 관측 데이터 확보를 위해 12시간 지연 수집 및 출처(`weather_source`), 기준 시각(`weather_time`) 명시
@@ -191,8 +192,10 @@ ManufacturingDB/
 │   ├── tool_assignment.py            #   Job별 사용 공구 지정 및 제원 스냅샷 관리
 │   ├── weather_service.py            #   가공 시각 외기 온습도·날씨 자동 기록 데몬 (Open-Meteo)
 │   ├── recovery_engine.py            #   보관소 및 DB 기반 복원 엔진
+│   ├── recompute_job_summary.py      #   기존 Job 가공 요약을 TDMS+NC 기준으로 재계산 (미리보기 / --apply)
+│   ├── compare_xml_tdms.py           #   장비 XML 값 대 TDMS+NC 계산값 비교표 (읽기 전용, CSV 저장)
 │   ├── tdms_visualizer.py            #   TDMS Parquet/FFT 변환 백그라운드 데몬
-│   ├── tdms_alignment.py             #   NC 블록 대조 가공 구간 판별 및 시간축 정렬
+│   ├── tdms_alignment.py             #   NC 블록 대조 가공 구간 판별, 실행 사이클(가공 시작·종료), UTC→KST 시간축 정렬
 │   ├── tool_inserter.py              #   ISO 14649 공구 마스터 검증 및 일괄 적재 (스냅샷 기반 재연결)
 │   ├── pipeline_control.py           #   파이프라인 상태 제어 인터페이스
 │   ├── pipeline_config.json          #   파서 활성화 및 일시정지 상태 설정 파일
@@ -209,7 +212,8 @@ ManufacturingDB/
 │   ├── DB/
 │   │   ├── database.py               #   SQLAlchemy 엔진 및 세션 설정
 │   │   ├── models.py                 #   ORM 스키마 정의 (15개 테이블)
-│   │   └── schema_patch.py           #   기동 시 스키마 테이블/컬럼 자동 보정 패치
+│   │   ├── schema_patch.py           #   기동 시 스키마 테이블/컬럼 자동 보정 패치
+│   │   └── sync_column_comments.py   #   models.py 주석을 운영 DB 컬럼·표 주석에 반영 (미리보기 / --apply)
 │   ├── parsers/                      #   자료 유형별 파서
 │   │   ├── xml_parser.py  nc_parser.py  tdms_parser.py
 │   │   └── log_parser.py  roughness_parser.py  cad_parser.py
@@ -223,6 +227,15 @@ ManufacturingDB/
 │       ├── test_nc_workingstep_sync.py # NC 기준 워킹스텝 재구성 및 동기화 무결성 테스트
 │       ├── test_tool_assignment.py   #   Job별 공구 지정 및 마스터 교체 후 매칭 테스트
 │       ├── test_weather_service.py   #   외기 온습도·날씨 자동 기록 단위 테스트
+│       ├── test_tdms_cycle.py        #   TDMS 실행 사이클·가공 프로그램·가공 요약 기록 규칙 테스트
+│       ├── test_nc_program_info.py   #   NC 프로그램명·절삭 경로 길이 테스트
+│       ├── test_machine_log_sources.py # CNC 요약 출처(TDMS/로그)·장비 계산값·기존 Job 재계산 테스트
+│       ├── test_part_material.py     #   부품 소재 입력·표기 통일·XML 비어 있을 때만 채움 테스트
+│       ├── test_two_file_inputs.py   #   TDMS 가공 프로그램 읽기·NC 비교·재판별 조건·시작 보정 규칙 테스트
+│       ├── test_pipeline_two_files.py # 합성 TDMS+NC 수집 흐름 전체 회귀 테스트 (도착 순서·중단·불일치·늦은 XML)
+│       ├── test_compare_xml_tdms.py  #   XML 대 TDMS 비교표 판정 테스트
+│       ├── test_sync_column_comments.py # 운영 DB 주석 반영 계획·DDL 테스트
+│       ├── test_release_version.py   #   배포 판 번호(README·대시보드·컨트롤러) 일치 검사
 │       └── verify_e2e_cutting_conditions.py # 절삭조건 E2E 데이터베이스 연동 검증
 │
 ├── frontend/                         # Streamlit 웹 대시보드
@@ -252,6 +265,7 @@ ManufacturingDB/
 │   ├── compile_controller.bat        #   C++ 컨트롤러 빌드 스크립트
 │   ├── run_controller.bat            #   컨트롤러 실행 스크립트
 │   ├── run_windows.bat               #   가상환경 구성 및 통합 실행 배치 파일
+│   ├── recompute_jobs.bat            #   업그레이드 뒤 기존 Job 가공 요약 재계산 (미리보기 → 확인 → 반영)
 │   └── requirements.txt              #   파이썬 의존성 패키지 명세
 │
 ├── installer/                        # 배포 패키지(Inno Setup) 빌드 환경
@@ -360,6 +374,18 @@ tools\run_api.bat              # 또는 python tools/run_api.py
 python backend/weather_service.py
 ```
 
+*관리 도구 (모두 기본은 미리보기·읽기 전용):*
+```bash
+# 장비 XML 이 보관된 Job 의 XML 값 대 TDMS+NC 계산값 비교표 (DB 를 바꾸지 않음)
+python backend/compare_xml_tdms.py [Job 번호 ...] [--csv 표.csv]
+
+# 기존 Job 가공 요약을 TDMS+NC 기준으로 다시 계산 (--apply 로 반영, 변경 전 값은 backups/)
+python backend/recompute_job_summary.py [Job 번호 ...] [--all] [--apply]
+
+# models.py 의 컬럼·표 주석을 운영 DB 에 반영 (DB 탐색기의 '설명' 칸, --apply 로 반영 · 반영 뒤 칸 정의가 그대로인지 확인)
+python backend/DB/sync_column_comments.py [--apply]
+```
+
 ### 5. 서비스 접속 정보
 - **통합 웹 대시보드**: [http://localhost:8501](http://localhost:8501)
 - **REST API Swagger 문서**: [http://localhost:8000/docs](http://localhost:8000/docs) (ReDoc: `/redoc`, OpenAPI 스펙: `/openapi.json`)
@@ -388,6 +414,14 @@ python installer\build_installer.py           # dist/Setup_ManufacturingDB_v*.ex
 python installer\build_installer.py --test    # 로컬 테스트용 경량 빌드
 ```
 
+- 판 번호는 이 문서 릴리즈 노트 맨 위(`### [Vx.y.z]`)를 씁니다. 판을 올릴 때는 README 배지, 대시보드 사이드바(`frontend/dashboard.py`), 컨트롤러 버전 정보(`controller/system_controller.rc`)도 함께 고칩니다 — 하나라도 다르면 정식 판은 만들지 않습니다 (`backend/tests/test_release_version.py` 도 같은 것을 봅니다).
+- 결과물은 `dist/` 에 설치 파일과 SHA-256(`.sha256`)이 함께 생깁니다. 커밋하지 않은 새 파일도 담기므로(.gitignore 대상 제외), 배포한 판은 같은 내용으로 커밋해 둡니다.
+
+### 3. 업그레이드 (예전 판에서 올리기)
+1. 컨트롤러에서 **[전체 중지]** 를 누른 뒤 새 `Setup_ManufacturingDB_v*.exe` 를 관리자 권한으로 실행합니다. 지난 설치의 폴더·MySQL·DB 설정을 그대로 쓰고, 데이터·`.env`·파서 On/Off 설정은 그대로 둔 채 프로그램만 바꿉니다.
+2. 설치 마무리 단계가 DB 를 새 판에 맞춥니다: 빠진 테이블·컬럼 추가(`schema_patch`), 컬럼·표 설명 맞춤(주석만 변경, 칸 정의는 그대로 — 바꾼 설명은 예전 값과 함께 기록), 설치 확인. 기록은 `{설치 폴더}\logs\install.log` 입니다.
+3. 이미 쌓인 Job 의 가공 요약 값은 바꾸지 않습니다. V3.3.0 기준(TDMS+NC, 위치 점프를 뺀 총 이동거리)으로 다시 계산하려면 서비스가 멈춘 상태에서 `{설치 폴더}\tools\recompute_jobs.bat` 를 실행합니다 — 미리보기를 보여 준 뒤 **Y** 를 누를 때만 반영하고, 바꾸기 전 값은 `backups\` 에 남깁니다. 설치 확인 단계가 이렇게 다시 계산할 Job 수를 `install.log` 에 알립니다.
+
 ---
 
 ## 대시보드 주요 기능 안내
@@ -395,8 +429,9 @@ python installer\build_installer.py --test    # 로컬 테스트용 경량 빌�
 1. **홈 화면**: 시스템 상태 요약 및 주요 기능에 접근할 수 있는 바로가기 그리드를 제공합니다.
 2. **Job 워크스페이스**:
    - 프로젝트, 부품, 가공차수, 실험일자, 장비 기준의 5단계 캐스케이딩 필터를 통한 가공 데이터 검색
-   - 시간 도메인 Envelope, 주파수 FFT 스펙트럼, 1Hz CNC 로그 추이, 단면 표면조도 프로파일 시각화
-   - `사용 공구` 카드: T번호별 실제 사용된 공구 제원 스냅샷 확인 및 사후 수정 기능 제공
+   - 시간 도메인 Envelope, 주파수 FFT 스펙트럼, CNC 채널 추이(TDMS·장비 로그), 단면 표면조도 프로파일 시각화
+   - NC 파일의 프로그램과 TDMS 에서 가공한 프로그램이 다르면 'TDMS 그래프' 카드에 경고
+   - `사용 공구 제원` 카드: 이 Job 에서 쓴 공구의 제원 조회 (공구 지정은 업로드 화면에서)
    - 불필요 가공 데이터 삭제 시 하위 연관 레코드의 원자적 연쇄 삭제(`CASCADE`) 지원
 3. **계층형 마스터 데이터**:
    - ISO 14649 기반 공정 계층(`Part ➔ Workplan ➔ Workingstep ➔ Tool`) 탐색
@@ -406,7 +441,8 @@ python installer\build_installer.py --test    # 로컬 테스트용 경량 빌�
    - 표준 CSV 템플릿 다운로드 및 수정본 업로드를 통한 공구 마스터 일괄 갱신
    - 공구 마스터 전체 교체 시에도 기존 가공 차수(Job)의 공구 매핑은 지정 당시의 제원 스냅샷을 기반으로 자동 재연결
 5. **데이터 삽입 (수동 업로드)**:
-   - 3D 형상 모델, XML, NC, TDMS, Log, 표면조도 CSV 웹 수동 업로드 인터페이스
+   - 3D 형상 모델, TDMS·NC(필수), 장비 로그·표면조도 CSV(선택) 웹 수동 업로드 인터페이스 — 새 Job 은 TDMS 와 NC 가 모두 있어야 생성
+   - TDMS 를 고르면 CNC-ProgramName 채널에서 실제로 가공한 프로그램을 읽어 올리는 NC 와 비교·경고 (기록 시작 때 프로그램이 남는 파일명은 쓰지 않음)
    - NC 파일 선택 즉시 T번호, 공구별 스텝 수, S/F 조건 범위 프리뷰 제공 및 공구 마스터(장착/미장착 재고) 매핑 지원
    - 업로드 시점에 가공 분류, 환경 데이터(온습도, 작업자, 이상 소음 등), 품질 점검(치수공차, 합불 판정) 동시 입력
    - 온습도 미입력 시 가공 시작 시각 기준 기상 모델 격자 데이터 자동 수집 연동
@@ -437,9 +473,75 @@ python installer\build_installer.py --test    # 로컬 테스트용 경량 빌�
 - **15번째 ORM 테이블 (`job_tool_assignment`)**: 가공 차수(`job_id`), 공구 번호(`tool_number`), 공구 ID(`tool_id`)와 함께 매핑 시점의 공구 제원(이름, 분류, 직경, 유효길이, 전장, 날수 등)을 독립 컬럼으로 스냅샷 저장합니다.
 - **마스터 교체 시 불변성**: 새로운 공구 마스터 CSV/XLSX 업로드로 `tool` 테이블이 전체 교체되더라도, 기존 Job의 공구 기록은 T번호가 아닌 **지정 당시의 제원 스냅샷**을 기준으로 새 마스터에서 일치하는 공구를 찾아 재연결합니다. 일치하는 공구가 없더라도 스냅샷 제원은 영구 보존됩니다.
 
+### 3. 가공 요약 계산 규칙 (TDMS + NC)
+Job 의 가공 요약은 TDMS CNC 채널(약 27Hz)과 NC 코드로 계산합니다 (`backend/tdms_visualizer.py`, `backend/tdms_alignment.py`, 출처는 `job.summary_source='TDMS'`).
+
+| 항목 | 규칙 |
+|---|---|
+| 시각 기준 | TDMS 는 UTC → 한국 시간(+9시간)으로 저장 |
+| 가공 프로그램 | `CNC-ProgramName` 중 실제로 절삭이 가장 오래 일어난 프로그램 (파일명·채널 속성은 기록 시작 때 프로그램이라 쓰지 않음) |
+| 가공 시작·종료 | 운전 상태(`CNC-ProgramMode`) 실행 사이클 — 사이클 시작 버튼부터 프로그램 끝까지 |
+| 절삭시간 | 절삭 G코드(G01~G03·고정 사이클) + 실제 이송 > 0 + 주축 회전인 시간 |
+| 절삭 이동거리 | NC 절삭 경로 길이 (NC 블록 대조가 맞을 때), 아니면 TDMS 절삭 구간 실측 |
+| 총 이동거리 | 실행 사이클의 X·Y·Z 실제 이동 합. 한 기록 간격에 장비가 낼 수 없는 속도(1,500 mm/s 초과)로 바뀐 위치는 공구 길이 보정(G43/G49) 등의 표시 점프로 보고 뺌 — 뺀 횟수·합은 `machining_window.position_jumps`·`position_jump_mm` |
+| 완료 여부 | 끝 무렵 M02/M30 실행 확인, 또는 마지막 실행 블록 뒤 남은 동작 블록 3개 이하. 근거는 `machining_window.program_end_basis` |
+
+장비 XML 과의 알려진 차이 (실측 2건, `compare_xml_tdms.py`):
+- **총 이동거리**: 위치 채널은 공구 길이 보정이 들어간 좌표라, G43/G49 를 실행하면 공구가 움직이지 않아도 위치 표시가 공구 길이만큼(실측 125~191mm) 한 기록 간격에 바뀝니다 (실측 점프 7번 모두 Z 만, 3,301~5,135 mm/s — 실제 이동은 가장 빨라야 380 mm/s). TDMS 계산은 이 점프를 빼고 장비 XML 은 이동으로 세므로, 비교표는 뺀 양을 더해 같은 정의로 비교합니다. 그러면 DB_Test2/1 은 0.02% 차이로 맞고, DB_Test/1 은 장비 XML 이 프로그램 종료 뒤 리셋 때의 점프(약 191mm)까지 세어 162mm(10.7%) 큽니다 (장비 XML 은 자기 로그(10Hz) 위치로 셈, 로그 직선합 1515.3mm 와 0.3% 차이).
+- **가공 종료**: 장비 XML 의 FinishTime 은 CNC 가 프로그램을 끝낸 뒤 0.2~1.9초 늦게 찍힙니다 (DB_Test/1: CNC 리셋 16:46:58.76, XML 16:47:00.62).
+- **시각 정밀도**: `job.start_time`·`end_time` 은 초 단위 DATETIME 이라 TDMS 의 1/1000초 값이 반올림되어 저장됩니다.
+- 시작(±0.6초), 절삭시간(±0.2초), 절삭 이동거리(±0.2%), 완료 여부·작업 ID·장비·프로그램은 두 건 모두 일치합니다.
+
 ---
 
 ## 릴리즈 노트 (Release Notes)
+
+### [V3.3.0] - 2026-11-16
+가공 요약의 기준을 장비 XML 에서 **TDMS(CNC 채널) + NC 코드**로 옮기고 입력을 TDMS·NC 두 파일로 줄였습니다. 예전 판에서 올리는 방법은 [업그레이드](#3-업그레이드-예전-판에서-올리기)를 참고하세요.
+
+- **TDMS(CNC 채널)+NC 코드 기준 가공 요약 (XML 대체 1단계)**:
+  - TDMS 시각(UTC)을 한국 시간(UTC+9)으로 고정 변환 (XML 없이 처리할 때 종료시각이 9시간 이르게 저장되던 문제 수정)
+  - 가공 시작·종료를 TDMS 기록 시작이 아닌 운전 상태(`CNC-ProgramMode`) 실행 사이클로 산출 (실측 XML 대비 시작 0.00~0.26초, 중단된 시도 제외)
+  - 가공 프로그램을 TDMS `CNC-ProgramName` 중 실제 절삭한 프로그램으로 확정 (파일명·채널 속성의 기록 시작 프로그램 미사용)
+  - 절삭시간은 절삭 G코드(G01~G03·고정 사이클)+이송+주축 기준, 절삭 이동거리는 NC 코드 절삭 경로 길이로 산출 (실측 XML 대비 ±0.2%)
+  - 가공 요약 출처 `job.summary_source`(TDMS / XML / 임시) 신설
+- **CNC 요약 TDMS 기준 전환 및 장비 계산값 저장 (XML·로그 대체 2단계)**:
+  - `machine_log` 최대·평균 값(주축 부하·회전수·이송)을 TDMS CNC 채널(실행 사이클, 약 27Hz)로 산출하고 출처(`stats_source`) 기록
+  - 장비 로그(`_ext.log`)의 장비 계산값(채터 수준·소리·절삭계수 추정 등) 열별 요약을 `machine_indicators`(JSON)로 저장, Job 워크스페이스 'CNC 요약' 카드와 'CNC 그래프'에 표시
+  - 알람 열이 없는 로그의 알람 수를 0이 아닌 '모름'(NULL)으로 기록, 로그 절삭시간 대체값을 장비 절삭 판정(`cut`) 기준으로 수정
+  - 기존 Job 재계산 도구 `backend/recompute_job_summary.py` (미리보기 / `--apply`, 변경 전 값 `backups/` 보관) — Job 1·2 를 TDMS+NC 기준으로 재계산 완료
+- **부품 소재 입력 경로 (XML 대체 3단계)**:
+  - TDMS·NC에는 소재 정보가 없어, 업로드 화면 Part 행에 '소재' 칸 추가 (기존 소재 목록 선택 또는 새로 입력, 부품마다 하나)
+  - 업로드와 함께 저장하거나, 파일 없이 '소재만 저장'으로 기존 부품의 소재 변경
+  - 이미 쓰는 표기로 통일(`al6061` → `AL6061`), 장비 XML의 `MaterialCode`는 부품 소재가 비어 있을(`Unknown`) 때만 채움 — 사람이 정한 소재를 덮어쓰지 않음
+  - Job 워크스페이스에서 자리표시자 `Unknown`을 '미등록'으로 표시
+- **입력을 TDMS + NC 두 개로 (XML 대체 4단계)**:
+  - 업로드 화면에서 XML 칸 제거, TDMS·NC 필수(새 Job 은 둘 다 있어야 생성) · 장비 로그·조도 CSV 선택
+  - 업로드 전 NC ↔ TDMS 가공 프로그램 비교 경고 (TDMS 는 저장 전 메모리에서 필요한 CNC 채널만 읽음, 끝이 0 으로 채워진 파일 대응), 수집 뒤 Job 화면 'TDMS 그래프' 카드에도 같은 경고 (`machining_window.nc_program`·`program_mismatch`)
+  - NC 를 TDMS 보다 먼저 저장해 TDMS 변환이 NC 를 바로 찾도록 함. NC 가 늦게 들어와도 자동으로 다시 판별
+  - 'XML 이 도착하면 가공 구간을 다시 판별' 하던 수집기 규칙 제거, 수집기 시작 보정(backfill)의 로그 절삭 규칙을 로그 파서와 통일 (예전: 경과시간 `ctime` 을 절삭시간으로 기록)
+  - Job 화면의 'XML 원본 보기'는 XML 이 보관된 Job 에만 표시
+  - 검증: 실측 2건(DB_Test2·DB_Test)을 TDMS+NC 만으로 도착 순서를 바꿔(NC 먼저 / TDMS 먼저 / NC 가 변환 뒤 도착) 수집 — 모든 순서에서 Job 1·2 재계산 값과 일치
+- **기존 데이터 대조 및 마무리 (XML 대체 5단계)**:
+  - 장비 XML 값 대 TDMS+NC 계산값 비교표 도구 `backend/compare_xml_tdms.py` (읽기 전용, CSV) — 실측 Job 1·2 18칸 중 16칸 허용치 이내, 차이 2칸(Job 1 종료·총 이동거리)의 원인 규명 (위 '가공 요약 계산 규칙' 참고)
+  - 완료 판정 근거 `machining_window.program_end_basis` 기록 (M02/M30 확인 / 남은 동작 블록 수) — 실측 Job 이 쌓이면 허용치를 비교표로 다듬음
+  - 장비 XML 이 TDMS 처리 뒤에 들어오면 XML 의 ProgramCode 로 Workplan 을 다시 골라 Job 을 옮기던 문제 수정 (표기만 달라도 원래 Workplan·워킹스텝이 고아로 삭제되던 문제). 이제 XML 은 보관과 빈 칸 채움만 수행
+  - 합성 TDMS 로 수집 흐름 전체 회귀 테스트 (`test_pipeline_two_files.py`: 도착 순서, 중단된 가공, 프로그램 불일치, 늦게 도착한 XML)
+  - 모델 주석·ERD 설명을 TDMS+NC 기준으로 갱신, 운영 DB 주석 반영 도구 `backend/DB/sync_column_comments.py` (미리보기 / `--apply`)
+- **총 이동거리를 실제 이동 기준으로**:
+  - 공구 길이 보정(G43/G49)을 켜고 끌 때 위치 표시만 한 번에 바뀌는 점프를 총 이동거리에서 제외 (`tdms_alignment.travel_steps`, 기준 1,500 mm/s) — 실측 DB_Test 1357.0 → 1165.9mm (점프 1번 191.1mm), DB_Test2 11691.9 → 10903.7mm (점프 6번 788.3mm)
+  - 뺀 횟수·합을 `machining_window.position_jumps`·`position_jump_mm` 에 기록, Job 화면 'TDMS 그래프' 캡션에 표시. 비교표는 뺀 양을 더해 장비 XML 과 같은 정의로 비교
+  - 재계산 도구가 NC 프로그램 이름(`nc_program`)을 남기지 않아 재계산한 Job 에서 NC 불일치 경고가 나올 수 없던 문제 수정 (변환과 같은 함수 사용), 미리보기가 초 단위로 저장돼 그대로인 시각을 바뀐 값으로 표시하던 문제 수정
+  - 주석 반영 도구에 잠금 대기 한도(10초)와 반영 뒤 정의 확인 추가
+  - 연구실 운영 DB 반영: 컬럼·표 주석 23개, Job 1·2 재계산 (총 이동거리·완료 근거·NC 프로그램 기록)
+- **Job 워크스페이스 사용 공구 카드를 제원 조회 전용으로**:
+  - 사용한 공구의 제원(공구 마스터와 같은 열)만 표시, 근거 열과 '공구 지정 수정' 제거 — 공구 지정은 업로드 화면에서만
+- **배포·업그레이드**:
+  - 설치 프로그램이 업그레이드할 때 컬럼·표 설명(DB 탐색기 '설명' 칸)을 새 판에 맞춤 (주석만 변경, 반영 뒤 칸 정의 확인, 실패해도 설치는 계속)
+  - 설치 확인 단계가 예전 기준으로 계산된 Job 수를 `install.log` 에 알림, 기존 Job 재계산 실행 파일 `tools/recompute_jobs.bat` (동봉 런타임 · 미리보기 → 확인 → 반영)
+  - 빌드할 때 판 번호(README 배지·대시보드·컨트롤러)가 다르면 정식 판을 만들지 않음 — V3.2.0 에서 올리지 못해 v3.1.0 으로 남아 있던 대시보드·컨트롤러 표기 수정
+- **테스트**:
+  - `test_tdms_cycle.py`, `test_nc_program_info.py`, `test_machine_log_sources.py`, `test_part_material.py`, `test_two_file_inputs.py`, `test_pipeline_two_files.py`, `test_compare_xml_tdms.py`, `test_sync_column_comments.py`, `test_release_version.py` 추가
 
 ### [V3.2.0] - 2026-11-12
 - **ISO 14649 워킹스텝(Workingstep) 세분화 및 절삭조건·절입깊이 파싱 고도화**:

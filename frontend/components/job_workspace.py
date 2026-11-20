@@ -14,6 +14,7 @@ import vault_layout
 from .filters import render_search_filters, render_job_table
 from .tool_picker import render_job_tools
 from cad_viewer_component import find_cad_file_name, render_cad_viewer
+from job_manager import material_is_known
 from weather_service import describe as describe_weather
 
 
@@ -81,9 +82,20 @@ def _load_machining_window(job_info, job_id, source_folder=None):
 _WINDOW_METHOD_LABEL = {
     "nc_block": "NC 블록 대조",
     "activity": "스핀들/이송 활동",
-    "hint": "XML 가공시간",
+    "hint": "기록된 가공 시각",      # Job 에 이미 적힌 시작·종료 시각 (예전 Job 은 장비 XML 값)
     "full": "기록 전체",
 }
+
+
+def _program_mismatch_note(window):
+    """NC 파일의 프로그램과 TDMS 에서 실제로 깎은 프로그램이 다르면 경고 문구. 같거나 모르면 None."""
+    if not window or not window.get("program_mismatch"):
+        return None
+    basis = ("NC 블록이 맞아 절삭 이동거리는 NC 로 계산했습니다." if window.get("method") == "nc_block"
+             else "NC 블록이 맞지 않아 절삭 이동거리는 TDMS 실측값으로 계산했습니다.")
+    return (f"NC 파일의 프로그램(`{window.get('nc_program')}`)과 TDMS 에서 가공한 프로그램"
+            f"(`{window.get('program_name')}`)이 다릅니다. {basis} 다른 NC 를 올렸다면 워킹스텝(공구·절삭조건)도 "
+            "틀리므로 NC 파일을 확인하세요.")
 
 
 def _machining_window_caption(window):
@@ -105,6 +117,11 @@ def _machining_window_caption(window):
             parts.append(f"NC 대조 불일치 ({window.get('matched_blocks', 0)}/{window['program_blocks']}종)")
     if window.get("total_rows"):
         parts.append(f"CNC {window.get('rows', 0):,}/{window['total_rows']:,}행")
+    if window.get("program_end_basis"):        # 완료 여부를 무엇으로 판단했는지
+        parts.append(f"완료 근거: {window['program_end_basis']}")
+    if window.get("position_jumps"):           # 총 이동거리에서 뺀 G43/G49 공구 길이 보정 등의 위치 표시 점프
+        parts.append(f"이동거리에서 뺀 위치 점프 {window['position_jumps']}번 "
+                     f"({window.get('position_jump_mm') or 0:,.1f}mm)")
     sync = window.get("daq_sync") or {}
     if sync.get("applied"):
         parts.append(f"DAQ 시계 보정 {sync.get('lag_seconds', 0):+.2f}초")
@@ -146,6 +163,88 @@ def _fmt(value, fallback="-"):
     return fallback if text_value in ("", "None", "nan") else text_value
 
 
+_STATS_SOURCE_TEXT = {"TDMS": "TDMS CNC 채널 (실행 사이클, 약 27Hz)", "LOG": "장비 로그 (10Hz)"}
+
+
+def _as_json(raw):
+    """DB 의 JSON 칸 값. 판다스로 읽으면 글자로 온다. 못 읽으면 None."""
+    if isinstance(raw, dict):
+        return raw
+    if raw is None or (isinstance(raw, float) and pd.isnull(raw)):
+        return None
+    try:
+        value = json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _num_text(value, digits=0, suffix=""):
+    """숫자 하나를 '1,234.5 단위' 로. 비어 있으면 '-'."""
+    if value is None or pd.isnull(value):
+        return "-"
+    return f"{float(value):,.{digits}f}{suffix}"
+
+
+def _render_machine_indicators(data):
+    """장비 로그의 장비 계산값 요약(machine_log.machine_indicators)을 펼침 표로 보여 준다."""
+    if not isinstance(data, dict):
+        return
+    values = data.get("values") or {}
+    labels = data.get("labels") or {}
+    zero = data.get("all_zero") or []
+    if not values and not zero:
+        return
+    with st.expander(f"장비 계산값 · 장비 로그 ({len(values)}개)", icon=":material/analytics:"):
+        if values:
+            table = pd.DataFrame([{"항목": labels.get(code, code), "열": code, "평균": v.get("mean"),
+                                   "최대": v.get("max"), "최소": v.get("min")} for code, v in values.items()])
+            st.dataframe(table, hide_index=True, width="stretch")
+        st.caption(f"{data.get('basis', '')} {data.get('cutting_rows', 0)}행 기준 (전체 {data.get('rows', 0)}행)")
+        if zero:
+            st.caption("전부 0으로 기록된 항목 (장비에서 해당 계산이 꺼져 있었을 수 있음): " + ", ".join(zero))
+
+
+def _cnc_chart_options(job_info, log_data, indicators):
+    """CNC 그래프에서 고를 항목. (항목 -> 값, x 축 값, x 축 제목, 출처).
+
+    장비 로그가 있으면 로그의 회전수·이송·부하와 장비 계산값(채터 수준·소리 등)을,
+    로그가 없으면 TDMS CNC 채널(가공 구간 Parquet)을 보여 준다.
+    """
+    if log_data is not None and not log_data.empty:
+        x, x_title = None, "샘플 (장비 로그)"
+        if 'time' in log_data.columns:
+            t = pd.to_datetime(log_data['time'].astype(str).str.strip(), format="%y%m%d %H:%M:%S.%f",
+                               errors="coerce")
+            if t.notna().sum() > 1:
+                x, x_title = (t - t.dropna().iloc[0]).dt.total_seconds(), "로그 경과시간 (초)"
+        options = {}
+        for label, column in (("주축 부하 (%)", "cls"), ("주축 회전수 (RPM)", "crpm"), ("이송속도 (mm/min)", "cfr")):
+            if column in log_data.columns:
+                options[label] = pd.to_numeric(log_data[column], errors="coerce")
+        labels = (indicators or {}).get("labels") or {}
+        for column in ((indicators or {}).get("values") or {}):
+            if column in log_data.columns:
+                options[f"{labels.get(column, column)} (장비 계산)"] = pd.to_numeric(log_data[column], errors="coerce")
+        return options, x, x_title, "장비 로그"
+
+    parquet_path = resolve_parquet_file(job_info['tdms_parquet_raw_path'], job_info.get('source_folder'),
+                                        "viz.parquet")
+    if parquet_path:
+        try:
+            frame = pd.read_parquet(parquet_path)
+        except Exception:
+            return {}, None, "", ""
+        options = {}
+        for label, column in (("주축 부하 (%)", "CNC-Z-SpindleLoad"), ("주축 회전수 (RPM)", "CNC-Z-SpindleSpeed"),
+                              ("이송속도 (mm/min)", "CNC-ActualFeedRate")):
+            if column in frame.columns:
+                options[label] = pd.to_numeric(frame[column], errors="coerce")
+        x = frame["time_s"] if "time_s" in frame.columns else None
+        return options, x, ("가공 경과시간 (초)" if x is not None else "샘플"), "TDMS CNC 채널 (가공 구간)"
+    return {}, None, "", ""
+
+
 def resolve_parquet_file(file_path, source_folder=None, default_filename=None):
     """Parquet 파일의 실제 경로를 찾는다. DB 경로 -> processed_data -> archive_vault 순.
 
@@ -182,6 +281,16 @@ def show_nc_dialog(wp_id):
         st.code(content, language='text')
     else:
         st.info("해당 Workplan의 NC 원본 데이터가 아카이브에 없습니다.")
+
+
+def _has_archived_xml(job_id):
+    """이 Job 에 보관된 장비 XML 원본이 있는지."""
+    try:
+        df = load_data("SELECT 1 AS has_xml FROM job_file_archive "
+                       "WHERE job_id = :jid AND xml_file_content IS NOT NULL", params={"jid": int(job_id)})
+    except Exception:
+        return False
+    return not df.empty
 
 
 @st.dialog("XML 메타데이터 조회", width="large", icon=":material/data_object:")
@@ -269,7 +378,9 @@ def _render_analysis_tab(target_job_id, job_info, sr_df):
                 if pq_p and os.path.exists(pq_p):
                     df_temp = pd.read_parquet(pq_p, columns=['Time Channel CNC'])
                     if not df_temp.empty and 'Time Channel CNC' in df_temp.columns:
-                        t_val = df_temp['Time Channel CNC'].dropna().iloc[0]
+                        # TDMS 시각은 UTC 다. 화면은 한국 시간으로 보여 준다.
+                        from tdms_alignment import tdms_to_local
+                        t_val = tdms_to_local(df_temp['Time Channel CNC'].dropna().iloc[0])
                         date_str = str(t_val).split('.')[0]
             except Exception:
                 pass
@@ -314,7 +425,9 @@ def _render_analysis_tab(target_job_id, job_info, sr_df):
             _kv_list([
                 ("Job ID", target_job_id),
                 ("Part 명", _fmt(part_display, fallback="미지정")),
-                ("소재", _fmt(job_info['material_code'], fallback="미등록")),
+                # 'Unknown' 은 부품을 만들 때 넣는 자리표시자다 — 업로드 화면에서 소재를 정하면 바뀐다.
+                ("소재", job_info['material_code'] if material_is_known(job_info['material_code'])
+                 else "미등록"),
                 ("연구 프로젝트", _fmt(proj_name, fallback="미지정")),
                 ("가공 종류", _fmt(job_info['machining_type'])),
                 ("가공 순서", f"{iteration} 번째"),
@@ -324,8 +437,10 @@ def _render_analysis_tab(target_job_id, job_info, sr_df):
                 ("NC 프로그램", _fmt(job_info['program_code'])),
             ])
             st.divider()
-            if st.button("XML 원본 보기", width="stretch", key="ws_btn_xml", icon=":material/data_object:"):
-                show_xml_dialog(target_job_id)
+            # 장비 XML 은 더 받지 않는다. 예전 Job 이나 장비가 수집 폴더에 직접 넣은 XML 이 보관돼 있을 때만 보여 준다.
+            if _has_archived_xml(target_job_id):
+                if st.button("XML 원본 보기", width="stretch", key="ws_btn_xml", icon=":material/data_object:"):
+                    show_xml_dialog(target_job_id)
             if st.button("NC 코드 보기", width="stretch", key="ws_btn_nc", icon=":material/terminal:"):
                 show_nc_dialog(job_info['workplan_id'])
 
@@ -384,21 +499,39 @@ def _render_analysis_tab(target_job_id, job_info, sr_df):
             else:
                 _empty_note("조도 측정 데이터 없음")
 
+    indicators = _as_json(job_info.get('machine_indicators'))
+
     with col_log:
         with st.container(border=True):
-            _card_header(":material/summarize:", "CNC 로그 요약 (1Hz)")
+            _card_header(":material/summarize:", "CNC 요약")
             alarm_count = job_info['alarm_count']
-            _kv_list([
-                ("Spindle Load", _log_stat('cls', digits=2, suffix=" %")),
-                ("Spindle RPM", _log_stat('crpm')),
-                ("Feed Rate", _log_stat('cfr')),
-                ("알람 발생", f"{int(alarm_count)} 건" if pd.notnull(alarm_count) else "-"),
-            ])
+            if pd.notnull(job_info.get('max_spindle_load')):
+                # DB 의 요약 (TDMS 실행 사이클 기준, TDMS 가 없으면 장비 로그 기준)
+                rpm_max, rpm_avg = _num_text(job_info.get('max_spindle_rpm')), _num_text(job_info.get('avg_spindle_rpm'))
+                items = [
+                    ("주축 부하 최대", _num_text(job_info['max_spindle_load'], 1, " %")),
+                    ("주축 회전수 최대 / 평균", f"{rpm_max} / {rpm_avg} RPM"),
+                    ("이송속도 최대", _num_text(job_info.get('max_feed_rate'), 0, " mm/min")),
+                ]
+            else:
+                # DB 요약이 없는 예전 Job: 로그 파일에서 바로 계산한다
+                items = [
+                    ("Spindle Load", _log_stat('cls', digits=2, suffix=" %")),
+                    ("Spindle RPM", _log_stat('crpm')),
+                    ("Feed Rate", _log_stat('cfr')),
+                ]
+            # 알람은 TDMS 에도, 지금 장비 로그에도 열이 없다. 모르면 '0건' 이 아니라 모른다고 적는다.
+            items.append(("알람 발생", f"{int(alarm_count)} 건" if pd.notnull(alarm_count) else "모름 (알람 기록 없음)"))
+            _kv_list(items)
+            source = job_info.get('stats_source')
+            if pd.notnull(source):
+                st.caption(f"출처: {_STATS_SOURCE_TEXT.get(source, source)}")
+            _render_machine_indicators(indicators)
 
             if log_error:
                 st.error(f"로그 분석 오류: {log_error}")
-            elif log_data is None:
-                _empty_note("연결된 로그 파일 없음")
+            elif log_data is None and pd.isnull(job_info.get('max_spindle_load')):
+                _empty_note("연결된 로그·TDMS 요약 없음")
 
         with st.container(border=True, height="stretch"):
             _card_header(":material/thermostat:", "작업 환경 및 메모")
@@ -427,11 +560,10 @@ def _render_analysis_tab(target_job_id, job_info, sr_df):
             else:
                 _empty_note("환경 및 메모 데이터 없음")
 
-    # ── 사용 공구: T번호마다 실제로 쓴 공구. 업로드 때 지정한 공구가 있으면 그것, 없으면 T번호 자동 연결.
+    # ── 사용 공구: 이 Job 에서 쓴 공구의 제원 (조회만. 공구 지정은 업로드 화면에서 한다)
     with st.container(border=True):
-        _card_header(":material/build:", "사용 공구 (T번호 → 공구 마스터)")
-        from .auth_view import current_worker_name
-        render_job_tools(target_job_id, worker_name=current_worker_name())
+        _card_header(":material/build:", "사용 공구 제원")
+        render_job_tools(target_job_id)
 
     # ── 그래프 패널: 파형 3종을 하나의 패널로 묶고, 세 카드는 서로 높이를 맞춘다.
     with st.container(border=True):
@@ -454,6 +586,9 @@ def _render_analysis_tab(target_job_id, job_info, sr_df):
                 window_caption = _machining_window_caption(machining_window)
                 if window_caption:
                     st.caption(window_caption)
+                mismatch = _program_mismatch_note(machining_window)
+                if mismatch:
+                    st.warning(mismatch, icon=":material/warning:")
 
                 tab1, tab2, tab3 = st.tabs(["CNC", "DAQ", "FFT"])
 
@@ -524,22 +659,19 @@ def _render_analysis_tab(target_job_id, job_info, sr_df):
             _empty_note("연결된 TDMS 데이터 없음")
 
     with log_chart_col.container(border=True, height="stretch"):
-        _card_header(":material/show_chart:", "CNC 로그 그래프")
-        log_series = [("Spindle Load (%)", 'cls'), ("Spindle RPM", 'crpm'), ("Feed Rate", 'cfr')]
-        available_series = [(label, col) for label, col in log_series
-                            if log_data is not None and col in log_data.columns]
-        if available_series:
-            picked_label = st.selectbox("표시할 항목", [label for label, _ in available_series], key="ws_log_series")
-            picked_col = dict(available_series)[picked_label]
-            series = pd.to_numeric(log_data[picked_col], errors='coerce')
-            fig_log = px.line(y=series)
-            _style_chart(fig_log, xaxis_title="샘플 (1초 간격)", yaxis_title=picked_label, showlegend=False)
+        _card_header(":material/show_chart:", "CNC 그래프")
+        options, x_values, x_title, origin = _cnc_chart_options(job_info, log_data, indicators)
+        if options:
+            picked_label = st.selectbox("표시할 항목", list(options), key="ws_log_series")
+            series = options[picked_label]
+            fig_log = px.line(x=x_values, y=series) if x_values is not None else px.line(y=series)
+            _style_chart(fig_log, xaxis_title=x_title, yaxis_title=picked_label, showlegend=False)
             st.plotly_chart(fig_log, width="stretch")
-            st.caption(f"총 {len(series.dropna()):,} 샘플 (1초 간격)")
+            st.caption(f"{origin} · {len(series.dropna()):,} 샘플")
         elif log_error:
             st.error(f"로그 분석 오류: {log_error}")
         else:
-            _empty_note("연결된 로그 파일 없음")
+            _empty_note("연결된 로그·TDMS 데이터 없음")
 
     with curve_col.container(border=True, height="stretch"):
         _card_header(":material/waves:", "표면조도 프로파일 곡선")
@@ -632,7 +764,8 @@ def render_job_workspace():
                jfa.tdms_parquet_raw_path, jfa.tdms_fft_parquet_raw_path,
                j.cutting_seconds, j.moving_distance, j.cutting_moving_distance,
                j.machining_window, w.program_code,
-               m.max_spindle_load, m.avg_spindle_rpm, m.alarm_count
+               m.max_spindle_load, m.avg_spindle_rpm, m.alarm_count,
+               m.max_spindle_rpm, m.max_feed_rate, m.stats_source, m.machine_indicators
         FROM job j
         LEFT JOIN machine_log m ON j.job_id = m.job_id
         LEFT JOIN log_file_archive lfa ON lfa.log_id = m.log_id

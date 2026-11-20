@@ -12,7 +12,8 @@ from vault_manager import archive_file, get_rel_raw_data_path
 from file_archive import get_or_create_workplan_archive
 from integrity import sha256_bytes
 from tool_codes import format_tool_code, index_by_number, tool_number_from_label
-from job_manager import (discard_orphan_workplan, ensure_env_memo,
+from job_manager import (UNKNOWN_MATERIAL, canonical_material, discard_orphan_workplan,
+                         ensure_env_memo, material_is_known,
                          _same_part_scope as job_manager_same_part)
 
 # 'O1110_old.nc' · 'backup_O1110.nc' · 'O1110(OLD).nc' 는 걸리고 'Mold.nc' · 'Holder.nc' 는 안 걸린다.
@@ -30,6 +31,78 @@ def safe_int(val, default=0):
         return int(val) if val else default
     except (ValueError, TypeError):
         return default
+
+def _find_folder_job(db, job_id):
+    """폴더 식별자('Project/Part/N')의 Job. 없으면 None.
+
+    source_folder 가 1순위. 폴더 번호를 PK 로 해석하는 것은 보조 수단이고, 같은 프로젝트·부품일 때만
+    인정한다. 폴더 번호는 부품마다 1부터 다시 매겨지므로 무조건 PK 로 집으면 서로 다른 부품이
+    한 Job 으로 합쳐진다.
+    """
+    folder_parts = job_id.replace('\\', '/').split('/')
+    existing_job = db.query(Job).filter(Job.source_folder == job_id).first()
+    if existing_job is None and folder_parts and folder_parts[-1].isdigit():
+        cand = db.query(Job).filter(Job.job_id == int(folder_parts[-1])).first()
+        if cand is not None and job_manager_same_part(cand.source_folder, folder_parts):
+            existing_job = cand
+    return existing_job
+
+
+def _upsert_workplan(db, part_code, program_code, nc_hash, nc_file_path, nc_binary_data):
+    """(부품, 프로그램, NC 해시) 의 Workplan 을 찾거나 만든다. (Workplan, 새로 만들었는지).
+
+    이름만 같고 내용이 다른 NC 파일은 해시로 구분한다.
+    """
+    workplan = db.query(Workplan).filter(
+        Workplan.part_code == part_code,
+        Workplan.program_code == program_code,
+        Workplan.nc_hash == nc_hash,
+    ).first()
+
+    if not workplan and nc_hash != "NOHASH":
+        # NC 파일이 XML 보다 늦게 도착하면 해시를 모르는 채로("NOHASH") Workplan 이 먼저 만들어진다.
+        # 그 상태에서 NC 가 들어와 해시를 알게 됐다고 새 Workplan 을 만들면, 앞서 만든 행과
+        # 거기 달린 Workingstep 이 아무 Job 도 참조하지 않는 고아로 남는다.
+        # 같은 부품·프로그램의 NOHASH 행이 있으면 새로 만들지 말고 그 행의 해시를 채워 재사용한다.
+        workplan = db.query(Workplan).filter(
+            Workplan.part_code == part_code,
+            Workplan.program_code == program_code,
+            Workplan.nc_hash == "NOHASH",
+        ).first()
+        if workplan:
+            workplan.nc_hash = nc_hash
+            if nc_file_path:
+                wp_arc = get_or_create_workplan_archive(db, workplan.workplan_id)
+                if not wp_arc.nc_raw_path:
+                    wp_arc.nc_raw_path = get_rel_raw_data_path(nc_file_path)
+            db.flush()
+            print(f"    - 뒤늦게 확보한 NC 해시({nc_hash})를 기존 Workplan({workplan.workplan_id})에 반영했습니다.")
+
+    if workplan:
+        return workplan, False
+
+    workplan = Workplan(part_code=part_code, program_code=program_code, nc_hash=nc_hash)
+    db.add(workplan)
+    db.flush()   # 자동 증가 workplan_id 확보
+
+    # 보관소 사본은 원본과 같은 자리에 같은 이름으로 들어간다 (archive_file).
+    nc_binary_data_to_save = None
+    if nc_file_path:
+        archive_file(nc_file_path)
+        if nc_binary_data and len(nc_binary_data) <= 15 * 1024 * 1024:
+            nc_binary_data_to_save = nc_binary_data
+        elif nc_binary_data:
+            print(f"    - [알림] NC 파일이 15MB를 초과하여 DB 내부 저장을 생략합니다.")
+
+    db.add(WorkplanFileArchive(
+        workplan_id=workplan.workplan_id,
+        nc_raw_path=get_rel_raw_data_path(nc_file_path) if nc_file_path else None,
+        nc_file_content=nc_binary_data_to_save,
+        nc_file_sha256=sha256_bytes(nc_binary_data_to_save) if nc_binary_data_to_save else None
+    ))
+    db.flush()
+    return workplan, True
+
 
 def parse_xml(file_path, job_id):
     """
@@ -89,16 +162,20 @@ def parse_xml(file_path, job_id):
         program_code = root.findtext('ProgramCode') or 'Unknown'
 
         # 1. Part Upsert (부품은 이름으로 식별하고, 키는 DB가 부여한 번호를 쓴다)
+        # 소재는 업로드 화면에서 사람이 정한다 (TDMS·NC 에는 소재 정보가 없다).
+        # XML 의 MaterialCode 는 부품 소재가 아직 비어 있을('Unknown') 때만 채우고, 표기는 이미 쓰는 쪽에 맞춘다.
+        xml_material = canonical_material(db, material_code)      # 'Unknown' 이면 None
         part = db.query(Part).filter(Part.part_name == part_name).first()
         if not part:
-            part = Part(part_name=part_name, project_code=project_code, material_code=material_code)
+            part = Part(part_name=part_name, project_code=project_code,
+                        material_code=xml_material or UNKNOWN_MATERIAL)
             db.add(part)
             db.flush()
         else:
             if project_code != "Unknown":
                 part.project_code = project_code
-            if material_code != "Unknown":
-                part.material_code = material_code
+            if xml_material and not material_is_known(part.material_code):
+                part.material_code = xml_material
         part_code = part.part_code
 
         # 이 아래에서 만드는 Vault 경로·source_folder 는 전부 여기 이름을 따라간다.
@@ -107,62 +184,24 @@ def parse_xml(file_path, job_id):
         project_code = part.project_code or project_code
         part_name = part.part_name or part_name
 
-        # 2. Workplan Upsert (부품 + 프로그램 + NC 해시 조합으로 동일성 판단.
-        #    이름만 같고 내용이 다른 NC 파일을 해시로 구분하는 기존 규칙은 그대로 유지된다.)
-        workplan = db.query(Workplan).filter(
-            Workplan.part_code == part_code,
-            Workplan.program_code == program_code,
-            Workplan.nc_hash == nc_hash,
-        ).first()
+        # 2. 이 폴더의 Job 을 먼저 찾는다. 가공 요약을 TDMS+NC 로 이미 확정한 Job 이면 XML 은 보관하고
+        #    빈 칸(장비 IP·공구 상태 등 XML 에만 있는 값)만 채운다 — 값도 Workplan 도 바꾸지 않는다.
+        existing_job = _find_folder_job(db, job_id)
+        keep_tdms_summary = existing_job is not None and existing_job.summary_source == "TDMS"
 
-        if not workplan and nc_hash != "NOHASH":
-            # NC 파일이 XML 보다 늦게 도착하면 해시를 모르는 채로("NOHASH") Workplan 이 먼저 만들어진다.
-            # 그 상태에서 NC 가 들어와 해시를 알게 됐다고 새 Workplan 을 만들면, 앞서 만든 행과
-            # 거기 달린 Workingstep 이 아무 Job 도 참조하지 않는 고아로 남는다.
-            # 같은 부품·프로그램의 NOHASH 행이 있으면 새로 만들지 말고 그 행의 해시를 채워 재사용한다.
-            workplan = db.query(Workplan).filter(
-                Workplan.part_code == part_code,
-                Workplan.program_code == program_code,
-                Workplan.nc_hash == "NOHASH",
-            ).first()
-            if workplan:
-                workplan.nc_hash = nc_hash
-                if nc_file_path:
-                    wp_arc = get_or_create_workplan_archive(db, workplan.workplan_id)
-                    if not wp_arc.nc_raw_path:
-                        wp_arc.nc_raw_path = get_rel_raw_data_path(nc_file_path)
-                db.flush()
-                print(f"    - 뒤늦게 확보한 NC 해시({nc_hash})를 기존 Workplan({workplan.workplan_id})에 반영했습니다.")
-
-        is_new_workplan = False
-        if not workplan:
-            workplan = Workplan(
-                part_code=part_code,
-                program_code=program_code,
-                nc_hash=nc_hash,
-            )
-            db.add(workplan)
-            db.flush()   # 자동 증가 workplan_id 확보
-            workplan_id = workplan.workplan_id
-
-            # 보관소 사본은 원본과 같은 자리에 같은 이름으로 들어간다 (archive_file).
-            nc_binary_data_to_save = None
-            if nc_file_path:
-                archive_file(nc_file_path)
-                if nc_binary_data and len(nc_binary_data) <= 15 * 1024 * 1024:
-                    nc_binary_data_to_save = nc_binary_data
-                elif nc_binary_data:
-                    print(f"    - [알림] NC 파일이 15MB를 초과하여 DB 내부 저장을 생략합니다.")
-                
-            wp_archive = WorkplanFileArchive(
-                workplan_id=workplan_id,
-                nc_raw_path=get_rel_raw_data_path(nc_file_path) if nc_file_path else None,
-                nc_file_content=nc_binary_data_to_save,
-                nc_file_sha256=sha256_bytes(nc_binary_data_to_save) if nc_binary_data_to_save else None
-            )
-            db.add(wp_archive)
-            db.flush()
-            is_new_workplan = True
+        # 3. Workplan (부품 + 프로그램 + NC 해시 조합으로 동일성 판단)
+        #    TDMS 로 확정한 Job 의 가공 프로그램은 TDMS(CNC-ProgramName)·NC 로 정해졌다. 여기서 XML 의
+        #    ProgramCode 로 Workplan 을 다시 고르면, 표기만 달라도('O1110' / 'O1110.NC') 새 Workplan 이 생기고
+        #    Job 이 그리로 옮겨 가면서 원래 Workplan 과 워킹스텝이 고아로 지워진다. 그래서 그대로 둔다.
+        workplan, is_new_workplan = None, False
+        if keep_tdms_summary:
+            workplan = db.query(Workplan).filter(Workplan.workplan_id == existing_job.workplan_id).first()
+            if workplan is not None:
+                print(f"    - 가공 요약을 TDMS 로 확정한 Job 이라 Workplan({workplan.workplan_id}, "
+                      f"{workplan.program_code})을 그대로 둡니다 (XML ProgramCode: {program_code}).")
+        if workplan is None:
+            workplan, is_new_workplan = _upsert_workplan(db, part_code, program_code, nc_hash,
+                                                         nc_file_path, nc_binary_data)
 
         # 신규/기존 어느 경로로 왔든 이후 로직이 쓰는 workplan_id를 일치시킨다.
         workplan_id = workplan.workplan_id
@@ -202,13 +241,14 @@ def parse_xml(file_path, job_id):
                 if tool_num_in_props is not None:
                     tool_properties[tool_num_in_props] = props
                     
-        # 3. Workingstep — NC 가 있으면 NC 가 기준이다 (nc_parser 의 "워킹스텝 분리 규칙":
+        # 4. Workingstep — NC 가 있으면 NC 가 기준이다 (nc_parser 의 "워킹스텝 분리 규칙":
         #    공구 교환 + S·F 변화). XML 의 ToolNumbers 는 공구 호출 목록일 뿐이라 같은 공구로
         #    조건을 바꿔 가며 깎은 구간을 나누지 못한다 (2026-11-11 O1110: 조건 32개가 3행으로 뭉쳤다).
         #    commit=False: 이 함수가 쥔 트랜잭션 안에서 flush 까지만 한다. DB 오류는 아래 except 로
         #    올라와 Part·Workplan 과 함께 rollback 된다. (예전에는 동기화 함수가 도중에 commit 했다)
+        #    TDMS 로 확정한 Job 의 워킹스텝은 NC 가 들어올 때 parse_nc 가 이미 만들었으므로 건드리지 않는다.
         from parsers.nc_parser import sync_workplan_nc_cutting_conditions
-        steps_from_nc = sync_workplan_nc_cutting_conditions(
+        steps_from_nc = keep_tdms_summary or sync_workplan_nc_cutting_conditions(
             db, workplan_id, nc_file_path=nc_file_path, nc_content=nc_binary_data, commit=False)
 
         # Job 런타임 상태(tool_conditions) 구성
@@ -249,32 +289,12 @@ def parse_xml(file_path, job_id):
                     "offsets": offsets
                 })
 
-        # 4. Job Upsert (런타임 실행 이력)
+        # 5. Job Upsert (런타임 실행 이력). 이 폴더의 Job 은 2 에서 찾아 두었다 (existing_job).
         start_time_text = root.findtext('StartTime')
         end_time_text = root.findtext('FinishTime')
         start_time = start_time_text.replace('T', ' ') if start_time_text else None
         end_time = end_time_text.replace('T', ' ') if end_time_text else None
-        
-        # 폴더 경로에서 프로젝트명·부품명을 읽는다. 이 값들은 part.project_code /
-        # part.part_name 을 만들 때만 쓰고, Job 에 따로 복사해 두지 않는다.
-        parsed_rp = None
-        parsed_cpn = None
-        folder_parts = job_id.replace('\\', '/').split('/')
-        if len(folder_parts) >= 3:
-            parsed_rp = folder_parts[-3]
-            parsed_cpn = folder_parts[-2]
-            
-        is_num = folder_parts[-1].isdigit() if folder_parts else False
-        
-        # source_folder 가 1순위. 폴더 번호를 PK 로 해석하는 것은 보조 수단이고,
-        # 같은 프로젝트·부품일 때만 인정한다. 폴더 번호는 부품마다 1부터 다시 매겨지므로
-        # 무조건 PK 로 집으면 서로 다른 부품이 한 Job 으로 합쳐진다.
-        existing_job = db.query(Job).filter(Job.source_folder == job_id).first()
-        if existing_job is None and is_num:
-            cand = db.query(Job).filter(Job.job_id == int(folder_parts[-1])).first()
-            if cand is not None and job_manager_same_part(cand.source_folder, folder_parts):
-                existing_job = cand
-        
+
         xml_binary_data_to_save = None
         if os.path.exists(file_path):
             with open(file_path, 'rb') as xf:
@@ -303,25 +323,32 @@ def parse_xml(file_path, job_id):
             # 이 Job 이 예전 코드로 만들어졌다면 env_memo 가 없을 수 있으므로 여기서 보정한다.
             ensure_env_memo(db, existing_job.job_id)
             print(f"    - 이미 존재하는 Job (PK: {existing_job.job_id} / 폴더: {existing_job.source_folder}) 발견. Job 정보를 업데이트합니다.")
-            existing_job.start_time = start_time
-            # XML 이 프로그램 코드의 최종 근거다. TDMS/NC 가 먼저 처리되면서 만들어 둔 임시
-            # Workplan 에서 Job 을 떼어 오는데, 그 행이 이 Job 하나만 붙들고 있었다면 여기서
-            # 고아가 된다. 옮긴 직후에 참조 수를 확인해 바로 정리한다.
+            # 가공 요약(시작·종료·절삭시간·이동거리·완료 여부)의 기준은 TDMS(CNC 채널)+NC 코드다.
+            # TDMS 로 이미 확정한 Job 이면(keep_tdms_summary, 2 에서 정함) XML 값으로 덮어쓰지 않는다.
+            # 아직이면 XML 값을 임시로 적고(summary_source 는 비워 둔다) 나중에 TDMS 계산값이 덮어쓴다.
+            if not keep_tdms_summary:
+                existing_job.start_time = start_time
+            # TDMS 처리 전이면 XML 의 ProgramCode 로 고른 Workplan 으로 옮긴다 (TDMS 를 처리하면 가공
+            # 프로그램을 다시 맞춘다). TDMS/NC 가 먼저 처리되면서 만들어 둔 임시 Workplan 이 이 Job
+            # 하나만 붙들고 있었다면 여기서 고아가 되므로, 옮긴 직후에 참조 수를 확인해 바로 정리한다.
             previous_workplan_id = existing_job.workplan_id
-            existing_job.workplan_id = workplan_id
+            existing_job.workplan_id = workplan_id      # TDMS 로 확정한 Job 이면 같은 값이다 (3 참고)
             if previous_workplan_id and previous_workplan_id != workplan_id:
                 db.flush()   # autoflush=False 라 flush 해야 참조 수가 제대로 보인다
                 discard_orphan_workplan(db, previous_workplan_id)
-            existing_job.work_id = work_id
-            existing_job.machine_code = root.findtext('MachineCode')
             existing_job.machine_ip = root.findtext('MachineIpAddress')
-            existing_job.end_time = end_time
-            existing_job.cutting_seconds = safe_float(root.findtext('CuttingSeconds'))
-            existing_job.moving_distance = safe_float(root.findtext('MovingDistance'))
-            existing_job.cutting_moving_distance = safe_float(root.findtext('CuttingMovingDistance'))
-            existing_job.is_finish = (root.findtext('IsFinish') == 'true')
-            existing_job.is_error = (root.findtext('IsError') == 'true')
             existing_job.tool_conditions = tool_conditions_list
+            if keep_tdms_summary:
+                print("    - 가공 요약은 TDMS 계산값을 유지합니다 (XML 의 시각·절삭시간·거리는 쓰지 않음).")
+            else:
+                existing_job.work_id = work_id
+                existing_job.machine_code = root.findtext('MachineCode')
+                existing_job.end_time = end_time
+                existing_job.cutting_seconds = safe_float(root.findtext('CuttingSeconds'))
+                existing_job.moving_distance = safe_float(root.findtext('MovingDistance'))
+                existing_job.cutting_moving_distance = safe_float(root.findtext('CuttingMovingDistance'))
+                existing_job.is_finish = (root.findtext('IsFinish') == 'true')
+                existing_job.is_error = (root.findtext('IsError') == 'true')
             # 프로젝트명·부품명은 part 테이블 하나만 쓴다 (Job 별 사본을 두지 않는다).
 
             xml_sha256 = sha256_bytes(xml_binary_data_to_save) if xml_binary_data_to_save else None
@@ -347,6 +374,7 @@ def parse_xml(file_path, job_id):
                 is_finish=(root.findtext('IsFinish') == 'true'),
                 is_error=(root.findtext('IsError') == 'true'),
                 tool_conditions=tool_conditions_list,
+                # summary_source 는 비워 둔다: XML 값은 TDMS 계산 전까지의 임시값이다.
             )
             db.add(new_job)
             db.flush()

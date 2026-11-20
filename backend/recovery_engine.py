@@ -404,14 +404,16 @@ def create_single_job_zip(job_id, categories=None):
 def backfill_missing_job_metadata():
     """
     DB에 등록된 모든 Job 중 start_time, end_time, cutting_seconds, moving_distance,
-    log_raw_path, tdms_parquet_raw_path 등이 누락된 건을
-    1) XML(기존 DB) -> 2) TDMS/Parquet -> 3) LOG 순서의 3단계 Fallback으로 자동 역추적 및 보정(Backfill)합니다.
+    log_raw_path, tdms_parquet_raw_path 등이 누락된 건을 수집기 시작 때 보정(Backfill)합니다.
+
+    이미 있는 값은 건드리지 않고 빈 칸만 채운다. 기준 값은 tdms_visualizer 가 TDMS(CNC 채널)+NC 로
+    계산해 넣는다(job.summary_source='TDMS'). 여기서는 그 계산이 아직 없을 때 쓸 임시값을
+    1) TDMS 산출물(Parquet) -> 2) TDMS 파일명 -> 3) 장비 로그 순으로 찾는다.
     """
     import re
-    import csv
     import datetime
     import pandas as pd
-    import numpy as np
+    from parsers.log_parser import fill_job_from_log, log_motion_summary, read_log_rows
     
     updated_count = 0
     with Session(engine) as session:
@@ -453,12 +455,19 @@ def backfill_missing_job_metadata():
                     if time_col is not None:
                         valid_times = pd.to_datetime(df[time_col]).dropna()
                         if not valid_times.empty:
+                            # 'Time Channel CNC' 는 TDMS 그대로의 UTC 시각이다. DB 는 한국 시간이므로 바꿔 넣는다
+                            # (예전에는 그대로 넣어 9시간 이르게 저장됐다).
+                            from tdms_alignment import tdms_to_local
+
+                            def _as_db_time(ts):
+                                return tdms_to_local(ts) if time_col == 'Time Channel CNC' else ts.to_pydatetime()
+
                             if job.start_time is None:
-                                job.start_time = valid_times.iloc[0].to_pydatetime()
+                                job.start_time = _as_db_time(valid_times.iloc[0])
                                 modified = True
                                 print(f"  [Backfill] Job {job.job_id}: Parquet에서 start_time 복구 -> {job.start_time}")
                             if job.end_time is None:
-                                job.end_time = valid_times.iloc[-1].to_pydatetime()
+                                job.end_time = _as_db_time(valid_times.iloc[-1])
                                 modified = True
                                 print(f"  [Backfill] Job {job.job_id}: Parquet에서 end_time 복구 -> {job.end_time}")
                                 
@@ -466,9 +475,10 @@ def backfill_missing_job_metadata():
                             if job.cutting_seconds is None:
                                 dt_series = pd.to_datetime(df[time_col]).diff().dt.total_seconds().fillna(1.0)
                                 dt_series[dt_series > 10] = 1.0
-                                rpm = df['CNC-Z-SpindleSpeed'] if 'CNC-Z-SpindleSpeed' in df.columns else 0
-                                feed = df['CNC-ActualFeedRate'] if 'CNC-ActualFeedRate' in df.columns else 0
-                                is_cut = (rpm > 100) & (feed > 0)
+                                # 절삭 판정은 tdms_alignment.cutting_mask 한 곳의 규칙을 쓴다
+                                # (예전 '회전수 > 100 이고 이송 > 0' 은 급속이송까지 절삭으로 셌다).
+                                from tdms_alignment import cutting_mask
+                                is_cut = cutting_mask(df)
                                 if is_cut.any():
                                     job.cutting_seconds = round(float(dt_series[is_cut].sum()), 1)
                                 else:
@@ -477,21 +487,22 @@ def backfill_missing_job_metadata():
                                 print(f"  [Backfill] Job {job.job_id}: Parquet에서 cutting_seconds 복구 -> {job.cutting_seconds} 초")
                                 
                     # 3. 이동 거리 (moving_distance, cutting_moving_distance)
+                    # 이동량·위치 표시 점프(G43/G49) 판정도 tdms_alignment.travel_steps 한 곳의 규칙을 쓴다.
+                    # Parquet 은 그래프용으로 줄인 행이라 긴 가공에서는 이동거리가 짧게 나오고 점프도 다 가리지
+                    # 못하는 대체값이다 — TDMS 원본이 있으면 tdms_visualizer 가 원본 해상도로 다시 계산한다.
                     if job.moving_distance is None:
-                        if {'CNC-X-Position', 'CNC-Y-Position', 'CNC-Z-Position'}.issubset(df.columns):
-                            dx = df['CNC-X-Position'].diff().fillna(0)
-                            dy = df['CNC-Y-Position'].diff().fillna(0)
-                            dz = df['CNC-Z-Position'].diff().fillna(0)
-                            dist_3d = np.sqrt(dx**2 + dy**2 + dz**2)
-                            job.moving_distance = round(float(dist_3d.sum()), 1)
+                        from tdms_alignment import cutting_mask, travel_steps
+                        travel = travel_steps(df, time_column='timestamp' if 'timestamp' in df.columns
+                                              else (time_col or 'timestamp'))
+                        if travel is not None:
+                            step, jump = travel
+                            job.moving_distance = round(float(step[~jump].sum()), 1)
                             modified = True
                             print(f"  [Backfill] Job {job.job_id}: Parquet에서 moving_distance 복구 -> {job.moving_distance} mm")
-                            
-                            rpm = df['CNC-Z-SpindleSpeed'] if 'CNC-Z-SpindleSpeed' in df.columns else 0
-                            feed = df['CNC-ActualFeedRate'] if 'CNC-ActualFeedRate' in df.columns else 0
-                            is_cut = (rpm > 100) & (feed > 0)
+
+                            is_cut = cutting_mask(df)
                             if is_cut.any() and job.cutting_moving_distance is None:
-                                job.cutting_moving_distance = round(float(dist_3d[is_cut].sum()), 1)
+                                job.cutting_moving_distance = round(float(step[is_cut & ~jump].sum()), 1)
                                 print(f"  [Backfill] Job {job.job_id}: Parquet에서 cutting_moving_distance 복구 -> {job.cutting_moving_distance} mm")
                 except Exception as pe:
                     print(f"  [Backfill 경고] Job {job.job_id} Parquet 읽기 오류: {pe}")
@@ -549,78 +560,20 @@ def backfill_missing_job_metadata():
                             except Exception:
                                 pass
                                 
-                # 로그 내용 파싱 (moving_distance / cutting_seconds / start_time / end_time 누락 시)
-                if (job.moving_distance is None or job.cutting_seconds is None or 
-                    job.start_time is None or job.end_time is None) and os.path.exists(target_log_f):
+                # 로그 내용 파싱 (moving_distance / cutting_seconds / start_time / end_time 누락 시).
+                # 로그 파서와 같은 규칙을 쓴다: 절삭은 장비의 cut 판정, 절삭시간은 절삭 행 수 x 행 간격.
+                # (예전 여기 규칙은 ctime(경과시간)을 절삭시간으로 넣고, cut 이 0 이어도 '회전수 > 100 이고
+                #  이송 > 0' 이면 절삭으로 세어 급속이송까지 들어갔다.)
+                if (job.moving_distance is None or job.cutting_seconds is None or
+                        job.start_time is None or job.end_time is None) and os.path.exists(target_log_f):
                     try:
-                        f_enc = 'utf-8'
-                        try:
-                            with open(target_log_f, 'r', encoding='utf-8') as tf:
-                                tf.read(2048)
-                        except UnicodeDecodeError:
-                            f_enc = 'cp949'
-                            
-                        first_t = None
-                        last_t = None
-                        max_ctime = 0.0
-                        cutting_rows = 0
-                        total_log_dist = 0.0
-                        cutting_log_dist = 0.0
-                        px_prev, py_prev, pz_prev = None, None, None
-                        
-                        with open(target_log_f, 'r', encoding=f_enc, errors='ignore') as lf_in:
-                            sample = lf_in.read(1024)
-                            lf_in.seek(0)
-                            delim = '\t' if '\t' in sample else ','
-                            reader = csv.DictReader(lf_in, delimiter=delim)
-                            
-                            for row in reader:
-                                row_t = row.get('time', '').strip()
-                                if row_t:
-                                    if first_t is None: first_t = row_t
-                                    last_t = row_t
-                                    
-                                ctime_val = float(row.get('ctime', 0) or 0)
-                                if ctime_val > max_ctime: max_ctime = ctime_val
-                                
-                                rpm = float(row.get('crpm', 0) or 0)
-                                feed = float(row.get('cfr', 0) or 0)
-                                is_cut = (str(row.get('cut', '0')).strip() == '1') or (rpm > 100 and feed > 0)
-                                if is_cut: cutting_rows += 1
-                                
-                                if 'cpx' in row and 'cpy' in row and 'cpz' in row:
-                                    x_cur = float(row.get('cpx', 0) or 0)
-                                    y_cur = float(row.get('cpy', 0) or 0)
-                                    z_cur = float(row.get('cpz', 0) or 0)
-                                    if px_prev is not None:
-                                        step_d = ((x_cur - px_prev)**2 + (y_cur - py_prev)**2 + (z_cur - pz_prev)**2)**0.5
-                                        total_log_dist += step_d
-                                        if is_cut: cutting_log_dist += step_d
-                                    px_prev, py_prev, pz_prev = x_cur, y_cur, z_cur
-                                    
-                        if job.start_time is None and first_t:
-                            try:
-                                job.start_time = datetime.datetime.strptime(first_t.split('.')[0].strip(), "%y%m%d %H:%M:%S")
+                        fieldnames, rows = read_log_rows(target_log_f)
+                        if rows:
+                            filled = fill_job_from_log(job, log_motion_summary(fieldnames, rows))
+                            if filled:
                                 modified = True
-                            except Exception: pass
-                            
-                        if job.end_time is None and last_t:
-                            try:
-                                job.end_time = datetime.datetime.strptime(last_t.split('.')[0].strip(), "%y%m%d %H:%M:%S")
-                                modified = True
-                            except Exception: pass
-                            
-                        if job.cutting_seconds is None and (max_ctime > 0 or cutting_rows > 0):
-                            job.cutting_seconds = round(max_ctime if max_ctime > 0 else cutting_rows * 0.1, 1)
-                            modified = True
-                            print(f"  [Backfill] Job {job.job_id}: 로그에서 cutting_seconds 복구 -> {job.cutting_seconds} 초")
-                            
-                        if job.moving_distance is None and total_log_dist > 0:
-                            job.moving_distance = round(total_log_dist, 1)
-                            modified = True
-                            print(f"  [Backfill] Job {job.job_id}: 로그에서 moving_distance 복구 -> {job.moving_distance} mm")
-                            if job.cutting_moving_distance is None and cutting_log_dist > 0:
-                                job.cutting_moving_distance = round(cutting_log_dist, 1)
+                                print(f"  [Backfill] Job {job.job_id}: 로그에서 복구 -> "
+                                      + ", ".join(f"{name}={getattr(job, name)}" for name in filled))
                     except Exception as le:
                         print(f"  [Backfill 경고] Job {job.job_id} Log 파싱 오류: {le}")
 

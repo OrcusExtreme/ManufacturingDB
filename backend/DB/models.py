@@ -112,9 +112,11 @@ class Part(Base):
     # 이름을 PK로 쓰면 한글/공백/이름 변경이 그대로 키에 박히고 자식 테이블까지 전파되므로,
     # 키는 의미 없는 일련번호(1부터 증가)로 두고 사람이 읽는 이름은 part_name 속성으로 분리한다.
     part_code = Column(Integer, primary_key=True, autoincrement=True, comment='부품 고유 번호 (1부터 자동 증가)')
-    part_name = Column(String(100), nullable=False, unique=True, comment='부품 이름 (XML: PartCode / 폴더명)')
-    project_code = Column(String(50), comment='XML: ProjectCode')
-    material_code = Column(String(50), comment='XML: MaterialCode')
+    part_name = Column(String(100), nullable=False, unique=True, comment='부품 이름 (수집 폴더 {프로젝트}/{부품})')
+    project_code = Column(String(50), comment='프로젝트 (수집 폴더 {프로젝트}/{부품})')
+    # 소재는 업로드 화면에서 정한다 (job_manager.set_part_material). TDMS·NC 에는 소재 정보가 없고,
+    # 장비 XML 의 MaterialCode 는 비어 있을('Unknown') 때만 채운다.
+    material_code = Column(String(50), comment='소재 (업로드 화면에서 입력, XML MaterialCode 는 비어 있을 때만)')
 
     workplans = relationship("Workplan", back_populates="part", cascade="all, delete-orphan")
 
@@ -130,7 +132,8 @@ class Workplan(Base):
 
     workplan_id = Column(Integer, primary_key=True, autoincrement=True, comment='Workplan 고유 번호 (1부터 자동 증가)')
     part_code = Column(Integer, ForeignKey("part.part_code", ondelete="CASCADE"), nullable=False)
-    program_code = Column(String(50), comment='XML: ProgramCode / ProgramName')
+    # 가공 프로그램: TDMS CNC-ProgramName 중 실제로 절삭한 프로그램 (그 전에는 NC 첫머리 <O1110.NC>)
+    program_code = Column(String(50), comment='NC 프로그램 (TDMS CNC-ProgramName 의 가공 프로그램, 없으면 NC 첫머리)')
     nc_hash = Column(String(32), comment='NC 원본 내용 MD5 앞 8자리 (같은 이름·다른 내용 구분용)')
     # NC 원본 경로는 workplan_file_archive.nc_raw_path 로 옮겼다.
     # 보관소 사본은 원본과 같은 자리에 있다 (backend/vault_layout.py).
@@ -237,20 +240,30 @@ class Job(Base):
     job_id = Column(Integer, primary_key=True, autoincrement=True, comment='가공 이력 고유 ID')
     source_folder = Column(String(255), unique=True, comment='기존 폴더명 기반의 원본 식별자')
     workplan_id = Column(Integer, ForeignKey("workplan.workplan_id", ondelete="CASCADE"), nullable=False)
-    work_id = Column(String(50), nullable=False, comment='XML: WorkID')
-    
-    machine_code = Column(String(50), comment='XML: MachineCode')
-    machine_ip = Column(String(20), comment='XML: MachineIpAddress')
-    
-    start_time = Column(DateTime, comment='XML: StartTime')
-    end_time = Column(DateTime, comment='XML: FinishTime')
-    
-    cutting_seconds = Column(Double, comment='XML: CuttingSeconds')
-    moving_distance = Column(Double, comment='XML: MovingDistance')
-    cutting_moving_distance = Column(Double, comment='XML: CuttingMovingDistance')
-    
-    is_finish = Column(Boolean, comment='XML: IsFinish')
-    is_error = Column(Boolean, comment='XML: IsError')
+    # 가공 요약은 TDMS(CNC 채널) + NC 코드로 계산한다 (tdms_visualizer._apply_window_to_job).
+    # 예전에는 장비 XML 값을 그대로 넣었다 — summary_source 로 구분한다. XML 과의 차이는 compare_xml_tdms.
+    # 시각은 모두 한국 시간이다 (TDMS 는 UTC 라 +9시간).
+    work_id = Column(String(50), nullable=False, comment='작업 ID: 가공 시작 시각 YYMMDDHHMMSS (장비 XML WorkID 와 같은 규칙)')
+
+    machine_code = Column(String(50), comment='장비 코드 (TDMS 파일명 앞부분, 예: DNM200)')
+    machine_ip = Column(String(20), comment='장비 IP (장비 XML 에만 있다)')
+
+    start_time = Column(DateTime, comment='가공 시작: 실행 사이클 시작 (TDMS CNC-ProgramMode, 한국 시간)')
+    end_time = Column(DateTime, comment='가공 종료: 실행 사이클 끝 (TDMS, 한국 시간)')
+
+    cutting_seconds = Column(Double, comment='절삭시간 (초): 절삭 G코드(G01~G03·고정 사이클) + 이송 + 주축인 시간')
+    moving_distance = Column(Double, comment='총 이동거리 (mm): 실행 사이클 X·Y·Z 실제 이동 합 (공구 길이 보정 G43/G49 등 위치 표시 점프 제외)')
+    cutting_moving_distance = Column(Double, comment='절삭 이동거리 (mm): NC 절삭 경로 길이 (NC 블록 대조가 맞을 때, 아니면 TDMS 실측)')
+
+    is_finish = Column(Boolean, comment='프로그램 끝까지 실행 (M02/M30 또는 마지막 블록 근처, 근거는 machining_window)')
+    is_error = Column(Boolean, comment='장비 에러 (장비 XML 에만 있다, 없으면 NULL)')
+    # 위 가공 요약(시작·종료·절삭시간·이동거리·완료 여부)을 어디서 얻었는지.
+    #   TDMS TDMS CNC 채널(+NC 코드)로 계산했다 (tdms_visualizer). 기준값이다. 시작·종료는 실행 사이클,
+    #        절삭 이동거리는 NC 코드의 절삭 경로 길이다. 나중에 XML 이 와도 덮어쓰지 않는다.
+    #   XML  TDMS 기준으로 바꾸기 전에 XML 값으로 적힌 Job (schema_patch 가 표시). TDMS 를 다시 변환해도
+    #        빈 칸만 채우고 이미 적힌 값은 바꾸지 않는다.
+    #   NULL 아직 임시값 (TDMS·로그 파일명의 기록 시작 시각, TDMS 계산 전에 도착한 XML 값 등)
+    summary_source = Column(String(10), comment='가공 요약 출처: TDMS(CNC 채널+NC 코드) / XML(예전 Job) / NULL(임시값)')
     
     machining_type = Column(String(100), nullable=True)   # 가공 종류 (수기 입력)
 
@@ -262,9 +275,9 @@ class Job(Base):
     # 파일 경로는 전부 job_file_archive 로 옮겼다.
     # (tdms_raw_path / tdms_parquet_raw_path / tdms_fft_parquet_raw_path 와 각 *_vault_path)
     # machining_window 는 경로가 아니라 판별 결과(JSON)라 여기 남는다.
-    machining_window = Column(JSON, comment='TDMS 실가공 구간 판별 결과 (구간/근거/DAQ 시계 보정값)')
-    
-    tool_conditions = Column(JSON, comment='런타임 공구 상태 (사용횟수, 오프셋, 마모도 등)')
+    machining_window = Column(JSON, comment='TDMS 실가공 구간 판별 결과 (구간/실행 사이클/완료 근거/NC 프로그램/이동거리에서 뺀 위치 점프/DAQ 시계 보정값)')
+
+    tool_conditions = Column(JSON, comment='런타임 공구 상태 (사용횟수, 오프셋 — 장비 XML 에만 있다)')
 
     workplan = relationship("Workplan", back_populates="jobs")
     machine_log = relationship("MachineLog", back_populates="job", cascade="all, delete-orphan", uselist=False)
@@ -324,8 +337,15 @@ class MachineLog(Base):
     max_spindle_rpm = Column(Float, comment='최대 스핀들 RPM')
     max_feed_rate = Column(Float, comment='최대 이송 속도(Feed Rate)')
     avg_spindle_rpm = Column(Float, comment='평균 스핀들 RPM')
-    alarm_count = Column(Integer, comment='알람 발생 횟수')
+    # 알람은 TDMS 에도, 지금 장비 로그에도 열이 없다. 모르면 0 이 아니라 NULL 로 둔다.
+    alarm_count = Column(Integer, comment='알람 발생 횟수 (알 수 없으면 NULL)')
     critical_alarm_msg = Column(Text, comment='주요 알람 메시지 (존재 시)')
+    # 위 최대·평균 값을 어디서 계산했는지. TDMS(CNC 채널, 약 27Hz 실행 사이클) 가 기준이고,
+    # TDMS 가 없는 Job 만 장비 로그(10Hz)로 계산한다 (LOG).
+    stats_source = Column(String(10), comment='최대·평균 값 출처: TDMS / LOG')
+    # 장비 로그에만 있는 장비 계산값(채터 수준·소리·절삭계수 추정 등) 요약. 열별 절삭 중 평균·최대·최소.
+    # 형식은 parsers/log_parser.summarize_machine_indicators 참고.
+    machine_indicators = Column(JSON, comment='장비 로그의 장비 계산값 요약 (열별 절삭 중 평균·최대·최소)')
 
     job = relationship("Job", back_populates="machine_log")
     file_archive = relationship("LogFileArchive", back_populates="machine_log",
@@ -408,7 +428,7 @@ class WorkplanFileArchive(Base):
 
 class JobFileArchive(Base):
     __tablename__ = "job_file_archive"
-    __table_args__ = {'comment': 'Job 관련 대용량 파일 경로 및 원본 아카이브 (XML, TDMS Parquet 등)'}
+    __table_args__ = {'comment': 'Job 원본 파일 아카이브 (TDMS 원본·Parquet 경로, 장비 XML 원본)'}
     
     job_id = Column(Integer, ForeignKey("job.job_id", ondelete="CASCADE"), primary_key=True)
 

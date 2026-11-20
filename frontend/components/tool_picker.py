@@ -86,57 +86,38 @@ def render_tool_picker(called, existing, key_prefix, disabled=False, confirm_unt
     return picks
 
 
-_BASIS_TEXT = {"자동": "T번호 자동", "없음": "연결 없음"}
+def job_tool_spec_table(rows):
+    """Job 에서 쓴 공구의 제원 표 (조회 전용). 제원을 모르는 T번호는 빼고, 모두 빈 열도 뺀다.
+
+    rows: tool_assignment.job_tool_rows. 열 이름은 공구 마스터 화면과 같다.
+    """
+    from .tool_master import COLUMN_LABELS
+
+    records = []
+    for r in rows:
+        if not r.get("spec"):
+            continue
+        spec = dict(r["spec"])
+        spec["tool_code"] = spec.get("tool_code") or r["tool_code"]   # 재고로 빠진 공구도 이 Job 의 T번호로
+        records.append({COLUMN_LABELS.get(col, col): spec.get(col, "") for col in ta.SNAPSHOT_COLUMNS})
+    table = pd.DataFrame(records)
+    if not table.empty:
+        table = table.loc[:, (table != "").any(axis=0)]
+    return table
 
 
-def _basis_text(row):
-    if row["basis"] != "지정":
-        return _BASIS_TEXT.get(row["basis"], row["basis"])
-    who = f" ({row['assigned_by']})" if row.get("assigned_by") else ""
-    if row["in_master"]:
-        return f"지정{who}"
-    if row["label"]:
-        return f"지정{who} · 공구 마스터에서 빠짐 (지정 당시 제원)"
-    return f"지정{who} · 공구 마스터에 없는 공구"
-
-
-def render_job_tools(job_id, worker_name=None):
-    """Job 의 T번호별 공구 표와 '공구 지정 수정' 을 그린다 (Job 워크스페이스)."""
-    flash_key = f"ws_tool_flash_{job_id}"
-    flash = st.session_state.pop(flash_key, None)
-    if flash:
-        st.success(flash, icon=":material/check_circle:")
-
+def render_job_tools(job_id):
+    """Job 에서 쓴 공구의 제원을 보여 준다 (Job 워크스페이스, 조회만)."""
     with engine.connect() as conn:
         rows = ta.job_tool_rows(conn, job_id)
-        existing = ta.load_assignments(conn, job_id)
     if not rows:
-        st.caption("— 이 Job 의 워킹스텝(공구 호출)이 아직 없습니다. NC 나 XML 이 수집되면 나타납니다.")
+        st.caption("— 이 Job 의 워킹스텝(공구 호출)이 아직 없습니다. NC 가 수집되면 나타납니다.")
         return
-
-    table = pd.DataFrame([{
-        "T번호": r["tool_code"],
-        "스텝": r["steps"],
-        "공구": r["label"] or "-",
-        "근거": _basis_text(r),
-    } for r in rows])
-    st.dataframe(table, hide_index=True, width="stretch",
-                 column_config={"스텝": st.column_config.NumberColumn("스텝", format="%d")})
-    st.caption("지정한 공구가 있으면 그것을, 없으면 공구 마스터에서 같은 T번호로 장착된 공구를 보여 줍니다. "
-               "지정한 공구는 공구 마스터를 교체해도 이 Job 의 기록으로 남습니다.")
-
-    with st.expander("공구 지정 수정", icon=":material/edit:"):
-        st.caption("바꾼 번호만 저장합니다. 지정하지 않은 번호는 계속 지금 공구 마스터의 T번호로 연결됩니다.")
-        called = {r["tool_number"]: {"steps": r["steps"]} for r in rows}
-        picks = render_tool_picker(called, existing, key_prefix=f"ws_{job_id}", confirm_untouched=False)
-        if st.button("공구 지정 저장", type="primary", key=f"ws_tool_save_{job_id}", disabled=not picks):
-            try:
-                with engine.begin() as conn:
-                    written = ta.save_assignments(conn, job_id, picks, assigned_by=worker_name)
-            except Exception as e:
-                st.error(f"공구 지정을 저장하지 못했습니다: {e}")
-                return
-            st.session_state[flash_key] = ("공구 지정을 저장했습니다: "
-                                           + " · ".join(format_tool_code(n) or str(n) for n in written))
-            st.cache_data.clear()
-            st.rerun()
+    table = job_tool_spec_table(rows)
+    if table.empty:
+        st.caption("— 이 Job 에서 쓴 T번호에 연결된 공구가 공구 마스터에 없습니다.")
+        return
+    st.dataframe(table, hide_index=True, width="stretch")
+    missing = [r["tool_code"] or str(r["tool_number"]) for r in rows if not r.get("spec")]
+    if missing:
+        st.caption(f"공구 마스터에 연결된 공구가 없는 T번호: {', '.join(missing)}")

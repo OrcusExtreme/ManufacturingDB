@@ -1,7 +1,9 @@
 import datetime
+import json
 import os
 
 import streamlit as st
+from sqlalchemy import text
 
 import job_layout
 
@@ -10,6 +12,9 @@ from .auth_view import current_worker_name
 from .tool_picker import render_tool_picker
 from cad_viewer_component import render_cad_viewer
 import tool_assignment as ta
+from job_manager import material_is_known
+from parsers.nc_parser import nc_program_name
+from tdms_alignment import program_key, read_tdms_programs, same_program
 from tool_codes import format_tool_code
 from weather_service import place_name as weather_place_name
 
@@ -17,6 +22,20 @@ from weather_service import place_name as weather_place_name
 # Job 폴더 이름은 DB 가 부여하는 PK 를 따라가므로 사람이 직접 적지 않는다.
 # (숫자를 직접 적으면 같은 부품 안에서 기존 Job 번호와 충돌할 수 있다)
 NEW_JOB_LABEL = "+ 새 Job 생성 (번호 자동 부여)"
+
+# 가공 요약을 계산하는 두 입력. 예전에는 장비 XML 이 요약값을 줬지만 지금은 이 둘로 계산한다
+# (tdms_visualizer: TDMS CNC 채널 + NC 코드). 새 Job 은 둘 다 있어야 만든다.
+CORE_INPUTS = (
+    ("tdms", "TDMS", "가공 시작·종료·절삭시간·부하"),
+    ("nc", "NC", "절삭 이동거리·워킹스텝(공구·절삭조건)"),
+)
+
+
+def missing_core_inputs(existing_files, file_tdms, file_nc):
+    """이번 업로드 뒤에도 Job 에 없을 핵심 입력의 (이름, 그 입력으로 계산하는 값) 목록."""
+    uploaded = {"tdms": file_tdms is not None, "nc": file_nc is not None}
+    return [(label, role) for key, label, role in CORE_INPUTS
+            if not uploaded[key] and key not in (existing_files or {})]
 
 
 def _fs_dirs(path):
@@ -81,6 +100,49 @@ def _list_jobs(project_name, part_name):
     return labels, folder_by_label
 
 
+def _list_materials():
+    """이미 쓰고 있는 소재 목록. 부품을 만들 때 넣는 자리표시자('Unknown')는 뺀다."""
+    try:
+        df = load_data("SELECT DISTINCT material_code FROM part WHERE material_code IS NOT NULL")
+    except Exception:
+        return []
+    names = {str(v).strip() for v in df['material_code'].tolist() if material_is_known(v)}
+    return sorted(names, key=str.lower)
+
+
+def _part_material(part_name):
+    """(부품이 DB 에 있는지, 지금 소재). 소재가 아직 없으면('Unknown') None."""
+    if not part_name:
+        return False, None
+    try:
+        df = load_data("SELECT material_code FROM part WHERE part_name = :part",
+                       params={"part": part_name})
+    except Exception:
+        return False, None
+    if df.empty:
+        return False, None
+    value = df.iloc[0]['material_code']
+    return True, (str(value).strip() if material_is_known(value) else None)
+
+
+def _save_part_material(project_name, part_name, material):
+    """부품 소재를 저장한다. 저장한 값(이미 쓰는 표기로 맞춘 것)을, 바뀐 게 없으면 None 을 돌려준다."""
+    from job_manager import set_part_material
+    from DB.database import SessionLocal
+
+    db_s = SessionLocal()
+    try:
+        part, changed = set_part_material(db_s, project_name, part_name, material)
+        saved = part.material_code if (part is not None and changed) else None
+        db_s.commit()
+        return saved
+    except Exception:
+        db_s.rollback()
+        raise
+    finally:
+        db_s.close()
+
+
 def _job_id_of(project_name, part_name, job_folder):
     """폴더 이름으로 Job PK 를 되찾는다. 없으면 None."""
     df = load_data("""
@@ -99,7 +161,6 @@ def _existing_files(job_dir):
     """이미 들어가 있는 자료 종류 -> 파일명. 업로더 옆 배지에 쓴다."""
     found = {}
     for key, kind, suffixes in (
-        ('xml', job_layout.XML_DIR, ('.xml',)),
         ('tdms', job_layout.TDMS_DIR, ('.tdms',)),
         ('nc', job_layout.NC_DIR, ('.nc',)),
         ('log', job_layout.LOG_DIR, ('.log',)),
@@ -227,16 +288,134 @@ def _tools_in_uploaded_nc(nc_bytes):
     return ta.tools_called_in_nc(nc_bytes)
 
 
-@st.cache_data(show_spinner=False)
-def _tools_in_uploaded_xml(xml_bytes):
-    return ta.tools_called_in_xml(xml_bytes)
+# ---------------------------------------------------------------------------
+# NC ↔ TDMS 프로그램 확인
+# ---------------------------------------------------------------------------
+
+def _per_upload(slot, upload, compute, keep=4, spinner=None):
+    """업로드한 파일 하나에 대한 계산 결과를 세션에 기억한다 (file_id 기준).
+
+    st.cache_data 를 쓰지 않는 이유: 업로드가 끝나면 목록을 새로 보이려고 캐시를 모두 비우는데
+    (st.cache_data.clear), 그때 수백 MB TDMS 를 다시 읽게 된다. 세션 값은 그 영향을 받지 않는다.
+    spinner: 처음 계산할 때만 띄울 안내 (다시 그릴 때는 기억한 값을 바로 쓴다).
+    """
+    memo = st.session_state.setdefault(slot, {})
+    if upload.file_id not in memo:
+        if spinner:
+            with st.spinner(spinner):
+                memo[upload.file_id] = compute(upload)
+        else:
+            memo[upload.file_id] = compute(upload)
+        while len(memo) > keep:
+            memo.pop(next(iter(memo)))
+    return memo[upload.file_id]
 
 
-def _render_tool_section(file_nc, file_xml, job_pk, disabled):
+def _read_uploaded_tdms_programs(upload):
+    """(가공 프로그램, 기록에 나온 프로그램들, 읽지 못한 이유)."""
+    try:
+        program, seen = read_tdms_programs(upload.getvalue())
+        return program, seen, None
+    except Exception as e:
+        # 화면 글자(마크다운)를 깨뜨리지 않게 백틱을 바꾸고 길이를 줄인다
+        reason = (str(e) or type(e).__name__).replace("`", "'")
+        return None, [], reason[:150]
+
+
+def _read_uploaded_nc_program(upload):
+    """NC 첫머리의 프로그램 이름 (<O1110.NC> -> O1110.NC). 없으면 None.
+
+    파일 이름으로 대신하지 않는다. 장비가 붙인 이름(DNM200__O2202.NC__PROBE START__…_O1110.NC.nc)에는
+    기록 시작 때 프로그램까지 섞여 있어 엉뚱한 경고를 낸다. 수집기도 첫머리 이름만 비교한다.
+    """
+    return nc_program_name(upload.getvalue())
+
+
+def _job_programs(job_pk):
+    """이미 수집된 자료의 (TDMS 에서 가공한 프로그램, NC 첫머리 프로그램). 모르면 None."""
+    tdms_program = nc_program = None
+    try:
+        with engine.connect() as conn:
+            window = conn.execute(text("SELECT machining_window FROM job WHERE job_id = :j"),
+                                  {"j": job_pk}).scalar()
+            # 프로그램 이름은 첫머리에만 있으므로 NC 원본의 앞부분만 읽는다
+            head = conn.execute(text(
+                "SELECT SUBSTRING(a.nc_file_content, 1, 4096) FROM workplan_file_archive a "
+                "JOIN job j ON j.workplan_id = a.workplan_id WHERE j.job_id = :j"), {"j": job_pk}).scalar()
+    except Exception:
+        return None, None
+    if isinstance(window, str):
+        try:
+            window = json.loads(window)
+        except ValueError:
+            window = None
+    if isinstance(window, dict):
+        tdms_program = window.get("program_name")
+    if head:
+        nc_program = nc_program_name(bytes(head))
+    return tdms_program, nc_program
+
+
+def _render_program_check(file_tdms, file_nc, job_pk):
+    """올리려는 NC 가 TDMS 에서 실제로 깎은 프로그램과 같은지 미리 비교한다.
+
+    TDMS 파일명·채널 속성의 프로그램은 '기록을 시작할 때' 띄워 둔 것이라 가공한 프로그램과 다를 수 있다
+    (DB_Test/1: 이름은 O2202 프로브, 실제 가공은 O0911). 그래서 CNC-ProgramName 채널에서 절삭이 일어난
+    프로그램을 읽는다 — 수집기(tdms_visualizer)와 같은 규칙이다. 다르면 경고만 하고 업로드는 막지 않는다.
+    한쪽만 올리면 이 Job 에 이미 들어간 다른 쪽과 비교한다.
+    """
+    if file_tdms is None and file_nc is None:
+        return
+    stored_tdms = stored_nc = None
+    if job_pk is not None and (file_tdms is None or file_nc is None):
+        stored_tdms, stored_nc = _job_programs(job_pk)
+
+    # NC 쪽을 먼저 본다. 비교할 이름이 없으면(NC 를 아직 안 골랐거나 첫머리에 이름이 없다) 큰 TDMS 를
+    # 읽을 이유가 없다.
+    if file_nc is not None:
+        nc_program = _per_upload("dl_nc_programs", file_nc, _read_uploaded_nc_program)
+        nc_where = "올리는 NC"
+    else:
+        nc_program, nc_where = stored_nc, "이 Job 에 이미 들어간 NC"
+    if not nc_program:
+        return
+
+    tdms_seen = []
+    if file_tdms is not None:
+        tdms_program, tdms_seen, tdms_error = _per_upload(
+            "dl_tdms_programs", file_tdms, _read_uploaded_tdms_programs,
+            spinner="TDMS 에서 가공 프로그램을 읽는 중입니다… (수백 MB 파일은 10초쯤 걸립니다)")
+        if tdms_error:
+            st.caption(f":material/help: TDMS 에서 가공 프로그램을 읽지 못해 NC 와 비교하지 못했습니다 "
+                       f"({tdms_error}). 수집 뒤 Job 화면에서 다시 확인합니다.")
+            return
+        tdms_where = "올리는 TDMS"
+    else:
+        tdms_program, tdms_where = stored_tdms, "이 Job 에 이미 들어간 TDMS"
+
+    match = same_program(nc_program, tdms_program)
+    if match is None:
+        return          # 한쪽을 아직 모른다 (다른 쪽이 없거나 수집 중)
+    if match:
+        st.caption(f":material/check_circle: 프로그램 확인 — {nc_where}의 프로그램 `{nc_program}` 이(가) "
+                   f"{tdms_where}에서 가공한 프로그램과 같습니다.")
+        return
+    also_ran = any(program_key(name) == program_key(nc_program) for name in tdms_seen)
+    st.warning(
+        f"**프로그램이 다릅니다.** {nc_where}의 프로그램은 `{nc_program}` 인데, {tdms_where}에서 실제로 "
+        f"가공한 프로그램은 `{tdms_program}` 입니다."
+        + (f" (`{nc_program}` 도 TDMS 에 기록돼 있지만 절삭은 `{tdms_program}` 에서 일어났습니다.)"
+           if also_ran else "")
+        + " 다른 NC 를 고른 것은 아닌지 확인하세요. 이대로 올리면 워킹스텝(공구·절삭조건)이 틀리고, "
+          "절삭 이동거리는 NC 대신 TDMS 실측값으로 계산될 수 있습니다.",
+        icon=":material/warning:")
+
+
+def _render_tool_section(file_nc, job_pk, disabled):
     """사용한 공구 번호마다 공구 마스터의 어느 공구였는지 고른다. 저장할 지정을 돌려준다.
 
     공구 번호는 올리는 NC 에서 읽는다(워킹스텝 분리 규칙과 같아서 스텝 수도 수집 뒤와 같다).
-    NC 가 없으면 XML 의 공구 목록, 둘 다 없으면 이 Job 에 이미 들어간 워킹스텝에서 읽는다.
+    NC 를 올리지 않으면 이 Job 에 이미 들어간 워킹스텝에서 읽는다.
     파일은 아직 디스크에 쓰기 전이라 업로드한 내용(바이트열)을 그대로 파싱한다.
     """
     st.markdown("---")
@@ -246,9 +425,6 @@ def _render_tool_section(file_nc, file_xml, job_pk, disabled):
     try:
         if file_nc is not None:
             called, origin = dict(_tools_in_uploaded_nc(file_nc.getvalue())), f"NC `{file_nc.name}`"
-        elif file_xml is not None:
-            called = dict(_tools_in_uploaded_xml(file_xml.getvalue()))
-            origin = f"XML `{file_xml.name}` 의 공구 목록"
     except Exception as e:
         st.warning(f"업로드한 파일에서 공구 번호를 읽지 못했습니다: {e}", icon=":material/warning:")
 
@@ -263,7 +439,7 @@ def _render_tool_section(file_nc, file_xml, job_pk, disabled):
             called.setdefault(number, {"steps": None})
 
     if not called:
-        st.caption("NC 또는 XML 을 올리면 사용한 공구 번호가 여기에 나타나고, 각 번호가 공구 마스터의 "
+        st.caption("NC 를 올리면 사용한 공구 번호가 여기에 나타나고, 각 번호가 공구 마스터의 "
                    "어느 공구였는지 고를 수 있습니다.")
         return {}
 
@@ -308,7 +484,11 @@ def render_data_upload():
     st.markdown("#### Part 입력")
     st.caption("목록에서 고르거나, 없는 이름을 직접 입력하면 새로 만들어집니다.")
 
-    col_p, col_t, col_j = st.columns(3)
+    material_flash = st.session_state.pop("dl_material_flash", None)
+    if material_flash:
+        st.success(material_flash, icon=":material/check_circle:")
+
+    col_p, col_t, col_m, col_j = st.columns([1, 1, 1, 1.3])
 
     with col_p:
         project_name = st.selectbox(
@@ -333,6 +513,27 @@ def render_data_upload():
         part_name = (part_name or "").strip()
 
     part_ready = bool(project_name and part_name)
+    part_known, material_now = _part_material(part_name) if part_ready else (False, None)
+
+    with col_m:
+        # 소재는 예전에 장비 XML(MaterialCode)에서만 들어왔다. TDMS·NC 에는 소재 정보가 없어서 여기서 정한다.
+        material_options = _list_materials()
+        material_index = (material_options.index(material_now)
+                          if material_now and material_now in material_options else None)
+        material_pick = st.selectbox(
+            "소재 (Material)",
+            options=material_options,
+            index=material_index,
+            placeholder="선택 또는 새 소재 입력",
+            accept_new_options=True,
+            disabled=not part_ready,
+            # 부품마다 따로 기억한다 — 부품을 바꾸면 그 부품에 저장된 소재가 다시 기본값이 된다.
+            key=f"dl_material::{project_name}::{part_name}",
+            help="부품마다 하나이며 그 부품의 모든 Job 에 공통입니다. 비워 두면 기존 소재를 그대로 둡니다.",
+        )
+        material_pick = " ".join((material_pick or "").split())
+    material_change = (material_is_known(material_pick)
+                       and material_pick.lower() != (material_now or "").lower())
 
     with col_j:
         job_labels, folder_by_label = _list_jobs(project_name, part_name) if part_ready else ([], {})
@@ -356,8 +557,36 @@ def render_data_upload():
         where = (f"신규 Job (번호 자동)" if is_new_job
                  else f"Job 폴더 `{existing_job_folder}`" if existing_job_folder
                  else "Part 레벨 (CAD 전용)")
-        st.success(f"**대상** · 프로젝트 `{project_name}` / 부품 `{part_name}` / {where}",
+        material_text = (f"소재 `{material_now}`" if material_now
+                         else "소재 미등록" if part_known else "새 부품")
+        st.success(f"**대상** · 프로젝트 `{project_name}` / 부품 `{part_name}` ({material_text}) / {where}",
                    icon=":material/target:")
+
+        if material_change:
+            note = (f"소재를 `{material_now}` → `{material_pick}` 로 바꿉니다." if material_now
+                    else f"소재를 `{material_pick}` 로 등록합니다.")
+            if not part_known:
+                st.caption(f"{note} 업로드할 때 새 부품과 함께 저장됩니다.")
+            else:
+                c_note, c_btn = st.columns([4, 1], vertical_alignment="center")
+                with c_note:
+                    st.caption(f"{note} 업로드할 때 함께 저장되며, 파일 없이 소재만 바꾸려면 "
+                               "**소재만 저장**을 누르세요.")
+                with c_btn:
+                    if st.button("소재만 저장", key="dl_btn_material", width="stretch",
+                                 icon=":material/save:"):
+                        try:
+                            saved = _save_part_material(project_name, part_name, material_pick)
+                        except Exception as e:
+                            st.error(f"소재를 저장하지 못했습니다: {e}")
+                        else:
+                            load_data.clear()       # 목록·기본값이 60초 캐시라 비워야 바로 보인다
+                            st.session_state["dl_material_flash"] = (
+                                f"부품 `{part_name}` 의 소재를 `{saved}` 로 저장했습니다." if saved
+                                else "바뀐 소재가 없습니다.")
+                            st.rerun()
+        elif part_known and not material_now:
+            st.caption("이 부품은 소재가 아직 등록되지 않았습니다. 위 **소재** 칸에서 고르거나 새로 입력하세요.")
 
     st.markdown("---")
 
@@ -387,11 +616,14 @@ def render_data_upload():
             render_cad_viewer(part_name, height=460)
 
     # --- Job 레벨: 가공 데이터 ---
+    # 가공 요약은 TDMS(CNC 채널) + NC 로 계산한다. 예전에 요약값을 주던 장비 XML 은 더 받지 않는다
+    # (장비가 수집 폴더에 XML 을 직접 떨어뜨리면 수집기가 보관하고 빈 칸만 채운다 — xml_parser).
     st.markdown("##### :material/precision_manufacturing: Job 레벨")
     if part_ready and not job_ready:
         st.caption("가공 차수(Job)를 선택하거나 '새 Job 생성'을 고르면 아래 업로더가 열립니다.")
     else:
-        st.caption("XML, NC 파일은 최대 15MB 제한, 기타 파일은 제한이 없습니다.")
+        st.caption("가공 요약은 **TDMS**(가공 시작·종료·절삭시간·부하)와 **NC**(절삭 이동거리·워킹스텝)로 "
+                   "계산합니다. **새 Job 은 두 파일이 모두 필요합니다.** NC 는 최대 15MB.")
 
     existing_files_info = {}
     existing_job_pk = None
@@ -403,22 +635,26 @@ def render_data_upload():
     off = not job_ready
     col_f1, col_f2 = st.columns(2)
     with col_f1:
-        file_xml = _uploader("XML 메타데이터 (.xml) (1개) - 15MB 제한", "uploader_xml",
-                             types=["xml"], done_name=existing_files_info.get('xml'), disabled=off)
+        st.markdown("**필수**")
+        file_tdms = _uploader("TDMS 센서·CNC 기록 (.tdms) (1개)", "uploader_tdms",
+                              types=["tdms"], done_name=existing_files_info.get('tdms'), disabled=off)
         file_nc = _uploader("NC 가공코드 (.nc) (1개) - 15MB 제한", "uploader_nc",
                             types=["nc"], done_name=existing_files_info.get('nc'), disabled=off)
-        file_roughness = _uploader("표면 조도 데이터 (.csv) (여러 개)", "uploader_roughness",
-                                   types=["csv"], multiple=True, disabled=off)
     with col_f2:
-        file_tdms = _uploader("TDMS 고주파 센서 (.tdms) (1개)", "uploader_tdms",
-                              types=["tdms"], done_name=existing_files_info.get('tdms'), disabled=off)
+        st.markdown("**선택**")
         file_log = _uploader("장비 로그 (.log) (1개)", "uploader_log",
                              types=["log"], done_name=existing_files_info.get('log'), disabled=off)
+        file_roughness = _uploader("표면 조도 데이터 (.csv) (여러 개)", "uploader_roughness",
+                                   types=["csv"], multiple=True, disabled=off)
         file_others = _uploader("기타 참고용 파일 (여러 개)", "uploader_others",
                                 multiple=True, disabled=off)
+    if job_ready:
+        st.caption("장비 로그는 장비가 계산한 값(채터 수준·소리·절삭계수 추정 등)을 남기고 싶을 때만 올리면 됩니다. "
+                   "회전수·이송·부하 요약은 TDMS 로 계산합니다.")
+        _render_program_check(file_tdms, file_nc, existing_job_pk)
 
     # ------------------------------------------------------------ 사용 공구
-    tool_picks = _render_tool_section(file_nc, file_xml, existing_job_pk, disabled=off) if job_ready else {}
+    tool_picks = _render_tool_section(file_nc, existing_job_pk, disabled=off) if job_ready else {}
 
     # ------------------------------------------------------------ 가공 기록 입력
     st.markdown("---")
@@ -476,23 +712,24 @@ def render_data_upload():
         files = file_obj if isinstance(file_obj, list) else [file_obj]
         return all(f.size <= max_mb * 1024 * 1024 for f in files)
 
-    job_files = [file_xml, file_tdms, file_nc, file_log, file_roughness, file_others]
-    core_files = [file_xml, file_tdms, file_nc, file_log, file_roughness]
+    job_files = [file_tdms, file_nc, file_log, file_roughness, file_others]
+    still_missing = missing_core_inputs(existing_files_info, file_tdms, file_nc) if job_ready else []
 
-    if not check_size(file_xml, 15) or not check_size(file_nc, 15) or not check_size(file_cad, 15):
-        st.error("오류: XML, NC, CAD 파일은 15MB를 초과할 수 없습니다.")
+    if not check_size(file_nc, 15) or not check_size(file_cad, 15):
+        st.error("오류: NC, CAD 파일은 15MB를 초과할 수 없습니다.")
         return
     if not job_ready:
         if not file_cad:
             st.error("오류: 업로드할 CAD 파일을 선택하세요. "
                      "(가공 데이터를 넣으려면 Job을 먼저 지정하세요)")
             return
+    elif is_new_job and still_missing:
+        # TDMS 나 NC 가 빠진 새 Job 은 가공 요약이 반쪽으로 남는다 (예전 XML 이 하던 역할을 둘이 나눠 맡는다).
+        st.error("오류: 새 Job 에는 TDMS 와 NC 가 모두 필요합니다. "
+                 + " · ".join(f"{label}(→ {role})" for label, role in still_missing) + " 이(가) 없습니다.")
+        return
     elif not any(job_files) and not file_cad:
         st.error("오류: 업로드할 파일을 최소 한 개 이상 선택해주세요.")
-        return
-    elif is_new_job and not any(core_files):
-        st.error("오류: 기타 참고용 파일만으로는 새로운 Job을 생성할 수 없습니다. "
-                 "핵심 데이터(XML, NC 등)를 포함해주세요.")
         return
 
     cad_dir = os.path.join(base_raw_dir, project_name, part_name, job_layout.CAD_DIR)
@@ -527,6 +764,16 @@ def render_data_upload():
         os.makedirs(target_job_dir, exist_ok=True)
         attr_job_id = _job_id_of(project_name, part_name, existing_job_folder)
 
+    # 소재는 부품에 붙는다. 파일을 놓기 전에 적어 둔다 — 장비가 수집 폴더에 XML 을 떨어뜨려도 사람이 정한
+    # 소재가 이미 있어 XML 의 MaterialCode 가 덮어쓰지 않는다(비어 있을 때만 채움). 부품이 아직 없으면
+    # (CAD 만 올리는 새 부품) 여기서 만들어지고, 뒤이어 들어오는 CAD 가 이름으로 찾아 쓴다.
+    material_written = None
+    if material_change:
+        try:
+            material_written = _save_part_material(project_name, part_name, material_pick)
+        except Exception as e:
+            st.warning(f"소재를 저장하지 못했습니다 (파일 업로드는 계속합니다): {e}")
+
     # 공구 지정은 파일을 놓기 전에 기록한다. 수집기는 이 테이블을 건드리지 않지만, 먼저 적어 두면
     # 파일 저장 중에 화면이 끊겨도 사람이 고른 내용은 남는다.
     tool_written = []
@@ -551,11 +798,12 @@ def render_data_upload():
         saved_count += save_file(file_cad, cad_dir)
 
     if target_job_dir:
-        # 자료 종류별 하위 폴더에 바로 넣는다 (수집기가 옮길 필요가 없도록)
+        # 자료 종류별 하위 폴더에 바로 넣는다 (수집기가 옮길 필요가 없도록).
+        # NC 를 TDMS 보다 먼저 놓는다. 수집기는 들어온 순서로 처리하므로 TDMS 변환이 NC 를 바로 찾고,
+        # 'NC 없이 판별 -> NC 도착 뒤 다시 판별' 하는 두 번째 변환(수백 MB 를 한 번 더 읽음)이 생기지 않는다.
         for uploaded, kind in (
-            (file_xml, job_layout.XML_DIR),
-            (file_tdms, job_layout.TDMS_DIR),
             (file_nc, job_layout.NC_DIR),
+            (file_tdms, job_layout.TDMS_DIR),
             (file_log, job_layout.LOG_DIR),
         ):
             if uploaded:
@@ -583,9 +831,17 @@ def render_data_upload():
 
     msg_dir = target_job_dir if target_job_dir else cad_dir
     st.success(f"성공적으로 {saved_count}개의 파일을 업로드했습니다! (메인 폴더: {msg_dir})")
+    if material_written:
+        st.success(f"소재 반영: 부품 `{part_name}` → `{material_written}`", icon=":material/category:")
     if attr_written:
         st.success("가공 기록 반영: " + " · ".join(attr_written), icon=":material/edit_note:")
     if tool_written:
         st.success("공구 지정 반영: " + " · ".join(format_tool_code(n) or str(n) for n in tool_written),
                    icon=":material/build:")
+    if target_job_dir and still_missing:
+        # 기존 Job 에 다른 자료만 덧붙인 경우: 막지는 않지만 요약이 아직 반쪽임을 알린다
+        st.warning("이 Job 에는 아직 " + " · ".join(f"**{label}**" for label, _ in still_missing)
+                   + " 이(가) 없습니다. 올리면 "
+                   + " · ".join(role for _, role in still_missing) + " 이(가) 계산됩니다.",
+                   icon=":material/warning:")
     st.info("데이터가 계층형 폴더에 저장되었으며, 백엔드 Watchdog에 의해 파이프라인 처리가 시작됩니다.")

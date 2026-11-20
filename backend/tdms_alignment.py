@@ -18,6 +18,10 @@ TDMS 자체만으로는 "어디부터 어디까지가 이번 가공인지"를 �
      스핀들/이송 상태와 블록 전환 간격으로 잘라낸다.
   3. NC 원본이 없으면 스핀들 회전/이송 활동만으로 구간을 잡고,
      그것도 불가능하면 XML(StartTime/FinishTime) 힌트나 전체 구간을 쓴다.
+  4. 고른 구간에 운전 상태(CNC-ProgramMode)를 겹쳐 실행 사이클(사이클 시작 ~ 프로그램 끝)을
+     찾는다 (describe_cycle). 이것이 DB 의 가공 시작·종료다. TDMS 기록 시작이 아니다.
+
+시각 기준: TDMS 파형 시각은 UTC 이고, DB 에 넣는 시각은 한국 시간(UTC+9)이다 (LOCAL_UTC_OFFSET).
 
 DAQ 매핑은 비율 스케일이 아니라 파형 속성(wf_start_time + wf_start_offset + wf_increment)으로
 절대 시각을 복원해 CNC 구간과 같은 시각 범위를 잘라낸다. 파형 속성이 없는 장비 데이터는
@@ -42,7 +46,7 @@ import re
 import struct
 from contextlib import contextmanager
 from dataclasses import dataclass, field, asdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -69,24 +73,29 @@ def find_valid_data_end(path: str) -> Tuple[int, int]:
     반환값은 (유효 끝 오프셋, 전체 파일 크기).
     """
     size = os.path.getsize(path)
-    pos = 0
     with open(path, "rb") as f:
-        while pos + LEAD_IN_SIZE <= size:
-            f.seek(pos)
-            lead = f.read(LEAD_IN_SIZE)
-            if len(lead) < LEAD_IN_SIZE:
-                break
-            if lead[:4] not in (TDMS_TAG, TDMS_INDEX_TAG):
-                return pos, size
-            next_off = struct.unpack("<Q", lead[12:20])[0]
-            if next_off == _NO_NEXT_SEGMENT:
-                # 마지막 세그먼트가 미완료 상태 -> nptdms 가 경고와 함께 처리해 준다
-                return size, size
-            nxt = pos + LEAD_IN_SIZE + next_off
-            if nxt > size:
-                return size, size
-            pos = nxt
-    return (pos if pos > 0 else size), size
+        return _scan_valid_end(f, size), size
+
+
+def _scan_valid_end(f, size: int) -> int:
+    """열린 파일(디스크 파일이든 메모리든)에서 정상적으로 읽을 수 있는 마지막 오프셋."""
+    pos = 0
+    while pos + LEAD_IN_SIZE <= size:
+        f.seek(pos)
+        lead = f.read(LEAD_IN_SIZE)
+        if len(lead) < LEAD_IN_SIZE:
+            break
+        if lead[:4] not in (TDMS_TAG, TDMS_INDEX_TAG):
+            return pos
+        next_off = struct.unpack("<Q", lead[12:20])[0]
+        if next_off == _NO_NEXT_SEGMENT:
+            # 마지막 세그먼트가 미완료 상태 -> nptdms 가 경고와 함께 처리해 준다
+            return size
+        nxt = pos + LEAD_IN_SIZE + next_off
+        if nxt > size:
+            return size
+        pos = nxt
+    return pos if pos > 0 else size
 
 
 class _TruncatedFile(io.RawIOBase):
@@ -283,6 +292,214 @@ RPM_CANDIDATES = ("CNC-Z-SpindleSpeed", "CNC-W-SpindleSpeed", "CNC-SpindleSpeed"
 FEED_CANDIDATES = ("CNC-ActualFeedRate", "CNC-CommandFeedRate")
 BLOCK_CANDIDATES = ("CNC-CurrentBlock",)
 PROGNAME_CANDIDATES = ("CNC-ProgramName",)
+PROGRAM_MODE_CANDIDATES = ("CNC-ProgramMode",)
+GMODAL_CANDIDATES = ("CNC-GModal",)
+
+# ---- 시각 기준 ----
+# TDMS 파형 시각(wf_start_time · Time Channel CNC)은 UTC 다. 실측 두 건 모두 파일명·XML 의 한국
+# 시각보다 정확히 9시간 이르다 (09:55:22 UTC = 18:55:22 KST). 한국은 서머타임이 없어 언제나 +9시간이다.
+# 예전에는 XML 시각과 맞대어 보며 차이를 '찾았는데', XML 이 없으면 차이를 0 으로 두어 종료시각이
+# 9시간 이르게 저장됐다 (19:06:52 -> 10:06:52). 그래서 고정값으로 바꾼다. DB 에 넣는 시각은 모두 한국 시간이다.
+LOCAL_UTC_OFFSET_HOURS = 9.0
+LOCAL_UTC_OFFSET = timedelta(hours=LOCAL_UTC_OFFSET_HOURS)
+
+
+def tdms_to_local(ts) -> Optional[datetime]:
+    """TDMS(UTC) 시각 -> 한국 시간 (시간대 없는 datetime). 모르면 None."""
+    if ts is None:
+        return None
+    t = pd.Timestamp(ts)
+    if pd.isna(t):
+        return None
+    if t.tzinfo is not None:
+        t = t.tz_convert("UTC").tz_localize(None)
+    return (t + LOCAL_UTC_OFFSET).to_pydatetime()
+
+
+def local_to_tdms(ts) -> Optional[datetime]:
+    """한국 시간(DB · XML 의 시각) -> TDMS(UTC) 기준. 시간대가 붙은 값은 그 시간대를 따른다."""
+    if ts is None:
+        return None
+    t = pd.Timestamp(ts)
+    if pd.isna(t):
+        return None
+    if t.tzinfo is not None:
+        return t.tz_convert("UTC").tz_localize(None).to_pydatetime()
+    return (t - LOCAL_UTC_OFFSET).to_pydatetime()
+
+
+# 장비 수집기가 붙이는 이름: {장비}__{프로그램}__{라벨}__{YYMMDDHHMMSS}.tdms
+#   예) DNM200__O1110.NC__PROBE START__261111185522.tdms
+# 이름의 프로그램과 시각은 '기록을 시작할 때' 의 값이다. 가공 프로그램·가공 시작과 다를 수 있다
+# (DB_Test/1: 이름은 O2202.NC 16:42:15, 실제 가공은 O0911.nc 16:46:05).
+_TDMS_NAME_RE = re.compile(
+    r"^(?P<machine>[^_]+)__(?P<program>.+?)__(?P<label>.*?)__(?P<stamp>\d{12})\.tdms$", re.IGNORECASE)
+_TDMS_STAMP_RE = re.compile(r"__(\d{12})\.tdms$", re.IGNORECASE)
+
+
+def parse_tdms_filename(path) -> dict:
+    """{'machine', 'program', 'label', 'recorded_at'(한국 시간)}. 형식이 다르면 아는 것만 채운다."""
+    name = os.path.basename(str(path or ""))
+    out = {"machine": None, "program": None, "label": None, "recorded_at": None}
+    m = _TDMS_NAME_RE.match(name)
+    if m:
+        out.update(machine=m.group("machine"), program=m.group("program"), label=m.group("label"))
+        stamp = m.group("stamp")
+    else:
+        s = _TDMS_STAMP_RE.search(name)
+        stamp = s.group(1) if s else None
+    if stamp:
+        try:
+            out["recorded_at"] = datetime.strptime("20" + stamp, "%Y%m%d%H%M%S")
+        except ValueError:
+            pass
+    return out
+
+
+def row_seconds(frame: pd.DataFrame) -> pd.Series:
+    """행마다 바로 앞 행과의 간격(초). 폴링이 10초 넘게 끊긴 곳은 시간으로 치지 않는다."""
+    if frame.empty or "timestamp" not in frame.columns:
+        return pd.Series(0.0, index=frame.index)
+    dt = frame["timestamp"].diff().dt.total_seconds().fillna(0.0)
+    return dt.where((dt > 0) & (dt <= 10.0), 0.0)
+
+
+# 절삭 이동으로 보는 G 코드 (01 그룹): 직선·원호 절삭과 드릴링 계열 고정 사이클.
+CUTTING_G_CODES = frozenset({1, 2, 3, 73, 74, 76, 81, 82, 83, 84, 85, 86, 87, 88, 89})
+
+
+def cutting_mask(frame: pd.DataFrame) -> pd.Series:
+    """행마다 '절삭 중' 인지: 절삭 G 코드(G01~G03 · 고정 사이클) + 실제 이송 > 0 + 주축 회전.
+
+    예전 기준(회전수 > 100 이고 이송 > 0)은 주축이 도는 채로 급속이송(G00)하는 구간까지 절삭으로
+    세어, O1110 에서 절삭시간 650.7초 · 절삭이동 9961mm 가 나왔다 (XML 598.2초 · 4327.5mm).
+    G 모달로 가르면 598.0초 · 4334.3mm 로 맞는다. 주축 조건은 프로브 측정(주축 정지, G31 이송)을 뺀다.
+    """
+    if frame.empty:
+        return pd.Series(False, index=frame.index)
+    feed_col = _pick_column(frame, FEED_CANDIDATES)
+    rpm_col = _pick_column(frame, RPM_CANDIDATES)
+    gcol = _pick_column(frame, GMODAL_CANDIDATES)
+    feeding = (pd.to_numeric(frame[feed_col], errors="coerce").fillna(0) > 0) if feed_col \
+        else pd.Series(False, index=frame.index)
+    spinning = (pd.to_numeric(frame[rpm_col], errors="coerce").fillna(0) > 0) if rpm_col \
+        else pd.Series(True, index=frame.index)
+    if gcol:
+        codes = pd.to_numeric(frame[gcol].astype(str).str.upper().str.extract(r"G0*(\d+)")[0],
+                              errors="coerce")
+        cutting_g = codes.isin(CUTTING_G_CODES)
+    else:       # G 모달 채널이 없는 장비: 이송·주축만 본다
+        cutting_g = pd.Series(True, index=frame.index)
+    return cutting_g & feeding & spinning
+
+
+POSITION_COLUMNS = ("CNC-X-Position", "CNC-Y-Position", "CNC-Z-Position")
+
+# 한 기록 간격 사이의 위치 변화가 이 속도(mm/s)를 넘으면 실제 이동이 아니라 위치 '표시' 가 바뀐 것으로 본다.
+# 위치 채널은 공구 길이 보정이 들어간 좌표라, G43 H_(보정 켬)·G49(끔) 블록에서 공구가 움직이지 않아도 값이
+# 한 간격 만에 공구 길이만큼 바뀐다. 실측 2건: 점프 7번 125.8~191.1mm = 3,301~5,135 mm/s (모두 Z 만, X·Y 0),
+# 실제 이동은 가장 빨라야 380 mm/s (급속이송). 1,500 mm/s(90 m/min)는 실제 이동의 4배, 가장 작은 점프의 1/2.2 이다.
+DISPLAY_JUMP_SPEED = 1500.0
+
+
+def _interval_seconds(values: pd.Series) -> pd.Series:
+    """시각 열(datetime 또는 초 단위 숫자) -> 바로 앞 행과의 간격(초)."""
+    if pd.api.types.is_numeric_dtype(values):
+        return pd.to_numeric(values, errors="coerce").diff()
+    return pd.to_datetime(values, errors="coerce").diff().dt.total_seconds()
+
+
+def travel_steps(frame: pd.DataFrame, time_column: str = "timestamp") -> Optional[Tuple[pd.Series, pd.Series]]:
+    """(행마다 바로 앞 행에서 움직인 X·Y·Z 거리 mm, 그 변화가 위치 표시 점프인지). 위치 채널이 없으면 None.
+
+    총 이동거리는 step[~jump] 의 합이다. 점프: 이동량 > DISPLAY_JUMP_SPEED x 기록 간격.
+      * 간격은 기록 주기(간격의 중앙값)보다 짧게 치지 않는다 — 시각이 겹치거나 흔들려도 실제 이동을 점프로 보지 않게.
+      * 기록이 끊겼던 곳(간격이 긴 곳)의 큰 변화는 그동안 실제로 움직였을 수 있어 점프로 보지 않는다.
+      * 점프가 낀 한 간격의 실제 이동(실측 0~2.5mm)도 함께 빠진다.
+      * 시각 열이 없으면 점프를 가리지 않는다 (모두 False).
+    """
+    if frame is None or not set(POSITION_COLUMNS).issubset(frame.columns):
+        return None
+    delta = frame[list(POSITION_COLUMNS)].apply(pd.to_numeric, errors="coerce").diff().fillna(0.0)
+    step = (delta ** 2).sum(axis=1).pow(0.5)
+    jump = pd.Series(False, index=frame.index)
+    if time_column in frame.columns and len(frame) > 1:
+        dt = _interval_seconds(frame[time_column])
+        positive = dt[dt > 0]
+        if not positive.empty:
+            jump = step > DISPLAY_JUMP_SPEED * dt.clip(lower=float(positive.median()))
+    return step, jump
+
+
+def program_key(name) -> str:
+    """프로그램 이름 비교용: 확장자·대소문자·공백 차이를 없앤다 ('O1110.NC' == 'o1110')."""
+    return normalize_block(os.path.splitext(str(name or ""))[0])
+
+
+def same_program(a, b) -> Optional[bool]:
+    """두 프로그램 이름(NC 첫머리 · TDMS CNC-ProgramName)이 같은 프로그램인지. 한쪽이라도 모르면 None."""
+    ka, kb = program_key(a), program_key(b)
+    if not ka or not kb:
+        return None
+    return ka == kb
+
+
+# 가공 프로그램을 고르는 데 필요한 CNC 채널 (machining_program: 프로그램명 + 시각 + 절삭 판정)
+PROGRAM_CHECK_COLUMNS = (*CNC_TIME_CANDIDATES, *PROGNAME_CANDIDATES, *GMODAL_CANDIDATES,
+                         *FEED_CANDIDATES, *RPM_CANDIDATES)
+
+
+def read_tdms_programs(data) -> Tuple[Optional[str], List[str]]:
+    """TDMS 내용(바이트열)에서 (가공 프로그램, 기록에 나온 프로그램 이름들) 을 읽는다.
+
+    업로드 화면에서 올리려는 NC 가 TDMS 에서 실제로 깎은 프로그램과 같은지 미리 보려고 쓴다.
+    파일로 저장하기 전이라 메모리에서 읽고, 34개 CNC 채널 중 가공 프로그램을 고르는 데 필요한
+    몇 개만 지연 로딩한다 (실측 480MB 파일 약 8초 — 대부분 세그먼트 목록을 읽는 시간).
+    끝이 0 으로 채워진 파일(수집 프로그램 비정상 종료)은 그 앞까지만 읽는다 (open_tdms 와 같은 처리).
+    """
+    from nptdms import TdmsFile
+
+    raw = io.BytesIO(data)          # bytes 는 복사하지 않고 그대로 공유한다
+    size = len(data)
+    end = _scan_valid_end(raw, size)
+    if end == 0:
+        raise ValueError("TDMS 형식이 아닙니다 (파일 머리에 TDMS 표식이 없습니다)")
+    raw.seek(0)
+    fh = io.BufferedReader(_TruncatedFile(raw, end), buffer_size=1 << 20)
+    try:
+        tdms = TdmsFile.open(fh)
+        frame = read_cnc_frame(tdms, columns=PROGRAM_CHECK_COLUMNS)
+    finally:
+        fh.close()
+    if frame.empty:
+        return None, []
+    pcol = _pick_column(frame, PROGNAME_CANDIDATES)
+    seen = []
+    if pcol is not None:
+        names = frame[pcol].astype(str).str.strip()
+        seen = [n for n in dict.fromkeys(names) if n and n.lower() != "nan"]
+    return machining_program(frame), seen
+
+
+def machining_program(frame: pd.DataFrame, row_start: int = 0, row_end: Optional[int] = None) -> Optional[str]:
+    """CNC-ProgramName 중 [row_start, row_end) 에서 절삭이 가장 오래 일어난 프로그램 이름.
+
+    한 TDMS 에 여러 프로그램이 섞인다. 기록을 시작할 때 띄워 둔 프로그램(DB_Test/1 의 O2202 프로브),
+    공구교환 매크로(O9009) 등이다. 파일명·채널 속성의 프로그램명은 기록 시작 때 값이라 가공한
+    프로그램과 다를 수 있으므로, 실제로 깎은 시간으로 고른다. 절삭이 없으면 가장 많이 나온 이름.
+    """
+    pcol = _pick_column(frame, PROGNAME_CANDIDATES)
+    if pcol is None or frame.empty:
+        return None
+    sub = frame.iloc[row_start:row_end]
+    names = sub[pcol].astype(str).str.strip()
+    valid = (names != "") & (names.str.lower() != "nan")
+    if not valid.any():
+        return None
+    secs = row_seconds(sub)[valid & cutting_mask(sub)]
+    if secs.sum() > 0:
+        return str(secs.groupby(names[secs.index]).sum().idxmax())
+    return str(names[valid].value_counts().idxmax())
 
 
 @dataclass
@@ -297,20 +514,48 @@ class MachiningWindow:
     total_rows: int = 0
     matched_blocks: int = 0
     program_blocks: int = 0
-    hint_start: Optional[datetime] = None
+    hint_start: Optional[datetime] = None       # TDMS(UTC) 기준으로 바꾼 힌트
     hint_end: Optional[datetime] = None
-    # XML(로컬시간)과 TDMS(UTC) 의 기준 차이. hint 시각 - shift = TDMS 시각
+    # TDMS 시각 -> 한국 시간 차이(시). start/end 가 TDMS(UTC) 값이면 LOCAL_UTC_OFFSET_HOURS(9) 이고,
+    # TDMS 를 못 읽어 힌트(이미 한국 시간)를 그대로 start/end 로 쓴 경우에만 0 이다.
     hint_shift_hours: float = 0.0
     # 판별에 참조한 NC 프로그램 (없으면 None). 재처리 필요 여부 판단에 쓴다.
     nc_reference: Optional[str] = None
     notes: List[str] = field(default_factory=list)
+    # NC 대조에서, 실행이 확인된 가장 뒤 블록 이후 남은 동작 블록 수 (0 = 마지막 블록까지 확인)
+    end_gap_blocks: Optional[int] = None
+    # ---- 실행 사이클 (describe_cycle 가 채운다) ----
+    # 운전 상태(CNC-ProgramMode)가 실행(3)·일시정지(2)로 이어진 구간 중 가공 구간과 가장 많이 겹치는 것.
+    # 사이클 시작 버튼을 누른 순간부터 프로그램이 끝날 때까지다.
+    program_name: Optional[str] = None
+    cycle_start: Optional[datetime] = None
+    cycle_end: Optional[datetime] = None
+    cycle_row_start: Optional[int] = None
+    cycle_row_end: Optional[int] = None
+    first_cut: Optional[datetime] = None
+    # 프로그램 끝(M02/M30 또는 마지막 동작 블록)까지 실행했는지. 판단할 근거가 없으면 None
+    program_end_reached: Optional[bool] = None
+    # 완료 여부를 무엇으로 판단했는지 (완료 판정 기준을 실측 Job 으로 다듬을 때 본다 — compare_xml_tdms)
+    program_end_basis: Optional[str] = None
+    # 참조한 NC 파일 첫머리의 프로그램 이름 (<O1110.NC> -> O1110.NC). program_name(TDMS 에서 실제로 깎은
+    # 프로그램)과 다르면 엉뚱한 NC 를 올렸을 수 있다 — Job 화면이 경고한다.
+    nc_program: Optional[str] = None
+    # 총 이동거리에서 뺀 위치 표시 점프(공구 길이 보정 G43/G49 등, travel_steps): 횟수 · 합(mm).
+    # 가공 요약을 계산할 때(tdms_visualizer._apply_window_to_job) 채운다. 위치 채널이 없으면 None.
+    position_jumps: Optional[int] = None
+    position_jump_mm: Optional[float] = None
+
+    @property
+    def program_mismatch(self) -> bool:
+        """NC 파일의 프로그램과 TDMS 에서 깎은 프로그램이 다른지 (둘 다 알 때만)."""
+        return same_program(self.nc_program, self.program_name) is False
 
     @property
     def rows(self) -> int:
         return max(0, self.row_end - self.row_start)
 
     def to_hint_timebase(self, ts):
-        """TDMS 기준 시각을 XML(작업자가 보는 로컬) 기준으로 되돌린다."""
+        """TDMS 기준 시각을 한국 시간(작업자가 보는 시각, DB 기준)으로 바꾼다."""
         if ts is None:
             return None
         return (pd.Timestamp(ts) + pd.to_timedelta(self.hint_shift_hours, unit="h")).to_pydatetime()
@@ -324,6 +569,28 @@ class MachiningWindow:
         return self.to_hint_timebase(self.end)
 
     @property
+    def local_cycle_start(self):
+        return self.to_hint_timebase(self.cycle_start)
+
+    @property
+    def local_cycle_end(self):
+        return self.to_hint_timebase(self.cycle_end)
+
+    @property
+    def local_first_cut(self):
+        return self.to_hint_timebase(self.first_cut)
+
+    @property
+    def machining_start(self):
+        """가공 시작 (한국 시간): 실행 사이클 시작, 없으면 가공 구간 시작."""
+        return self.local_cycle_start or self.local_start
+
+    @property
+    def machining_end(self):
+        """가공 종료 (한국 시간): 실행 사이클 끝, 없으면 가공 구간 끝."""
+        return self.local_cycle_end or self.local_end
+
+    @property
     def duration_seconds(self) -> float:
         if self.start is None or self.end is None:
             return 0.0
@@ -334,16 +601,22 @@ class MachiningWindow:
         return (self.matched_blocks / self.program_blocks) if self.program_blocks else 0.0
 
     def to_dict(self) -> dict:
+        def iso(value):
+            return value.isoformat() if value is not None else None
+
         d = asdict(self)
-        d["start"] = self.start.isoformat() if self.start is not None else None
-        d["end"] = self.end.isoformat() if self.end is not None else None
-        d["hint_start"] = self.hint_start.isoformat() if self.hint_start is not None else None
-        d["hint_end"] = self.hint_end.isoformat() if self.hint_end is not None else None
+        # DB 의 JSON 칸에 그대로 들어가므로 datetime 은 모두 글자로 바꾼다.
+        for key in ("start", "end", "hint_start", "hint_end", "cycle_start", "cycle_end", "first_cut"):
+            d[key] = iso(getattr(self, key))
         d["rows"] = self.rows
         d["duration_seconds"] = round(self.duration_seconds, 3)
         d["nc_coverage"] = round(self.nc_coverage, 4)
-        d["local_start"] = self.local_start.isoformat() if self.local_start is not None else None
-        d["local_end"] = self.local_end.isoformat() if self.local_end is not None else None
+        d["local_start"] = iso(self.local_start)
+        d["local_end"] = iso(self.local_end)
+        d["local_cycle_start"] = iso(self.local_cycle_start)
+        d["local_cycle_end"] = iso(self.local_cycle_end)
+        d["local_first_cut"] = iso(self.local_first_cut)
+        d["program_mismatch"] = self.program_mismatch
         return d
 
 
@@ -540,9 +813,11 @@ def detect_machining_window(
 ) -> MachiningWindow:
     """CNC 시계열에서 실제 가공 구간을 판별한다.
 
-    frame           : read_cnc_frame() 결과 (timestamp 열 필요)
+    frame           : read_cnc_frame() 결과 (timestamp 열 필요, TDMS 시각 = UTC)
     nc              : 업로드된 NC 프로그램 (없으면 활동 기반으로 판별)
-    hint_start/end  : XML 의 StartTime/FinishTime (있으면 후보 run 선택과 검증에 사용)
+    hint_start/end  : 한국 시간으로 적힌 시작/종료 (XML 또는 DB 의 Job 값). 있으면 후보 run 선택과 검증에 쓴다.
+
+    돌려주는 구간의 start/end 는 TDMS(UTC) 시각이고, local_* 는 언제나 한국 시간(+9시간)이다.
     """
     n = len(frame)
     notes: List[str] = []
@@ -552,22 +827,26 @@ def detect_machining_window(
     nc_ref = ("%s(%d블록)" % (nc.name or "NC", nc.motion_blocks)) if (nc and nc.blocks) else None
 
     if n == 0 or "timestamp" not in frame.columns:
+        # 힌트(이미 한국 시간)를 그대로 구간으로 쓰므로 시차를 더하지 않는다 (hint_shift_hours=0).
         return MachiningWindow(start=hint_start, end=hint_end, row_start=0, row_end=n,
                                method="full", total_rows=n, hint_start=hint_start,
-                               hint_end=hint_end, nc_reference=nc_ref,
+                               hint_end=hint_end, nc_reference=nc_ref, hint_shift_hours=0.0,
                                notes=["CNC 시계열이 없어 구간 판별을 생략했습니다."])
 
     ts = frame["timestamp"]
     rec_start, rec_end = ts.iloc[0].to_pydatetime(), ts.iloc[-1].to_pydatetime()
 
-    # XML 은 로컬시간, TDMS 파형 시각은 UTC 인 경우가 많아 기준부터 맞춘다
+    # 힌트는 한국 시간이고 TDMS 파형 시각은 UTC 다. 고정 시차(+9시간)로 TDMS 기준으로 바꿔 비교한다.
+    # 그래도 겹치지 않을 때만 예전처럼 정수 시간 차이를 찾아 본다 (다른 시간대로 적힌 힌트 대비).
     raw_hint_start, raw_hint_end = hint_start, hint_end
-    shift_hours = 0.0
+    shift_hours = LOCAL_UTC_OFFSET_HOURS
     if hint_start is not None:
-        hint_start, hint_end, shift_hours = align_hint_timebase(rec_start, rec_end, hint_start, hint_end)
-        if shift_hours:
-            notes.append("XML 가공시간이 TDMS 기록구간과 %+.0f시간 어긋나 있어 시간대를 맞춰 비교했습니다."
-                         % shift_hours)
+        hint_start = local_to_tdms(hint_start)
+        hint_end = local_to_tdms(hint_end) if hint_end is not None else None
+        hint_start, hint_end, residual = align_hint_timebase(rec_start, rec_end, hint_start, hint_end)
+        if residual:
+            notes.append("힌트 시각을 한국 시간으로 보면 TDMS 기록구간과 %+.0f시간 어긋나 있어 시간대를 "
+                         "맞춰 비교했습니다." % residual)
 
     # 보정해도 겹치지 않으면 (다른 세션의 XML 등) 신뢰하지 않는다
     hint_usable = False
@@ -621,12 +900,18 @@ def detect_machining_window(
                     if (rb - ra) < (b - a):
                         notes.append("선택 구간 앞뒤의 대기 시간 %d행을 잘라냈습니다."
                                      % ((b - a) - (rb - ra)))
+                    # 실행이 확인된 가장 뒤 블록 이후로 남은 동작 블록 수. 마지막 한두 블록(원점 복귀,
+                    # M30)은 아주 짧아 27Hz 폴링에 안 잡히기도 하므로 0 이 아니어도 끝까지 간 것일 수 있다.
+                    seen = [int(p) for p in pos[a:b] if p >= 0 and not nc.is_marker(int(p))]
+                    furthest = max(seen) if seen else -1
+                    end_gap = sum(1 for i in range(len(nc.blocks)) if i > furthest and not nc.is_marker(i))
                     win = MachiningWindow(
                         start=ts.iloc[ra].to_pydatetime(), end=ts.iloc[rb - 1].to_pydatetime(),
                         row_start=int(ra), row_end=int(rb), method="nc_block", total_rows=n,
                         matched_blocks=int(cov), program_blocks=int(nc.motion_blocks),
                         hint_start=hint_start, hint_end=hint_end,
-                        hint_shift_hours=shift_hours, nc_reference=nc_ref, notes=notes)
+                        hint_shift_hours=shift_hours, nc_reference=nc_ref, notes=notes,
+                        end_gap_blocks=int(end_gap))
                     if hint_usable:
                         win.notes.append("XML 기준 시작/종료와의 차이: %+.2fs / %+.2fs"
                                          % ((win.start - hint_start).total_seconds(),
@@ -668,6 +953,83 @@ def detect_machining_window(
                            hint_start=hint_start, hint_end=hint_end,
                            hint_shift_hours=shift_hours, nc_reference=nc_ref,
                            notes=notes + ["가공 구간을 좁힐 근거가 없어 기록 전체를 사용했습니다."])
+
+
+# FANUC 운전 상태(CNC-ProgramMode): 0 리셋, 1 정지, 2 일시정지(HOLD), 3 실행(STaRT).
+# 일시정지는 같은 사이클 안의 멈춤이므로 실행과 이어 본다.
+RUNNING_STATES = (2, 3)
+# 사이클 시작이 가공 구간보다 이만큼 넘게 앞서면 운전 상태를 믿지 않고 가공 구간 시작을 쓴다.
+CYCLE_LEAD_LIMIT_SECONDS = 120.0
+# 마지막 몇 블록(원점 복귀, M30)은 너무 짧아 폴링에 안 잡힐 수 있다 (O1110: 210블록 중 끝 3개).
+END_GAP_TOLERANCE = 3
+_PROGRAM_END_RE = r"(?<![A-Z0-9#])M0?(?:2|30)(?![0-9])"
+
+
+def describe_cycle(frame: pd.DataFrame, window: MachiningWindow) -> MachiningWindow:
+    """가공 구간에 실행 사이클(가공 시작 ~ 프로그램 끝)·가공 프로그램·첫 절삭·완료 여부를 채운다.
+
+    가공 시작 = 운전 상태(CNC-ProgramMode)가 실행(3)으로 바뀐 순간 (작업자가 사이클 시작을 누른 때).
+    TDMS 기록 시작이 아니다. 같은 파일 안에서 중단된 시도(리셋으로 끝나고 절삭이 없는 실행)는
+    가공 구간과 겹치지 않으므로 고르지 않는다 (DB_Test/1: 16:43:12 의 시도는 건너뛰고 16:46:05).
+    실측: XML StartTime 과 0.00 · −0.26초, FinishTime 과 −0.22 · −1.91초 차이.
+
+    운전 상태 채널이 없으면 가공 구간(NC 블록 대조 · 활동 기반)을 그대로 사이클로 쓴다.
+    window 를 고쳐서 그대로 돌려준다.
+    """
+    n = len(frame)
+    if n == 0 or "timestamp" not in frame.columns or window.rows <= 0:
+        return window
+    ts = frame["timestamp"]
+    a, b = window.row_start, window.row_end
+
+    mcol = _pick_column(frame, PROGRAM_MODE_CANDIDATES)
+    if mcol is not None:
+        running = pd.to_numeric(frame[mcol], errors="coerce").isin(RUNNING_STATES).to_numpy()
+        edges = np.flatnonzero(np.diff(np.concatenate(([0], running.astype(np.int8), [0]))))
+        best = None
+        for s, e in zip(edges[0::2], edges[1::2]):
+            overlap = min(e, b) - max(s, a)
+            if overlap > 0 and (best is None or overlap > best[0]):
+                best = (overlap, int(s), int(e))
+        if best is not None:
+            lead = (ts.iloc[a] - ts.iloc[best[1]]).total_seconds()
+            if lead > CYCLE_LEAD_LIMIT_SECONDS:
+                window.notes.append("운전 상태상 사이클 시작이 가공 구간보다 %.0f초 앞서 있어 가공 구간 시작을 "
+                                    "그대로 썼습니다." % lead)
+                a, b = a, max(b, best[2])
+            else:
+                a, b = best[1], best[2]
+        else:
+            window.notes.append("가공 구간과 겹치는 실행 상태(ProgramMode 2·3)가 없어 가공 구간을 사이클로 썼습니다.")
+
+    window.cycle_row_start, window.cycle_row_end = int(a), int(b)
+    window.cycle_start = ts.iloc[a].to_pydatetime()
+    window.cycle_end = ts.iloc[b - 1].to_pydatetime()
+    window.program_name = machining_program(frame, a, b)
+
+    cut = cutting_mask(frame.iloc[a:b]).to_numpy()
+    if cut.any():
+        window.first_cut = ts.iloc[a + int(np.flatnonzero(cut)[0])].to_pydatetime()
+
+    # 완료 여부: 사이클 끝 무렵에 프로그램 끝(M02/M30)이 보이거나, NC 대조상 마지막 블록 근처까지 갔으면 완료.
+    # 실측 근거 (2026-11-12): DB_Test/1 은 끝에 M2 가 보였고(남은 블록 0), DB_Test2/1 은 M30 이 27Hz 폴링에
+    # 안 잡혀 '남은 동작 블록 1개' 로 판단했다. 둘 다 장비 XML 의 IsFinish 와 같다. 중단된 실측 Job 은
+    # 아직 없어 허용치(END_GAP_TOLERANCE)는 더 모아서 정한다 — 그래서 무엇으로 판단했는지 함께 남긴다.
+    ended, basis = None, None
+    gap = window.end_gap_blocks
+    gap_text = f"남은 동작 블록 {gap}개" if gap is not None else None
+    bcol = _pick_column(frame, BLOCK_CANDIDATES)
+    if bcol is not None:
+        tail = frame[bcol].iloc[max(a, b - 50):min(n, b + 3)].astype(str).str.upper()
+        if tail.str.contains(_PROGRAM_END_RE, regex=True).any():
+            ended = True
+            basis = "M02/M30 실행 확인" + (f" ({gap_text})" if gap_text else "")
+    if ended is None and gap is not None:
+        ended = gap <= END_GAP_TOLERANCE
+        basis = f"{gap_text} ({'≤' if ended else '>'} 허용 {END_GAP_TOLERANCE}개)"
+    window.program_end_reached = ended
+    window.program_end_basis = basis
+    return window
 
 
 # ---------------------------------------------------------------------------
@@ -1028,17 +1390,24 @@ def merge_for_parquet(cnc: pd.DataFrame, daq: pd.DataFrame) -> pd.DataFrame:
 
 
 def summarize_window(window: MachiningWindow, result: Optional[AlignedResult] = None) -> str:
+    ended = {True: "예", False: "아니오", None: "모름"}[window.program_end_reached]
     lines = [
         "가공 구간 판별 결과",
         "  판별 방법   : %s" % window.method,
-        "  가공 시작   : %s%s" % (window.start,
-                                 "  (현지 %s)" % window.local_start if window.hint_shift_hours else ""),
-        "  가공 종료   : %s%s" % (window.end,
-                                 "  (현지 %s)" % window.local_end if window.hint_shift_hours else ""),
-        "  가공 시간   : %.2f 초" % window.duration_seconds,
+        "  구간 시작   : %s  (한국 %s)" % (window.start, window.local_start),
+        "  구간 종료   : %s  (한국 %s)" % (window.end, window.local_end),
+        "  구간 길이   : %.2f 초" % window.duration_seconds,
         "  CNC 행      : %d ~ %d (%d행 / 전체 %d행)" % (
             window.row_start, window.row_end, window.rows, window.total_rows),
     ]
+    if window.cycle_start is not None:
+        lines += [
+            "  가공 프로그램: %s" % (window.program_name or "-"),
+            "  가공 시작   : %s  (실행 사이클 시작, 한국 시간)" % window.local_cycle_start,
+            "  가공 종료   : %s  (프로그램 끝, 한국 시간)" % window.local_cycle_end,
+            "  첫 절삭     : %s" % (window.local_first_cut or "-"),
+            "  프로그램 끝 : %s" % ended,
+        ]
     if window.program_blocks:
         lines.append("  NC 블록     : %d / %d 종 실행 (커버리지 %.0f%%)" % (
             window.matched_blocks, window.program_blocks, window.nc_coverage * 100))
@@ -1071,9 +1440,10 @@ def read_xml_times(path: str) -> Tuple[Optional[datetime], Optional[datetime], O
 
     def _to_naive(text):
         ts = pd.Timestamp(text)
-        # XML 은 +09:00 같은 오프셋을 달고 오지만 TDMS 파형 시각은 UTC 기준이라
-        # 같은 기준(UTC naive)으로 맞춘 뒤 비교한다.
-        ts = ts.tz_convert("UTC").tz_localize(None) if ts.tzinfo is not None else ts
+        # XML 은 +09:00 같은 오프셋을 달고 오기도, 없이 오기도 한다. DB 와 같은 기준(한국 시간,
+        # 시간대 없음)으로 맞춘다. TDMS(UTC) 와의 비교는 detect_machining_window 가 바꿔서 한다.
+        if ts.tzinfo is not None:
+            ts = ts.tz_convert("UTC").tz_localize(None) + LOCAL_UTC_OFFSET
         return ts.floor("us").to_pydatetime()
 
     start = end = prog = None
@@ -1116,15 +1486,19 @@ def process_file(tdms_path: str, nc_path: Optional[str] = None, xml_path: Option
     with open_tdms(tdms_path) as tdms:
         cnc_frame = read_cnc_frame(tdms)
 
-        # 시간대 차이는 detect_machining_window 가 자동으로 맞춘다.
-        # --utc-offset 을 준 경우에만 강제로 먼저 적용한다.
+        # 힌트는 한국 시간으로 넘긴다 (detect_machining_window 가 TDMS(UTC) 로 바꿔 비교한다).
+        # --utc-offset 은 '시간대 표시 없이 적힌 XML 시각이 UTC 몇 시간인지' 다. 한국 시간으로 옮긴다.
         hs, he = hint_start, hint_end
-        if utc_offset_hours:
-            delta = pd.to_timedelta(utc_offset_hours, unit="h")
-            hs = (pd.Timestamp(hs) - delta).to_pydatetime() if hs is not None else None
-            he = (pd.Timestamp(he) - delta).to_pydatetime() if he is not None else None
+        if utc_offset_hours is not None and utc_offset_hours != LOCAL_UTC_OFFSET_HOURS:
+            delta = pd.to_timedelta(LOCAL_UTC_OFFSET_HOURS - utc_offset_hours, unit="h")
+            hs = (pd.Timestamp(hs) + delta).to_pydatetime() if hs is not None else None
+            he = (pd.Timestamp(he) + delta).to_pydatetime() if he is not None else None
 
+        # NC 에 이름이 없으면 TDMS 에서 실제로 깎은 프로그램 이름을 쓴다 (다른 프로그램 행을 거르는 기준).
+        if nc is not None and not nc.name:
+            nc.name = machining_program(cnc_frame) or ""
         window = detect_machining_window(cnc_frame, nc, hs, he)
+        describe_cycle(cnc_frame, window)
         result = build_aligned_frames(tdms, window, cnc_frame, target_points=target_points)
 
     out = {"window": window.to_dict(), "daq_sync": result.sync.to_dict(),
@@ -1158,7 +1532,7 @@ def main(argv=None):
     ap.add_argument("--prefix", default="aligned", help="출력 파일 접두어 (기본 aligned)")
     ap.add_argument("--points", type=int, default=TARGET_DATAPOINTS, help="그래프 목표 점 개수")
     ap.add_argument("--utc-offset", type=float, default=None,
-                    help="XML 시간에서 뺄 시간대 오프셋(시). 생략하면 자동 추정")
+                    help="시간대 표시 없이 적힌 XML 시각의 UTC 오프셋(시). 생략하면 한국 시간(+9)으로 본다")
     ap.add_argument("--json", action="store_true", help="판별 결과를 JSON 으로 출력")
     args = ap.parse_args(argv)
 

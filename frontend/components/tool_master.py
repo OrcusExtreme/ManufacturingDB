@@ -145,7 +145,7 @@ def _download_section():
 
 def render_tool_master():
     st.subheader("공구 마스터 (Tool Master)")
-    st.caption("ISO 14649 기반 공구 마스터입니다. 매거진에 장착된 공구는 T번호로 NC/XML 의 공구 호출과 "
+    st.caption("ISO 14649 기반 공구 마스터입니다. 매거진에 장착된 공구는 T번호로 NC 의 공구 호출과 "
                "연결되고, 미장착 재고는 T번호 없이 재고로만 관리합니다.")
     _show_flash()
 

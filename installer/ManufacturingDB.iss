@@ -818,6 +818,7 @@ begin
   else if Key = 'mysql_database' then WizardForm.StatusLabel.Caption := '데이터베이스를 준비하는 중...'
   else if Key = 'env_write' then WizardForm.StatusLabel.Caption := '앱 설정(.env)을 쓰는 중...'
   else if Key = 'schema_tables' then WizardForm.StatusLabel.Caption := '테이블을 만드는 중...'
+  else if Key = 'schema_comments' then WizardForm.StatusLabel.Caption := '컬럼 설명을 새 판에 맞추는 중...'
   else if Key = 'schema_folders' then WizardForm.StatusLabel.Caption := '원본 백업 보관소와 data 폴더를 만드는 중...'
   else if Key = 'schema_tools' then WizardForm.StatusLabel.Caption := '기본 공구 목록을 넣는 중...'
   else if Key = 'verify' then WizardForm.StatusLabel.Caption := '설치 결과를 확인하는 중...';

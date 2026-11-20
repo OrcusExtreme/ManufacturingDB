@@ -37,7 +37,7 @@ TABLE_METADATA = {
     "job": {
         "label": "Job",
         "kr_name": "실가공 이력 (Job)",
-        "desc": "실제 장비에서 1회 수행된 실가공 이력 데이터의 핵심 엔티티",
+        "desc": "실제 장비에서 1회 수행된 실가공 이력 — 가공 요약(시작·종료·절삭시간·이동거리·완료 여부)은 TDMS CNC 채널 + NC 코드로 계산",
         "color": "#4ade80"
     },
     "job_tool_assignment": {
@@ -55,7 +55,7 @@ TABLE_METADATA = {
     "machine_log": {
         "label": "MachineLog",
         "kr_name": "CNC 로그 요약 통계",
-        "desc": "가공 중 수집된 1Hz CNC 로그의 최대 부하, RPM, 알람 통계",
+        "desc": "CNC 요약(TDMS 실행 사이클 기준 최대 부하·RPM·이송, 알람) + 장비 로그의 장비 계산값 요약(채터·소리·절삭계수 추정)",
         "color": "#2dd4bf"
     },
     "log_file_archive": {
@@ -90,8 +90,8 @@ TABLE_METADATA = {
     },
     "job_file_archive": {
         "label": "JobFileArchive",
-        "kr_name": "Job XML 메타데이터 아카이브",
-        "desc": "Job의 원본 metadata.xml 파일 및 시각화 Parquet 파일 보관",
+        "kr_name": "Job 원본 파일 아카이브",
+        "desc": "TDMS 원본·시각화 Parquet 경로와, 장비가 남긴 XML 원본(있을 때만) 보관",
         "color": "#818cf8"
     }
 }
