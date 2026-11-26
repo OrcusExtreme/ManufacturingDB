@@ -61,6 +61,26 @@ PENDING_COLUMNS = [
     ("machine_log", "machine_indicators",
      "ADD COLUMN machine_indicators JSON NULL "
      "COMMENT '장비 로그의 장비 계산값 요약 (열별 절삭 중 평균·최대·최소)'"),
+    # V3.3.1: 워킹스텝을 절삭 패스마다 나누면서 같은 조건의 스텝끼리 구분하는 칸 (models.Workingstep).
+    # 붙인 직후에는 비어 있다 — backend/resync_workingsteps.py(tools/recompute_jobs.bat)가 NC 로 채운다.
+    ("workingstep", "pass_count",
+     "ADD COLUMN pass_count INT NULL "
+     "COMMENT '합친 절삭 패스 수 (같은 자리를 같은 조건으로 이어 깎은 층·다듬질 패스, 절삭 없이 호출만 된 공구는 0)'"),
+    ("workingstep", "nc_line_start",
+     "ADD COLUMN nc_line_start INT NULL "
+     "COMMENT 'NC 시작 줄 번호 (이 스텝 첫 절삭 블록, NC 파일 첫 줄이 1)'"),
+    ("workingstep", "nc_line_end",
+     "ADD COLUMN nc_line_end INT NULL "
+     "COMMENT 'NC 끝 줄 번호 (이 스텝 마지막 절삭 블록)'"),
+    ("workingstep", "start_position",
+     "ADD COLUMN start_position JSON NULL "
+     "COMMENT '절삭 시작 위치 (공작물 좌표 mm, X·Y·Z: 첫 절삭 블록 직전, 모르는 축은 null)'"),
+    ("workingstep", "end_position",
+     "ADD COLUMN end_position JSON NULL "
+     "COMMENT '절삭 끝 위치 (공작물 좌표 mm, X·Y·Z: 마지막 절삭 블록 뒤)'"),
+    ("workingstep", "cutting_distance",
+     "ADD COLUMN cutting_distance DOUBLE NULL "
+     "COMMENT '절삭 경로 길이 (mm, NC: 이 스텝 패스들의 G01~G03·고정 사이클 이동 합)'"),
 ]
 
 # 새 기능으로 생긴 '테이블'. 컬럼과 달리 ALTER 로 붙일 수 없어 models.py 정의 그대로 만든다.

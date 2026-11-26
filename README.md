@@ -10,7 +10,7 @@
   <a href="https://www.sqlalchemy.org/"><img src="https://img.shields.io/badge/SQLAlchemy-2.0%2B-red.svg" alt="ORM" /></a>
   <a href="https://streamlit.io/"><img src="https://img.shields.io/badge/Streamlit-1.61%2B-FF4B4B.svg" alt="Frontend" /></a>
   <a href="https://www.iso.org/"><img src="https://img.shields.io/badge/Standard-ISO%2014649%20(STEP--NC)-green.svg" alt="Standard" /></a>
-  <a href="https://github.com/OrcusExtreme/ManufacturingDB"><img src="https://img.shields.io/badge/Release-V3.3.0-brightgreen.svg" alt="Release" /></a>
+  <a href="https://github.com/OrcusExtreme/ManufacturingDB"><img src="https://img.shields.io/badge/Release-V3.3.1-brightgreen.svg" alt="Release" /></a>
 </p>
 
 공작기계지능화실험실(Machine Tool Intelligence Lab)의 **통합 제조 데이터베이스 및 가공 데이터 분석 시스템**입니다.  
@@ -23,8 +23,8 @@
 
 ### 1. ISO 14649(STEP-NC) 표준 기반 데이터 모델링
 - **정적 공정 계획(Static Planning)과 동적 가공 실행(Dynamic Execution)의 분리 설계**
-- `Part(부품)` ➔ `Workplan(NC 가공계획)` ➔ `Workingstep(단위공정: 공구 교환 및 절삭조건 S/F 변화 단위)` ↔ `Tool(공구 마스터)` 구조의 계층형 공정 모델링
-- **단위 공정(Workingstep) 세분화**: 단순 공구 호출 단위가 아닌 공구 교환 및 절삭조건(주축회전수 S, 이송속도 F) 변화마다 행을 분리하여, 단일 공구 조건 변경 실험의 정밀 추적 및 절입 깊이(`depth_of_cut`, 공작물 Z0 기준) 자동 추출
+- `Part(부품)` ➔ `Workplan(NC 가공계획)` ➔ `Workingstep(단위공정: 공구 교환 · 절삭 패스 단위)` ↔ `Tool(공구 마스터)` 구조의 계층형 공정 모델링
+- **단위 공정(Workingstep) 세분화**: 공구 호출 단위가 아닌 절삭 패스마다 행을 분리(같은 자리를 같은 조건으로 다시 깎은 층·다듬질 패스만 합침)하여, 단일 공구 조건 변경 실험과 같은 조건으로 여러 자리를 깎는 실험을 패스 단위로 추적. 스텝마다 절입 깊이(`depth_of_cut`, 공작물 Z0 기준), 패스 수, NC 줄 범위, 시작·끝 위치, 절삭 길이 자동 추출 ([분리 규칙](#4-워킹스텝-분리-규칙-nc))
 - 동일 Workplan 조건에서 반복 수행되는 실험 가공 차수(`Job`)의 1:N 이력 관리
 
 ### 2. 가공 차수별 공구 지정 및 환경 데이터 자동 수집
@@ -151,7 +151,7 @@ erDiagram
 
 | 도메인 | 테이블명 | 설명 |
 | :--- | :--- | :--- |
-| **마스터 & 공정 계획** | `part`, `workplan`, `tool`, `workingstep`, `cad_file_archive` | 부품 마스터, NC 공정 계획(부품·프로그램·NC해시 복합 유니크 제약), 공구 제원(ISO 14649 분류 및 치수, 매거진 장착/재고 관리), 단위 공정 순서 및 절삭 가공 조건(Feed/Spindle/절입 깊이 `depth_of_cut`), 3D 형상 파일 관리 |
+| **마스터 & 공정 계획** | `part`, `workplan`, `tool`, `workingstep`, `cad_file_archive` | 부품 마스터, NC 공정 계획(부품·프로그램·NC해시 복합 유니크 제약), 공구 제원(ISO 14649 분류 및 치수, 매거진 장착/재고 관리), 단위 공정 순서 및 절삭 가공 조건(Feed/Spindle/절입 깊이 `depth_of_cut`)과 패스 구분 정보(패스 수·NC 줄·시작/끝 위치·절삭 길이), 3D 형상 파일 관리 |
 | **가공 실행 & 품질** | `job`, `job_tool_assignment`, `machine_log`, `surface_roughness`, `inspection`, `env_memo` | 가공 차수 이력(가공 시간, 거리, 에러), Job별 실제 사용 공구(T번호 → 공구 마스터, 지정 당시 제원 스냅샷 보존), CNC 1Hz 부하 통계, 다지점 표면조도 프로파일, 치수공차 판정(PASS/FAIL), 온습도(수기 입력 및 외기 자동 수집)·날씨(`weather`, `weather_source`, `weather_time`)·가공 환경 데이터 |
 | **아카이브 & 백업** | `workplan_file_archive`, `job_file_archive`, `surface_roughness_archive`, `log_file_archive` | 원본 디렉터리 경로(`*_raw_path`) 및 LONGBLOB 백업 데이터 |
 
@@ -193,6 +193,7 @@ ManufacturingDB/
 │   ├── weather_service.py            #   가공 시각 외기 온습도·날씨 자동 기록 데몬 (Open-Meteo)
 │   ├── recovery_engine.py            #   보관소 및 DB 기반 복원 엔진
 │   ├── recompute_job_summary.py      #   기존 Job 가공 요약을 TDMS+NC 기준으로 재계산 (미리보기 / --apply)
+│   ├── resync_workingsteps.py        #   기존 워킹스텝을 지금 분리 규칙으로 NC 에서 다시 나눔 (미리보기 / --apply)
 │   ├── compare_xml_tdms.py           #   장비 XML 값 대 TDMS+NC 계산값 비교표 (읽기 전용, CSV 저장)
 │   ├── tdms_visualizer.py            #   TDMS Parquet/FFT 변환 백그라운드 데몬
 │   ├── tdms_alignment.py             #   NC 블록 대조 가공 구간 판별, 실행 사이클(가공 시작·종료), UTC→KST 시간축 정렬
@@ -222,9 +223,10 @@ ManufacturingDB/
 │   │   ├── serializers.py            #   데이터 직렬화 (스냅샷 공구·절삭조건·날씨 포함)
 │   │   └── routers/                  #   jobs, parts, export 라우터
 │   └── tests/                        #   단위 테스트 및 시스템 통합 검증 스크립트
-│       ├── fixtures/                 #   실측 NC 파일 검증 데이터 (O1110, O0912 EDGECAM)
+│       ├── fixtures/                 #   실측 NC 파일 검증 데이터 (O0911, O1110, O0912 EDGECAM)
 │       ├── test_nc_parser.py         #   워킹스텝 분리 규칙 및 절삭조건 파싱 테스트
 │       ├── test_nc_workingstep_sync.py # NC 기준 워킹스텝 재구성 및 동기화 무결성 테스트
+│       ├── test_resync_workingsteps.py # 기존 워킹스텝 다시 나누기 (미리보기·반영·백업·설치 확인 알림) 테스트
 │       ├── test_tool_assignment.py   #   Job별 공구 지정 및 마스터 교체 후 매칭 테스트
 │       ├── test_weather_service.py   #   외기 온습도·날씨 자동 기록 단위 테스트
 │       ├── test_tdms_cycle.py        #   TDMS 실행 사이클·가공 프로그램·가공 요약 기록 규칙 테스트
@@ -245,8 +247,8 @@ ManufacturingDB/
 │   └── components/                   #   화면별 서브 컴포넌트
 │       ├── home_view.py              #   홈 대시보드 화면
 │       ├── filters.py                #   다단계 검색 필터
-│       ├── job_workspace.py          #   Job 상세 분석 및 관리 화면 (실제 사용 공구 현황/수정)
-│       ├── master_tree.py            #   ISO 14649 공정 계층 트리뷰 (RPM, mm/min, 절입 깊이)
+│       ├── job_workspace.py          #   Job 상세 분석 및 관리 화면 (사용 공구 제원 조회)
+│       ├── master_tree.py            #   ISO 14649 공정 계층 트리뷰 (RPM, mm/min, 절입 깊이, 패스 수, NC 줄, 경로)
 │       ├── tool_master.py            #   공구 마스터 조회 및 파일 교체
 │       ├── tool_picker.py            #   T번호별 공구 선택 및 Job 사용 공구 현황 공용 컴포넌트
 │       ├── data_upload.py            #   수동 데이터 업로드 화면 (NC 즉시 분석 및 공구 지정)
@@ -265,7 +267,7 @@ ManufacturingDB/
 │   ├── compile_controller.bat        #   C++ 컨트롤러 빌드 스크립트
 │   ├── run_controller.bat            #   컨트롤러 실행 스크립트
 │   ├── run_windows.bat               #   가상환경 구성 및 통합 실행 배치 파일
-│   ├── recompute_jobs.bat            #   업그레이드 뒤 기존 Job 가공 요약 재계산 (미리보기 → 확인 → 반영)
+│   ├── recompute_jobs.bat            #   업그레이드 뒤 기존 데이터 갱신: 워킹스텝 다시 나누기 · Job 가공 요약 재계산 (각각 미리보기 → 확인 → 반영)
 │   └── requirements.txt              #   파이썬 의존성 패키지 명세
 │
 ├── installer/                        # 배포 패키지(Inno Setup) 빌드 환경
@@ -414,13 +416,17 @@ python installer\build_installer.py           # dist/Setup_ManufacturingDB_v*.ex
 python installer\build_installer.py --test    # 로컬 테스트용 경량 빌드
 ```
 
-- 판 번호는 이 문서 릴리즈 노트 맨 위(`### [Vx.y.z]`)를 씁니다. 판을 올릴 때는 README 배지, 대시보드 사이드바(`frontend/dashboard.py`), 컨트롤러 버전 정보(`controller/system_controller.rc`)도 함께 고칩니다 — 하나라도 다르면 정식 판은 만들지 않습니다 (`backend/tests/test_release_version.py` 도 같은 것을 봅니다).
+- 판 번호는 이 문서 릴리즈 노트 맨 위(`### [Vx.y.z]`)를 씁니다. 판을 올릴 때는 README 배지, 대시보드 사이드바(`frontend/dashboard.py`), 홈 화면(`frontend/components/home_view.py`), 컨트롤러 버전 정보(`controller/system_controller.rc`)도 함께 고칩니다 — 하나라도 다르면 정식 판은 만들지 않습니다 (`backend/tests/test_release_version.py` 도 같은 것을 봅니다).
 - 결과물은 `dist/` 에 설치 파일과 SHA-256(`.sha256`)이 함께 생깁니다. 커밋하지 않은 새 파일도 담기므로(.gitignore 대상 제외), 배포한 판은 같은 내용으로 커밋해 둡니다.
 
 ### 3. 업그레이드 (예전 판에서 올리기)
 1. 컨트롤러에서 **[전체 중지]** 를 누른 뒤 새 `Setup_ManufacturingDB_v*.exe` 를 관리자 권한으로 실행합니다. 지난 설치의 폴더·MySQL·DB 설정을 그대로 쓰고, 데이터·`.env`·파서 On/Off 설정은 그대로 둔 채 프로그램만 바꿉니다.
 2. 설치 마무리 단계가 DB 를 새 판에 맞춥니다: 빠진 테이블·컬럼 추가(`schema_patch`), 컬럼·표 설명 맞춤(주석만 변경, 칸 정의는 그대로 — 바꾼 설명은 예전 값과 함께 기록), 설치 확인. 기록은 `{설치 폴더}\logs\install.log` 입니다.
-3. 이미 쌓인 Job 의 가공 요약 값은 바꾸지 않습니다. V3.3.0 기준(TDMS+NC, 위치 점프를 뺀 총 이동거리)으로 다시 계산하려면 서비스가 멈춘 상태에서 `{설치 폴더}\tools\recompute_jobs.bat` 를 실행합니다 — 미리보기를 보여 준 뒤 **Y** 를 누를 때만 반영하고, 바꾸기 전 값은 `backups\` 에 남깁니다. 설치 확인 단계가 이렇게 다시 계산할 Job 수를 `install.log` 에 알립니다.
+3. 이미 쌓인 데이터(워킹스텝, Job 가공 요약)는 설치가 바꾸지 않습니다. 지금 규칙으로 맞추려면 서비스가 멈춘 상태에서 `{설치 폴더}\tools\recompute_jobs.bat` 를 실행합니다. 두 단계를 차례로 보여 줍니다:
+   1. **워킹스텝 다시 나누기** (V3.3.1 규칙, `backend/resync_workingsteps.py`): 절삭 패스마다 한 스텝으로 나누고 패스 수·NC 줄·위치·절삭 길이를 채웁니다. 공구 순서가 같은 Workplan 은 값만 채우고(행·가공방식 유지), NC 원본이 없는 Workplan 은 그대로 둡니다.
+   2. **Job 가공 요약 재계산** (V3.3.0 기준, `backend/recompute_job_summary.py`): TDMS+NC, 위치 점프를 뺀 총 이동거리.
+
+   단계마다 미리보기를 보여 준 뒤 **Y** 를 누를 때만 반영하고, 바꾸기 전 값은 `backups\` 에 남깁니다. 설치 확인 단계가 이렇게 바꿀 Workplan·Job 수를 `install.log` 에 알립니다.
 
 ---
 
@@ -435,7 +441,7 @@ python installer\build_installer.py --test    # 로컬 테스트용 경량 빌�
    - 불필요 가공 데이터 삭제 시 하위 연관 레코드의 원자적 연쇄 삭제(`CASCADE`) 지원
 3. **계층형 마스터 데이터**:
    - ISO 14649 기반 공정 계층(`Part ➔ Workplan ➔ Workingstep ➔ Tool`) 탐색
-   - 단위 공정별 절삭 가공 조건(주축 회전수 RPM, 이송속도 mm/min, 절입 깊이 mm) 및 Part별 3D CAD(STEP/STL) 뷰어 지원
+   - 단위 공정별 절삭 가공 조건(주축 회전수 RPM, 이송속도 mm/min, 절입 깊이 mm)과 조건이 같은 스텝을 구분하는 패스 수 · NC 줄 · 경로(시작 → 끝) · 절삭 길이, Part별 3D CAD(STEP/STL) 뷰어 지원
 4. **공구 마스터 관리**:
    - ISO 14649 규격 기반 공구 제원(치수, 날 수, 재질, 장착 상태) 관리
    - 표준 CSV 템플릿 다운로드 및 수정본 업로드를 통한 공구 마스터 일괄 갱신
@@ -492,9 +498,45 @@ Job 의 가공 요약은 TDMS CNC 채널(약 27Hz)과 NC 코드로 계산합니�
 - **시각 정밀도**: `job.start_time`·`end_time` 은 초 단위 DATETIME 이라 TDMS 의 1/1000초 값이 반올림되어 저장됩니다.
 - 시작(±0.6초), 절삭시간(±0.2초), 절삭 이동거리(±0.2%), 완료 여부·작업 ID·장비·프로그램은 두 건 모두 일치합니다.
 
+### 4. 워킹스텝 분리 규칙 (NC)
+워킹스텝은 NC 코드로 나눕니다 (`backend/parsers/nc_parser.py` 의 '워킹스텝 분리 규칙'). NC 가 없을 때만 장비 XML 의 `ToolNumbers` 로 공구당 한 행을 만듭니다.
+
+| 항목 | 규칙 |
+|---|---|
+| 경계 | 공구 교환(M6 에서, M6 이 없는 프로그램은 T 가 바뀔 때), 그리고 절삭 패스마다 |
+| 절삭 패스 | 급속 이동(G0)·원점 복귀 사이에 이어지는 절삭 이동(G01~G03, 고정 사이클) |
+| 합치는 경우 | 바로 앞 패스와 S·대표 F 가 같고 **같은 자리**(지나간 XY 점·원호 중심의 모음, µm 단위)를 다시 깎을 때 — 층을 나눠 내려가는 가공, 다듬질(스프링) 패스, 헬리컬 추가 바퀴. 위치를 모르는 패스(G91 증분으로 시작한 프로그램 등)는 합치지 않음 |
+| 대표 F | 패스에서 XY 로 가장 길게 깎은 이송 (Z 진입 이송이 대표가 되지 않게) |
+| 보조 패스 | Z 로만 움직인 수직 진입, Z0 위의 공중 이송은 스텝을 만들지 않음 |
+| 절입 깊이 | 공작물 Z0 기준 가장 낮은 Z. 한 스텝 안에서 깊이가 섞이면(층 가공) NULL |
+| 패스 구분 칸 | `pass_count`(합친 패스 수), `nc_line_start`~`nc_line_end`(NC 파일 줄 번호), `start_position` → `end_position`(공작물 좌표 X·Y·Z), `cutting_distance`(절삭 경로 길이 — 합은 Job 의 NC 절삭 이동거리) |
+
+실측: O0911(Job 1) T6 네 줄 → 4 스텝 (11~12 · 14 · 16 · 18줄, 조도 측정 260911_1~4 와 같은 순서), O1110(Job 2) 조건 32개 → 32 스텝, O0912(EDGECAM) T29 한 번 + T6 네 줄 × 두 층 → 5 스텝.
+
 ---
 
 ## 릴리즈 노트 (Release Notes)
+
+### [V3.3.1] - 2026-11-26
+워킹스텝을 **절삭 패스마다** 나누도록 고쳤습니다. 같은 조건으로 다른 자리를 깎은 패스가 한 스텝으로 합쳐지던 문제입니다 (Job 1: 네 줄 → 1행). 예전 판에서 올리면 [업그레이드](#3-업그레이드-예전-판에서-올리기) 3번으로 기존 워킹스텝을 다시 나눕니다.
+
+- **워킹스텝 분리 규칙 수정 (`nc_parser.py`)**:
+  - V3.3.0 까지는 같은 공구·같은 S·F 로 이어 깎은 패스를 모두 한 스텝으로 합쳐, O0911(Job 1)의 네 줄(X26·X34·X87·X95 — Ø12 공구로 폭 12/8/12/8mm, 방향 교대, 조도 측정 260911_1~4)이 한 스텝(패스 4개)으로 기록됨
+  - 이제 절삭 패스마다 한 스텝이고, 바로 앞 패스와 S·F 가 같고 같은 자리(지나간 XY 점·원호 중심 모음)를 다시 깎을 때만 합침 — 층을 나눠 내려가는 가공, 다듬질(스프링) 패스, 헬리컬 추가 바퀴. 위치를 모르는 패스는 합치지 않음 ([분리 규칙](#4-워킹스텝-분리-규칙-nc))
+  - 실측 NC: O0911 1 → 4 스텝, O1110 32 스텝 그대로, O0912(EDGECAM) 2 → 5 스텝 (T6 네 줄 × 두 층)
+- **조건이 같은 스텝을 구분하는 칸 (`workingstep`)**:
+  - `pass_count`(합친 패스 수), `nc_line_start`·`nc_line_end`(NC 파일 줄 번호), `start_position`·`end_position`(공작물 좌표 X·Y·Z, JSON), `cutting_distance`(절삭 경로 길이 mm) 추가 — 스텝 길이의 합은 Job 의 NC 절삭 이동거리와 같음
+  - 계층형 마스터 데이터 화면의 워킹스텝 표에 패스 수 · NC 줄 · 경로(시작 → 끝) · 절삭 길이 열 추가
+  - NC 줄 범위는 이후 TDMS 실행 블록과 맞춰 스텝(패스)별 가공 시각·센서 구간을 붙일 때의 기준
+- **기존 워킹스텝 다시 나누기**:
+  - 도구 `backend/resync_workingsteps.py` (미리보기 / `--apply`, 바꾸기 전 행 `backups/` 보관) — 공구 순서가 같으면 값만 채우고(step_id·가공방식 유지), 다르면 다시 만듦(가공방식은 공구 번호로 대응이 분명할 때 옮김). NC 원본이 없는 Workplan 은 그대로. Job별 공구 지정은 T번호 기준이라 영향 없음
+  - `tools/recompute_jobs.bat` 가 워킹스텝 다시 나누기 → Job 가공 요약 재계산을 차례로 (각각 미리보기 → 확인 → 반영)
+  - 설치 확인 단계가 예전 규칙 워킹스텝이 남은 Workplan 수를 `install.log` 에 알림
+  - 연구실 운영 DB 반영: 컬럼 6개 추가·주석 2개 갱신, Job 1 워킹스텝 1 → 4행, Job 2 32행에 새 칸 채움 (step_id 유지)
+- **배포**: 판 번호 검사에 홈 화면 캡션(`home_view.py`) 추가 — V3.3.0 에서 홈 화면만 v3.0.5 로 남았던 일
+- **테스트**:
+  - `test_nc_parser.py`: 같은 조건·다른 자리, 층, 스프링 패스, 반대 방향, 층 우선 순서, 위치 모름, 줄 번호, 고정 사이클 구멍, 원호 중심 — 실측 O0911·O0912 기대값 갱신
+  - `test_nc_workingstep_sync.py`: V3.3.0 행 다시 나누기·값만 채우기, `test_resync_workingsteps.py` 추가, 실측 NC `fixtures/O0911_20260911.nc` 추가
 
 ### [V3.3.0] - 2026-11-16
 가공 요약의 기준을 장비 XML 에서 **TDMS(CNC 채널) + NC 코드**로 옮기고 입력을 TDMS·NC 두 파일로 줄였습니다. 예전 판에서 올리는 방법은 [업그레이드](#3-업그레이드-예전-판에서-올리기)를 참고하세요.

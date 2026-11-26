@@ -242,7 +242,7 @@ def parse_xml(file_path, job_id):
                     tool_properties[tool_num_in_props] = props
                     
         # 4. Workingstep — NC 가 있으면 NC 가 기준이다 (nc_parser 의 "워킹스텝 분리 규칙":
-        #    공구 교환 + S·F 변화). XML 의 ToolNumbers 는 공구 호출 목록일 뿐이라 같은 공구로
+        #    공구 교환 + 절삭 패스). XML 의 ToolNumbers 는 공구 호출 목록일 뿐이라 같은 공구로
         #    조건을 바꿔 가며 깎은 구간을 나누지 못한다 (2026-11-11 O1110: 조건 32개가 3행으로 뭉쳤다).
         #    commit=False: 이 함수가 쥔 트랜잭션 안에서 flush 까지만 한다. DB 오류는 아래 except 로
         #    올라와 Part·Workplan 과 함께 rollback 된다. (예전에는 동기화 함수가 도중에 commit 했다)

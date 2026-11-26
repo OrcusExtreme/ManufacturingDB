@@ -32,6 +32,10 @@ O1110_PATH = os.path.join(FIXTURES, "O1110_20261111_mmas.nc")
 with open(O1110_PATH, "rb") as _f:
     O1110_BYTES = _f.read()
 O1110_HASH = hashlib.md5(O1110_BYTES).hexdigest()[:8]
+# Job 1(2026-09-11 DB_Test) 의 NC 원본 그대로: T6 하나로 같은 조건으로 네 줄 (X26 · X34 · X87 · X95)
+O0911_PATH = os.path.join(FIXTURES, "O0911_20260911.nc")
+with open(O0911_PATH, "rb") as _f:
+    O0911_BYTES = _f.read()
 
 # 공구 마스터: T01·T02·T03 이 tool_id 11·12·13 (번호로 연결되는지 보려고 일부러 어긋나게 둔다)
 TOOL_IDS = {1: 11, 2: 12, 3: 13}
@@ -177,12 +181,13 @@ def test_sync_twice_updates_in_place_and_keeps_step_ids(Session):
     assert _as_parsed(rows) == EXPECTED
 
 
-def test_sync_same_layout_fills_depth_and_keeps_manual_fields(Session):
-    """예전 규칙으로 만든 O0911 의 한 행(T6)은 모양이 같으므로 지우지 않고 깊이만 채운다."""
+def test_sync_same_layout_fills_new_fields_and_keeps_manual_fields(Session):
+    """예전 판에서 만든 한 행(T6)이 NC 의 한 스텝과 모양이 같으면 지우지 않고 값만 채운다
+    (깊이 · 패스 수 · NC 줄 · 시작/끝 위치 · 절삭 길이). step_id 와 사람이 적은 가공방식이 남는다."""
     nc = "\n".join(["M6T6", "G90G00G54X0Y-15", "S3800M3", "G43H6Z5", "G1Z-2F710", "Y115",
-                    "G0X34", "G1Y-15", "G0Z5", "M30"])
+                    "G0Z5", "M30"])
     db = Session()
-    wp_id = _workplan(db, nc_hash="00183ad8", program="O0911.nc").workplan_id
+    wp_id = _workplan(db, nc_hash="0000aaaa", program="O0001.nc").workplan_id
     db.add(Workingstep(workplan_id=wp_id, step_order=1, tool_number=6, xml_tool_code="T06",
                        spindle_speed=3800.0, feed_rate=710.0, operation_type="SLOT"))
     db.commit()
@@ -194,6 +199,47 @@ def test_sync_same_layout_fills_depth_and_keeps_manual_fields(Session):
     assert rows[0].step_id == before
     assert rows[0].operation_type == "SLOT"
     assert (rows[0].spindle_speed, rows[0].feed_rate, rows[0].depth_of_cut) == (3800.0, 710.0, 2.0)
+    assert (rows[0].pass_count, rows[0].nc_line_start, rows[0].nc_line_end) == (1, 5, 6)
+    assert rows[0].start_position == {"X": 0.0, "Y": -15.0, "Z": 5.0}
+    assert rows[0].end_position == {"X": 0.0, "Y": 115.0, "Z": -2.0}
+    assert rows[0].cutting_distance == 137.0
+
+
+def test_sync_splits_the_v330_row_of_o0911_into_one_row_per_line(Session):
+    """V3.3.0 까지 같은 S·F 라고 한 행(패스 4개)으로 합쳤던 Job 1(O0911)이 줄마다 한 행이 된다.
+    공구 번호로 대응이 분명한 가공방식은 새 행 모두로 옮기고, 공구 마스터와는 번호로 다시 잇는다."""
+    db = Session()
+    wp_id = _workplan(db, nc_hash="00183ad8", program="O0911.nc").workplan_id
+    db.add(Workingstep(workplan_id=wp_id, step_order=1, tool_number=6, xml_tool_code="T06",
+                       spindle_speed=3800.0, feed_rate=710.0, depth_of_cut=2.0, operation_type="SLOT"))
+    db.commit()
+
+    assert sync_workplan_nc_cutting_conditions(db, wp_id, nc_content=O0911_BYTES)
+    rows = _steps(Session(), wp_id)
+    assert _as_parsed(rows) == [(i, 6, 3800.0, 710.0, 2.0) for i in (1, 2, 3, 4)]
+    assert [ws.operation_type for ws in rows] == ["SLOT"] * 4
+    assert [ws.pass_count for ws in rows] == [1] * 4
+    assert [(ws.nc_line_start, ws.nc_line_end) for ws in rows] == [(11, 12), (14, 14), (16, 16), (18, 18)]
+    assert [ws.start_position["X"] for ws in rows] == [26.0, 34.0, 87.0, 95.0]
+    assert [ws.cutting_distance for ws in rows] == [137.0, 130.0, 130.0, 130.0]
+
+
+def test_sync_fills_new_fields_of_v330_condition_rows_in_place(Session):
+    """V3.3.0 에서 조건마다 나눈 O1110 의 32행은 모양이 같아 행을 두고 새 칸만 채운다."""
+    db = Session()
+    wp_id = _workplan(db).workplan_id
+    for p in parse_nc_cutting_conditions(O1110_PATH):
+        db.add(Workingstep(workplan_id=wp_id, step_order=p["step_order"], tool_number=p["tool_number"],
+                           xml_tool_code=p["xml_tool_code"], spindle_speed=p["spindle_speed"],
+                           feed_rate=p["feed_rate"], depth_of_cut=p["depth_of_cut"]))
+    db.commit()
+    ids = [ws.step_id for ws in _steps(Session(), wp_id)]
+
+    assert sync_workplan_nc_cutting_conditions(db, wp_id, nc_content=O1110_BYTES)
+    rows = _steps(Session(), wp_id)
+    assert [ws.step_id for ws in rows] == ids
+    assert all(ws.pass_count == 1 and ws.nc_line_start and ws.cutting_distance for ws in rows)
+    assert (rows[0].nc_line_start, rows[0].nc_line_end) == (8, 9)
 
 
 def test_sync_without_nc_changes_nothing(Session):

@@ -458,6 +458,7 @@ def app_version():
 VERSION_MARKS = (
     ("README.md", r"badge/Release-V(\d+\.\d+\.\d+)-", "배지"),
     ("frontend/dashboard.py", r">v(\d+\.\d+\.\d+)</span>", "대시보드 사이드바"),
+    ("frontend/components/home_view.py", r'st\.caption\("v(\d+\.\d+\.\d+)"\)', "홈 화면"),
     ("controller/system_controller.rc", r"FILEVERSION\s+(\d+),\s*(\d+),\s*(\d+),\s*0", "FILEVERSION"),
     ("controller/system_controller.rc", r"PRODUCTVERSION\s+(\d+),\s*(\d+),\s*(\d+),\s*0", "PRODUCTVERSION"),
     ("controller/system_controller.rc", r'"FileVersion",\s*"(\d+)\.(\d+)\.(\d+)\.0"', "FileVersion"),
@@ -480,7 +481,7 @@ def check_version_marks(version, test):
     """정식 판은 판 번호가 모두 같아야 만든다. 시험용은 알리기만 한다."""
     wrong = version_mismatches(version)
     if not wrong:
-        say(f"  · 판 번호 확인: README 배지 · 대시보드 · 컨트롤러 모두 {version}")
+        say(f"  · 판 번호 확인: README 배지 · 대시보드 · 홈 화면 · 컨트롤러 모두 {version}")
         return
     listing = "\n".join(f"    {w}" for w in wrong)
     if test:

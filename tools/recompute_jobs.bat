@@ -1,13 +1,14 @@
 @echo off
 setlocal
-rem Recompute the machining summary of existing Jobs with the current rules (TDMS + NC).
-rem Run it once after upgrading from an older version (backend\recompute_job_summary.py).
-rem It shows a preview first and changes the database only after you confirm.
-rem The values before the change are saved to backups\recompute_job_summary_*.json.
+rem Bring existing data up to the current rules. Run it once after upgrading from an older version.
+rem   1. Workingsteps: split again from the NC, one step per cutting pass (backend\resync_workingsteps.py)
+rem   2. Job summaries: recompute with TDMS + NC (backend\recompute_job_summary.py)
+rem Each part shows a preview first and changes the database only after you confirm.
+rem The values before the change are saved to backups\*.json.
 cd /d "%~dp0.."
 
 echo ====================================================
-echo   Recompute Job summaries (TDMS + NC)
+echo   Update existing data to the current rules
 echo ====================================================
 echo Stop the services first: Controller, [Stop All].
 echo.
@@ -20,16 +21,30 @@ if not defined PY (
 )
 if not defined PY set "PY=python"
 
-echo [1/2] Preview - the database is not changed.
+echo [1/2] Workingsteps from the NC - preview, the database is not changed.
+%PY% -X utf8 backend\resync_workingsteps.py
+if errorlevel 1 goto failed
+echo.
+choice /C YN /M "Apply the new workingsteps to the database"
+if errorlevel 2 (
+    echo Skipped. The workingsteps were not changed.
+    goto summaries
+)
+%PY% -X utf8 backend\resync_workingsteps.py --apply
+if errorlevel 1 goto failed
+
+:summaries
+echo.
+echo [2/2] Job summaries with TDMS + NC - preview, the database is not changed.
 %PY% -X utf8 backend\recompute_job_summary.py --all
 if errorlevel 1 goto failed
 
 echo.
-choice /C YN /M "Apply the new values to the database"
+choice /C YN /M "Apply the new Job summaries to the database"
 if errorlevel 2 goto cancelled
 
 echo.
-echo [2/2] Applying...
+echo Applying...
 %PY% -X utf8 backend\recompute_job_summary.py --all --apply
 if errorlevel 1 goto failed
 echo.
@@ -37,12 +52,12 @@ echo Done. The values before the change were saved to the backups folder.
 goto end
 
 :cancelled
-echo Cancelled. Nothing was changed.
+echo Skipped. The Job summaries were not changed.
 goto end
 
 :failed
 echo.
-echo [ERROR] Recompute failed. See the messages above.
+echo [ERROR] Failed. See the messages above.
 
 :end
 pause

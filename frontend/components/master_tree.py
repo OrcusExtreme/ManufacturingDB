@@ -3,6 +3,48 @@ import streamlit as st
 
 from .common import load_data
 from cad_viewer_component import render_cad_viewer
+from parsers.nc_parser import step_lines_text, step_path_text  # noqa: E402  (common 이 backend 를 sys.path 에 올린다)
+
+# 워킹스텝은 절삭 패스마다 한 행이라(같은 자리를 같은 조건으로 다시 깎은 층·다듬질 패스만 합침) 조건이 같은
+# 행이 여럿일 수 있다 (O0911: T6 S3800 F710 네 줄). 패스 수 · NC 줄 · 시작 -> 끝 · 절삭 길이로 구분한다.
+WORKINGSTEP_QUERY = """
+    SELECT ws.step_order AS '순서', ws.operation_type AS '작업(Op)',
+           ws.xml_tool_code AS '사용 공구',
+           ws.spindle_speed AS '주축회전수 (RPM)',
+           ws.feed_rate AS '이송속도 (mm/min)',
+           ws.depth_of_cut AS '절입 깊이 (mm)',
+           ws.pass_count AS '패스 수',
+           ws.nc_line_start, ws.nc_line_end, ws.start_position, ws.end_position,
+           ws.cutting_distance AS '절삭 길이 (mm)',
+           t.manufacturer AS '제조사',
+           t.iso14649_class AS 'ISO 14649 분류',
+           t.cutter_diameter AS '직경',
+           t.number_of_teeth AS '날수'
+    FROM workingstep ws
+    LEFT JOIN tool t ON ws.tool_id = t.tool_id
+    WHERE ws.workplan_id = :wp
+    ORDER BY ws.step_order
+"""
+WORKINGSTEP_COLUMNS = ['순서', '작업(Op)', '사용 공구', '주축회전수 (RPM)', '이송속도 (mm/min)', '절입 깊이 (mm)',
+                       '패스 수', 'NC 줄', '경로 (시작 → 끝)', '절삭 길이 (mm)',
+                       '제조사', 'ISO 14649 분류', '직경', '날수']
+
+
+def workingstep_table(ws_df):
+    """화면에 보일 워킹스텝 표. 단위는 열 이름에만 적고 칸에는 숫자만 남긴다 (결측값은 '-')."""
+    disp = ws_df.copy()
+    for column in ('주축회전수 (RPM)', '이송속도 (mm/min)'):
+        disp[column] = disp[column].apply(lambda v: f"{int(v):,}" if pd.notnull(v) else "-")
+    # 깊이는 0.5 처럼 소수가 본값이라 정수로 자르지 않는다 (2.0 -> '2').
+    # 비어 있으면 Z0 위에서만 깎았거나 한 스텝에 깊이가 섞인 경우(층을 나눠 내려간 스텝)다.
+    disp['절입 깊이 (mm)'] = disp['절입 깊이 (mm)'].apply(lambda v: f"{v:g}" if pd.notnull(v) else "-")
+    # 아래 칸은 V3.3.1 부터 채운다. 예전 판에서 만든 행은 tools/recompute_jobs.bat 전까지 '-' 다.
+    disp['패스 수'] = disp['패스 수'].apply(lambda v: f"{int(v)}" if pd.notnull(v) else "-")
+    disp['NC 줄'] = [step_lines_text(a, b) or "-" for a, b in zip(disp['nc_line_start'], disp['nc_line_end'])]
+    disp['경로 (시작 → 끝)'] = [step_path_text(a, b) or "-"
+                              for a, b in zip(disp['start_position'], disp['end_position'])]
+    disp['절삭 길이 (mm)'] = disp['절삭 길이 (mm)'].apply(lambda v: f"{v:,.1f}" if pd.notnull(v) else "-")
+    return disp[WORKINGSTEP_COLUMNS]
 
 
 @st.dialog("3D CAD 모델 뷰어 (360° 회전 / 메시 모드)", width="large", icon=":material/view_in_ar:")
@@ -80,37 +122,12 @@ def render_master_tree():
                 with st.expander(f"Workplan: {p_code} - {wp_row['program_code']} (ID: {wp_id})", expanded=False):
                     st.write(f"**NC File Path:** `{wp_row['nc_raw_path']}`")
 
-                    ws_query = """
-                        SELECT ws.step_order AS '순서', ws.operation_type AS '작업(Op)',
-                               ws.xml_tool_code AS '사용 공구',
-                               ws.spindle_speed AS '주축회전수 (RPM)',
-                               ws.feed_rate AS '이송속도 (mm/min)',
-                               ws.depth_of_cut AS '절입 깊이 (mm)',
-                               t.manufacturer AS '제조사',
-                               t.iso14649_class AS 'ISO 14649 분류',
-                               t.cutter_diameter AS '직경',
-                               t.number_of_teeth AS '날수'
-                        FROM workingstep ws
-                        LEFT JOIN tool t ON ws.tool_id = t.tool_id
-                        WHERE ws.workplan_id = :wp
-                        ORDER BY ws.step_order
-                    """
-                    ws_df = load_data(ws_query, params={"wp": wp_id})
+                    ws_df = load_data(WORKINGSTEP_QUERY, params={"wp": wp_id})
 
                     if not ws_df.empty:
                         st.markdown("##### 하위 가공 스텝 (Workingsteps)")
-
-                        # 단위는 열 이름에만 적고 칸에는 숫자만 남긴다 (결측값은 '-')
-                        disp_df = ws_df.copy()
-                        for column in ('주축회전수 (RPM)', '이송속도 (mm/min)'):
-                            disp_df[column] = disp_df[column].apply(
-                                lambda v: f"{int(v):,}" if pd.notnull(v) else "-"
-                            )
-                        # 깊이는 0.5 처럼 소수가 본값이라 정수로 자르지 않는다 (2.0 -> '2').
-                        # 비어 있으면 Z0 위에서만 깎았거나 한 스텝에 깊이가 섞인 경우다.
-                        disp_df['절입 깊이 (mm)'] = disp_df['절입 깊이 (mm)'].apply(
-                            lambda v: f"{v:g}" if pd.notnull(v) else "-"
-                        )
-                        st.dataframe(disp_df, width="stretch", hide_index=True)
+                        st.caption("절삭 패스마다 한 스텝 (같은 자리를 같은 조건으로 다시 깎은 층·다듬질 패스는 합침). "
+                                   "NC 줄은 위 NC 파일의 줄 번호입니다.")
+                        st.dataframe(workingstep_table(ws_df), width="stretch", hide_index=True)
                     else:
                         st.info("등록된 Workingstep이 없습니다.")

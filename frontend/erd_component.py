@@ -30,8 +30,8 @@ TABLE_METADATA = {
     },
     "workingstep": {
         "label": "Workingstep",
-        "kr_name": "공구 · 절삭조건 단위 공정",
-        "desc": "Workplan 내의 개별 가공 단위 (공구 교환 · S·F 변화마다 한 행: 공구 번호, 회전수, 이송, 절입 깊이, 가공 순서)",
+        "kr_name": "공구 · 절삭 패스 단위 공정",
+        "desc": "Workplan 내의 개별 가공 단위 (공구 교환 · 절삭 패스마다 한 행, 같은 자리 재절삭은 합침: 공구 번호, 회전수, 이송, 절입 깊이, 패스 수, NC 줄, 시작·끝 위치, 절삭 길이)",
         "color": "#fb923c"
     },
     "job": {

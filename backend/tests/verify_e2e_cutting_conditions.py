@@ -112,27 +112,20 @@ def run_e2e_verification():
         print("\n" + "=" * 60)
         print(" [3/3] frontend/components/master_tree.py 쿼리 호환성 검증")
         print("=" * 60)
-        ws_query = text("""
-            SELECT ws.step_order AS '순서', ws.operation_type AS '작업(Op)',
-                   ws.xml_tool_code AS '사용 공구',
-                   ws.spindle_speed AS '주축회전수 (RPM)',
-                   ws.feed_rate AS '이송속도 (mm/min)',
-                   ws.depth_of_cut AS '절입 깊이 (mm)',
-                   t.manufacturer AS '제조사',
-                   t.iso14649_class AS 'ISO 14649 분류',
-                   t.cutter_diameter AS '직경',
-                   t.number_of_teeth AS '날수'
-            FROM workingstep ws
-            LEFT JOIN tool t ON ws.tool_id = t.tool_id
-            WHERE ws.workplan_id = :w
-            ORDER BY ws.step_order
-        """)
-        ui_rows = db.execute(ws_query, {"w": test_wp_id}).fetchall()
-        assert len(ui_rows) == 32
-        first = ui_rows[0]
-        print(f"  - 첫 행: 순서={first[0]}, 사용공구={first[2]}, 주축회전수={first[3]} RPM, "
-              f"이송속도={first[4]} mm/min, 절입 깊이={first[5]} mm")
-        assert (first[2], first[3], first[4], first[5]) == ("T01", 5000.0, 150.0, 0.5)
+        # 화면이 쓰는 쿼리 · 표 그대로 (복사본을 두면 화면이 바뀔 때 어긋난다)
+        import pandas as pd
+        frontend_dir = os.path.join(os.path.dirname(backend_dir), "frontend")
+        if frontend_dir not in sys.path:
+            sys.path.insert(0, frontend_dir)
+        from components.master_tree import WORKINGSTEP_QUERY, workingstep_table
+        ui_df = pd.read_sql(text(WORKINGSTEP_QUERY), db.connection(), params={"wp": test_wp_id})
+        table = workingstep_table(ui_df)
+        assert len(table) == 32
+        first = table.iloc[0]
+        print(f"  - 첫 행: {first.to_dict()}")
+        assert (first['사용 공구'], first['주축회전수 (RPM)'], first['이송속도 (mm/min)'], first['절입 깊이 (mm)'],
+                first['패스 수'], first['NC 줄'], first['경로 (시작 → 끝)']) == \
+            ("T01", "5,000", "150", "0.5", "1", "8~9", "X1.5 Y115 → X1.5 Y-15")
         print("  >>> [3/3 성공] Frontend Master Tree 쿼리 및 데이터 정합성 검증 완료!")
 
     finally:
