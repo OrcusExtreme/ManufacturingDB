@@ -117,6 +117,13 @@ class Part(Base):
     # 소재는 업로드 화면에서 정한다 (job_manager.set_part_material). TDMS·NC 에는 소재 정보가 없고,
     # 장비 XML 의 MaterialCode 는 비어 있을('Unknown') 때만 채운다.
     material_code = Column(String(50), comment='소재 (업로드 화면에서 입력, XML MaterialCode 는 비어 있을 때만)')
+    # 소재(블록) 크기 — ISO 14649 의 rawpiece. 업로드 화면에서 입력한다 (job_manager.set_part_stock).
+    # 워킹스텝의 가공 형상 분류(slot · step · planar_face …)는 형상 둘레가 벽인지 소재 끝까지 뚫렸는지로 정하므로
+    # 이 값이 있어야 한다. 없으면 형상 분류 · 크기 · 제거 체적 · 반경 절입을 기록하지 않는다 (parsers/nc_geometry.py).
+    stock_x = Column(Float, comment='소재(블록) 크기 X (mm, 공작물 X 방향, ISO 14649 rawpiece). 없으면 가공 형상 분류를 기록하지 않음')
+    stock_y = Column(Float, comment='소재(블록) 크기 Y (mm, 공작물 Y 방향)')
+    stock_z = Column(Float, comment='소재(블록) 두께 Z (mm, 윗면이 공작물 Z0)')
+    stock_origin = Column(String(20), comment='공작물 원점 위치: corner(소재 윗면의 X·Y 가장 작은 모서리, 기본) / center(윗면 가운데)')
 
     workplans = relationship("Workplan", back_populates="part", cascade="all, delete-orphan")
 
@@ -203,21 +210,23 @@ class Tool(Base):
 
 
 class Workingstep(Base):
-    """Workplan 안의 가공 단위 — 같은 공구 · 같은 절삭조건(S·F)으로 같은 자리를 이어서 깎은 구간.
+    """Workplan 안의 가공 단위 (ISO 14649 machining_workingstep).
 
-    NC 가 있으면 공구 교환과 절삭 패스마다 나누고, 바로 앞 패스와 조건도 자리도 같은 패스(층을 나눠
-    내려가는 가공 · 다듬질 패스)만 합친다. 규칙은 parsers/nc_parser.py 의 "워킹스텝 분리 규칙" 한 곳.
-    같은 조건으로 다른 자리를 깎은 네 줄(O0911)은 4행, 공구 하나로 조건을 바꿔 가며 깎은 실험(O1110)은
-    조건마다 한 행이다. NC 가 없을 때만 XML 의 ToolNumbers(공구 호출 순서)로 공구당 한 행을 만들고,
-    그 행의 패스 칸(pass_count ~ cutting_distance)은 비어 있다.
+    가공 형상 · 가공 공정(황삭/정삭)과 전략 · 절삭 조건(S·F) · 공구가 모두 같은 이어진 절삭 패스가 한 행이다.
+    규칙은 parsers/nc_parser.py 의 "워킹스텝 분리 규칙" 한 곳 (형상 · 절입은 parsers/nc_geometry.py).
+    형상은 실제 공구 지름으로 깎인 자리를 따라가 가른다: Ø12 로 네 줄을 깎아 슬롯 두 개를 낸 O0911(Job 1)은
+    2행, 공구 하나로 조건을 바꿔 가며 깎은 실험(O1110)은 조건마다 한 행이다. 같은 자리를 얇게 다시 깎은
+    정삭 패스는 황삭과 다른 행이다. NC 가 없을 때만 XML 의 ToolNumbers(공구 호출 순서)로 공구당 한 행을
+    만들고, 그 행의 NC 칸(pass_count ~ toolpaths)은 비어 있다.
     """
     __tablename__ = "workingstep"
-    __table_args__ = {'comment': 'ISO14649 Workingstep: Workplan 내의 개별 가공 단위 (공구 교환 · 절삭 패스마다 한 행, 같은 자리를 같은 조건으로 다시 깎은 패스는 합침)'}
+    __table_args__ = {'comment': 'ISO14649 Workingstep: Workplan 내의 개별 가공 단위 (가공 형상 · 공정(황삭/정삭)·전략 · 절삭조건 · 공구가 같은 이어진 절삭 패스)'}
 
     step_id = Column(Integer, primary_key=True, autoincrement=True)
     workplan_id = Column(Integer, ForeignKey("workplan.workplan_id", ondelete="CASCADE"), nullable=False)
     tool_id = Column(Integer, ForeignKey("tool.tool_id", ondelete="SET NULL"), comment='연결된 공구 ID')
-    operation_type = Column(String(50), comment='가공방식 (MachiningOperation 병합)')
+    # NC 가 정한 ISO 14649-11 공정. NC 가 정하지 못한 행(절삭 없이 호출만 된 공구)은 사람이 적은 값을 둔다.
+    operation_type = Column(String(50), comment='ISO 14649 가공 공정 (NC 파싱: bottom_and_side_rough_milling, plane_finish_milling, drilling 등)')
 
     step_order = Column(Integer, nullable=False, comment='가공 순서 (NC 에서 깎은 순서, 1부터)')
     tool_number = Column(Integer, nullable=False, comment='호출된 공구 번호 (예: 11, 15, 16, 17)')
@@ -226,19 +235,26 @@ class Workingstep(Base):
     xml_tool_code = Column(String(50), comment='호출 공구 표준 표기 (T06 형태)')
     feed_rate = Column(Float, comment='가공 이송속도 (mm/min, NC코드 파싱)')
     spindle_speed = Column(Float, comment='스핀들 주축 회전수 (RPM, NC코드 파싱)')
-    # 공작물 좌표 Z0 을 소재 윗면으로 보고 이 스텝의 절삭 패스가 내려간 깊이.
-    # 패스마다 깊이가 다르면(층을 나눠 내려가는 가공) 한 값으로 말할 수 없어 비운다.
-    # 깊이는 스텝을 나누는 기준이 아니다 (nc_parser 의 분리 규칙 참고).
-    depth_of_cut = Column(Float, comment='절입 깊이 (mm, NC코드 파싱: 공작물 Z0 기준, 깊이가 섞인 스텝은 NULL)')
-    # 조건이 같은 스텝끼리 구분하는 칸 (V3.3.1). 예전 판에서 만든 행은 비어 있다 — backend/resync_workingsteps.py
-    # 로 NC 에서 다시 채운다. 줄 번호는 파일의 실제 줄이라 NC 를 편집기로 열어 바로 찾을 수 있고,
-    # 나중에 TDMS 실행 블록과 맞춰 스텝별 가공 시각을 붙일 때 쓴다.
-    pass_count = Column(Integer, comment='합친 절삭 패스 수 (같은 자리를 같은 조건으로 이어 깎은 층·다듬질 패스, 절삭 없이 호출만 된 공구는 0)')
+    # 공작물 Z0 을 소재 윗면으로 보고, 앞 층이나 다른 공구(정면 밀링)가 이미 깎은 높이에서 잰 실제 절입.
+    depth_of_cut = Column(Float, comment='축방향 절입 ap (mm, NC: 소재 격자에서 실제로 깎은 두께, 패스 중 가장 큰 값)')
+    radial_cutting_depth = Column(Float, comment='반경 절입 ae (mm, 실제로 깎인 폭, 패스 중 가장 큰 값. 공구 지름을 모르면 NULL)')
+    # pass_count ~ cutting_distance 는 V3.3.1, radial_cutting_depth · removed_volume · feature_* · strategy ·
+    # toolpaths 는 V3.3.2 에서 생겼다. 예전 판에서 만든 행은 비어 있다 — backend/resync_workingsteps.py 로 NC 에서
+    # 다시 채운다. 줄 번호는 파일의 실제 줄이라 NC 를 편집기로 열어 바로 찾을 수 있고, 나중에 TDMS 실행 블록과
+    # 맞춰 스텝별 가공 시각을 붙일 때 쓴다.
+    pass_count = Column(Integer, comment='이 스텝의 절삭 패스 수 (절삭 없이 호출만 된 공구는 0)')
     nc_line_start = Column(Integer, comment='NC 시작 줄 번호 (이 스텝 첫 절삭 블록, NC 파일 첫 줄이 1)')
     nc_line_end = Column(Integer, comment='NC 끝 줄 번호 (이 스텝 마지막 절삭 블록)')
     start_position = Column(JSON, comment='절삭 시작 위치 (공작물 좌표 mm, X·Y·Z: 첫 절삭 블록 직전, 모르는 축은 null)')
     end_position = Column(JSON, comment='절삭 끝 위치 (공작물 좌표 mm, X·Y·Z: 마지막 절삭 블록 뒤)')
     cutting_distance = Column(Double, comment='절삭 경로 길이 (mm, NC: 이 스텝 패스들의 G01~G03·고정 사이클 이동 합)')
+    removed_volume = Column(Double, comment='제거 체적 (mm³, 소재 격자 기준: 공작물 Z0 을 소재 윗면으로 봄)')
+    # 같은 형상을 황삭·정삭 두 스텝이 깎으면 두 행의 feature_no 가 같다 (ISO 14649 의 its_feature).
+    feature_no = Column(Integer, comment='가공 형상 번호 (Workplan 안에서 1부터, 같은 번호 = 같은 형상: 공구 지름으로 깎인 자리가 이어진 덩어리)')
+    feature_type = Column(String(30), comment='ISO 14649 가공 형상 추정 (slot / planar_face / pocket / round_hole / general)')
+    feature_geometry = Column(JSON, comment='가공 형상 크기 (mm: width·length·depth·floor_z·x·y, 근거 공구 지름 basis)')
+    strategy = Column(String(30), comment='가공 전략 (unidirectional / bidirectional / contour / helical / circular, 드릴링은 NULL)')
+    toolpaths = Column(JSON, comment='패스별 경로 (ISO 14649 toolpath: NC 줄·시작/끝·Z·ap·ae·길이·체적 목록)')
 
     workplan = relationship("Workplan", back_populates="workingsteps")
     tool = relationship("Tool", back_populates="workingsteps")

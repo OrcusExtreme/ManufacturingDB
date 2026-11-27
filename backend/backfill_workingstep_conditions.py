@@ -1,8 +1,8 @@
 """기존 DB의 Workplan 및 Archive Vault에 저장된 NC 파일들을 스캔하여,
 workingstep 레코드의 feed_rate 및 spindle_speed를 일괄 백필하는 스크립트.
 
-S·F 가 빈 행이 있는 Workplan 만 다룬다. 모든 Workplan 을 지금 분리 규칙(절삭 패스마다 한 스텝)으로
-다시 나누고 패스 수 · NC 줄 · 위치 · 절삭 길이를 채우려면 resync_workingsteps.py 를 쓴다.
+S·F 가 빈 행이 있는 Workplan 만 다룬다. 모든 Workplan 을 지금 분리 규칙(ISO 14649: 가공 형상 · 공정 ·
+절삭조건 · 공구)으로 다시 나누고 형상 · 절입 · 패스 정보를 채우려면 resync_workingsteps.py 를 쓴다.
 """
 import os
 import sys

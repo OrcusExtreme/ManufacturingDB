@@ -806,12 +806,14 @@ STALE_SUMMARY_SQL = """
       AND (j.summary_source = 'XML'
            OR (j.summary_source = 'TDMS' AND JSON_EXTRACT(j.machining_window, '$.position_jumps') IS NULL))
 """
-# 지금 규칙(V3.3.1: 절삭 패스마다 한 스텝)으로 나누기 전의 워킹스텝이 남은 Workplan. 그때 만든 행은 패스 수가
-# 비어 있다. NC 원본이 있는 Workplan 만 센다 (NC 없이 XML ToolNumbers 로 만든 행은 다시 나눌 수 없다).
+# 지금 규칙(V3.3.2: ISO 14649 처럼 가공 형상 · 공정 · 절삭조건 · 공구로 나눔)으로 나누기 전의 워킹스텝이 남은
+# Workplan. 그때 만든 행은 패스 수나(절삭한 행이면) 형상 번호가 비어 있다. NC 원본이 있는 Workplan 만 센다
+# (NC 없이 XML ToolNumbers 로 만든 행은 다시 나눌 수 없다).
 STALE_WORKINGSTEP_SQL = """
     SELECT COUNT(DISTINCT s.workplan_id) FROM workingstep s
     JOIN workplan_file_archive a ON a.workplan_id = s.workplan_id
-    WHERE s.pass_count IS NULL AND (a.nc_file_content IS NOT NULL OR a.nc_raw_path IS NOT NULL)
+    WHERE (s.pass_count IS NULL OR (s.pass_count > 0 AND s.feature_no IS NULL))
+      AND (a.nc_file_content IS NOT NULL OR a.nc_raw_path IS NOT NULL)
 """
 RECOMPUTE_HINT = r"컨트롤러에서 [전체 중지] 뒤 tools\recompute_jobs.bat 를 실행하면 미리보기를 보고 반영할 수 있습니다"
 
@@ -922,9 +924,9 @@ def cmd_verify(app_dir):
         with dbmod.engine.connect() as conn:
             stale_steps = conn.execute(text(STALE_WORKINGSTEP_SQL)).scalar() or 0
         if stale_steps:
-            notes.append(f"[알림] 예전 규칙으로 나눈 워킹스텝이 남은 Workplan {stale_steps}개가 있습니다 (같은 조건으로 "
-                         f"다른 자리를 깎은 패스가 한 행으로 합쳐져 있을 수 있고, 패스 수 · NC 줄 · 위치 칸이 비어 "
-                         f"있습니다). 지금 규칙(절삭 패스마다 한 스텝)으로 다시 나누려면 {RECOMPUTE_HINT}.")
+            notes.append(f"[알림] 예전 규칙으로 나눈 워킹스텝이 남은 Workplan {stale_steps}개가 있습니다 (같은 조건이면 "
+                         f"형상이 달라도 한 행으로 합쳐져 있을 수 있고, 형상 · 공정 · 절입 칸이 비어 있습니다). 지금 규칙"
+                         f"(가공 형상 · 공정 · 절삭조건 · 공구로 나눔)으로 다시 나누려면 {RECOMPUTE_HINT}.")
     except Exception as e:          # noqa: BLE001
         notes.append(f"(예전 규칙 워킹스텝 수를 세지 못했습니다: {e})")
 

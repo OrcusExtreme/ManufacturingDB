@@ -1,3 +1,4 @@
+import json
 import math
 import os
 import sys
@@ -16,49 +17,50 @@ from DB.models import Workingstep, WorkplanFileArchive
 from job_manager import get_or_create_job, adopt_workplan_identity
 from file_archive import get_or_create_workplan_archive
 from vault_manager import archive_file
-from tool_codes import format_tool_code, index_by_number
+from tool_codes import format_tool_code, index_by_number, tool_code_number
+from parsers import nc_geometry
 
 
 # ---------------------------------------------------------------------------
 # 워킹스텝 분리 규칙
 # ---------------------------------------------------------------------------
-# 워킹스텝 하나 = "같은 공구로, 같은 절삭조건(S·F)으로, 같은 자리를 이어서 깎은 구간".
-# 절삭 패스 하나가 기본 단위이고, 바로 앞 패스와 조건도 자리도 같을 때만 한 스텝으로 합친다.
+# 워킹스텝 하나 = ISO 14649 의 machining_workingstep: 가공 형상(feature) · 가공 공정과 전략(operation ·
+# strategy) · 절삭 조건(technology: S·F) · 공구가 모두 같은, 가공 순서대로 이어진 절삭 패스들.
 #
 # 예전 규칙의 문제
-#   V3.2.0 전   공구 교환(M6)에서만 끊었다. 공구 하나로 조건을 바꿔 가며 깎는 실험(2026-11-11
-#               O1110: 공구 3개로 조건 32개)이 공구당 한 행으로 뭉쳤고, 그 행에는 마지막 S 와 첫 F 가
-#               섞여 실제로 깎은 적 없는 조합이 적혔다(T1: S9500 / F150).
-#   V3.3.0 까지 같은 S·F 로 이어 깎은 패스를 모두 합쳤다. O0911(Job 1)은 T6 하나로 X26·X34·X87·X95
-#               네 줄을 깎는데(Ø12 공구라 폭 12 / 8 / 12 / 8mm 로 맞물림이 다르고, 조도도 줄마다
-#               260911_1~4 로 쟀다) 조건이 같아 한 스텝이 됐다.
+#   V3.2.0 전   공구 교환(M6)에서만 끊었다. 공구 하나로 조건을 바꿔 가며 깎는 실험(2026-11-11 O1110:
+#               공구 3개로 조건 32개)이 공구당 한 행으로 뭉쳤다.
+#   V3.3.0 까지 같은 S·F 로 이어 깎은 패스를 모두 합쳐, 형상이 둘인 가공도 한 스텝이 됐다.
+#   위치만으로 나누면(패스마다 한 스텝) 슬롯 하나를 두 줄로 깎은 가공이 두 스텝이 된다. O0911(Job 1)은 Ø12
+#   엔드밀로 네 줄(X26·X34 / X87·X95)을 깎아 폭 20mm 오픈 슬롯 두 개를 만든 가공이라 워킹스텝은 두 개다.
 #
-# 경계
-#   1. 공구 교환. M6 이 있는 프로그램은 M6 에서(T 만 적힌 줄은 다음 공구 예약), 없는
-#      프로그램은 T 가 바뀔 때.
-#   2. 절삭 패스마다. 단, 바로 앞 패스와 S·대표 F 가 같고 같은 자리를 다시 깎는 패스는 합친다.
-#      층을 나눠 내려가는 가공(O0912(EDGECAM) T6: 네 줄을 Z-3 / Z-4 두 층씩), 같은 경로를 한 번 더
-#      도는 다듬질(스프링) 패스, 헬리컬의 추가 바퀴가 여기에 든다.
-#      앞 패스와만 견준다. 모든 줄을 Z-3 으로 깎은 뒤 다시 Z-4 로 깎는 순서면 층마다 스텝이 된다
-#      (스텝은 가공 순서대로 이어진 구간이라 TDMS 시간과 맞출 수 있다).
+# 경계 (하나라도 바뀌면 새 워킹스텝)
+#   1. 공구 교환. M6 이 있는 프로그램은 M6 에서(T 만 적힌 줄은 다음 공구 예약), 없는 프로그램은 T 가 바뀔 때.
+#   2. 가공 형상. 실제 공구 지름으로 깎인 자리를 따라가(parsers/nc_geometry.py 의 소재 격자) 바닥 높이가 같은
+#      깎인 덩어리 하나를 형상 하나로 본다. 겹치거나 맞닿게 깎아 한 덩어리로 판 패스들은 한 형상, 사이에
+#      소재가 남은 홈은 다른 형상이다. 공구 지름은 Job 공구 지정 -> 공구 마스터 -> NC 주석 순으로 찾고,
+#      모르면 경로 중심선만 본다 (같은 경로를 다시 깎거나 경로가 겹칠 때만 같은 형상).
+#      형상 분류(slot · step · planar_face · pocket · round_hole)는 소재(블록) 크기를 알 때만 둘레의 벽 · 열림으로
+#      정하고(part.stock_x/y/z), 모르면 분류 · 크기 · 제거 체적 · 반경 절입 · 밀링 공정 이름을 기록하지 않는다.
+#   3. 가공 공정. 같은 자리를 축방향으로 얇게 다시 깎은 마지막 패스는 정삭이다 (nc_geometry 의 '정삭':
+#      ap <= 0.5mm 이고 앞 패스 ap 의 절반 미만, 같은 깊이를 다시 도는 스프링 패스 포함). 층을 고르게
+#      내려가는 황삭(1·1mm, 2·2·1mm)은 한 공정이다. 드릴링 사이클은 G 코드로 drilling · tapping · boring.
+#   4. 가공 전략. 패스 모양(직선 · 지그재그 / 윤곽 / 헬리컬 · 원호 / 드릴)이 바뀔 때.
+#   5. 절삭 조건. 패스의 S 나 대표 F 가 바뀔 때.
+#   이어진 패스만 묶는다. 다른 형상을 깎고 돌아오면(A -> B -> A) 새 워킹스텝이다 — 워킹스텝은 가공 순서대로
+#   이어진 구간이라 NC 줄 범위로 TDMS 시간과 맞출 수 있다.
 #
 # 절삭 패스  급속 이동(G0)·원점 복귀 사이에 이어지는 절삭 이동(G1/G2/G3, 고정 사이클).
-# 같은 자리  두 패스가 지나간 XY 자리(블록의 시작·끝점과 I/J 원호 중심, µm 단위. 고정 사이클은 구멍
-#            위치)의 모음이 같다. 순서·방향·바퀴 수는 보지 않는다. 위치를 모르는 점이 하나라도 있으면
-#            (G91 증분 지령으로 시작한 프로그램, G28 원점 복귀 뒤 등) 같은 자리라고 하지 않는다.
 # 대표 F     그 패스에서 XY 로 가장 길게 깎은 이송. CAM 은 Z 진입을 낮은 F 로, 그것도 소재
 #            위 높은 곳부터 내리는 일이 많아(AUTOMA 출력: Z49.5 -> Z-2 를 F400, 절삭은 F600)
 #            거리나 줄 수로 세면 진입 이송이 대표가 된다.
 # 보조 패스  XY 이동 없이 Z 로만 움직인 패스(수직 진입)와, 같은 공구의 다른 패스는 Z0 아래로
-#            내려가는데 Z0 위에서만 움직인 패스(공중 이송). 경계를 만들지 않고 버린다.
+#            내려가는데 Z0 위에서만 움직인 패스(공중 이송). 소재는 깎지만 워킹스텝을 만들지 않는다.
 #            공구 구간 전체가 보조 패스뿐이면(G1 드릴링·고정 사이클 등) 그것들로 스텝을 만든다.
-# 절입 깊이  공작물 좌표 Z0 을 소재 윗면으로 보고 패스가 내려간 가장 낮은 Z 의 깊이(mm).
-#            Z0 위에서만 깎았으면 모른다(None). 한 스텝의 패스들이 같은 깊이일 때만 적고,
-#            층을 나눠 내려간 스텝처럼 깊이가 섞이면 한 값으로 말할 수 없어 비운다(None).
-#            깊이만으로는 나누지 않는다 — 같은 자리를 층마다 내려가는 가공이 층마다 쪼개진다.
-# 스텝 위치  조건이 같은 스텝끼리 구분하도록 스텝마다 남긴다. NC 줄 범위(첫·마지막 절삭 블록의 파일
-#            줄 번호), 시작 위치(첫 절삭 블록 직전)·끝 위치(마지막 절삭 블록 뒤, 공작물 좌표),
-#            절삭 길이(합친 패스들의 절삭 이동 합. 위치를 모르는 구간은 더하지 않는다).
+# 절입       축방향 ap · 반경 ae 는 소재 격자에서 실제로 깎은 두께 · 폭이다. 공작물 Z0 을 소재 윗면으로 보고,
+#            앞 층이나 다른 공구(정면 밀링)가 이미 깎은 높이에서 잰다 (O0912: 정면 밀링 Z-2 위의 Z-3·Z-4 -> ap 1).
+# 스텝 위치  NC 줄 범위(첫·마지막 절삭 블록의 파일 줄 번호), 시작·끝 위치, 절삭 길이, 그리고 패스별 경로
+#            (toolpaths: 줄 · 위치 · ap · ae) 를 남긴다. 조도 측정점처럼 패스 단위로 잇는 자료는 toolpaths 를 본다.
 
 _COMMENT_RE = re.compile(r'\(.*?\)|<.*?>|;.*$')
 # (?<![#A-Z]) 는 G43H6 의 H6 같은 다른 주소나 #100 같은 변수를 오인하지 않기 위한 것이다.
@@ -72,6 +74,11 @@ _G_RE = re.compile(r'(?<![#A-Z])G0*(\d{1,2})(?:\.\d+)?(?![0-9])')
 _WORD_RE = re.compile(r'(?<![#A-Z])([XYZIJKR])\s*([-+]?(?:\d+\.?\d*|\.\d+))')
 # Z#100 처럼 값이 변수인 축: 어디로 가는지 모른다.
 _VARIABLE_AXIS_RE = re.compile(r'(?<![#A-Z])([XYZ])\s*[#\[]')
+# 공구를 부른 줄의 주석에 적힌 지름 (CAM 출력: 'T1 M6 (T01_ENDMILL_D12.0MM)', '(DIA 10)', '(Ø6)').
+# 'T13_FACEMILL_50MM' 처럼 D·DIA·Ø 없이 적은 숫자는 지름인지 몰라 읽지 않는다.
+_COMMENT_TEXT_RE = re.compile(r'\((.*?)\)|;(.*)$')
+_COMMENT_DIAMETER_RE = re.compile(r'(?:Ø|⌀|DIA(?:METER)?\.?\s*[=:]?\s*|(?<![A-Z0-9])D\s*[=:]?\s*)'
+                                  r'(\d+(?:\.\d+)?)(?![0-9])')
 
 _CANNED_CYCLES = {73, 74, 76, 81, 82, 83, 84, 85, 86, 87, 88, 89}
 # 축 글자가 있어도 이동이 아닌 코드 (G04 드웰 시간, G10 오프셋 데이터)
@@ -187,6 +194,7 @@ class _PassScanner:
         self.motion = 0                 # 01 그룹: 0 급속, 1 직선, 2 시계 원호, 3 반시계 원호
         self.plane = 17
         self.in_cycle = False           # 고정 사이클(G81 등) 진행 중
+        self.cycle_code = None          # 진행 중인 고정 사이클 G 코드 (81, 83, 84 ...)
         self.cycle_bottom = None        # 고정 사이클 구멍 바닥 Z (G90 일 때만 안다)
         self.cycle_r = None             # 고정 사이클 R 점
         self.tool = None
@@ -209,15 +217,19 @@ class _PassScanner:
         self.tool = number
         self.sections.append(self._new_section(number))
 
-    def _cut(self, xy_len, length, end_z, moved_xy, start, end, places):
+    def _cut(self, xy_len, length, end_z, moved_xy, start, end, places, segment):
         """절삭 블록 하나를 진행 중인 패스에 더한다.
 
-        start·end 는 블록 앞뒤 위치, places 는 이 블록이 지나간 XY 자리(_xy_key) 목록이다.
+        start·end 는 블록 앞뒤 위치, places 는 이 블록이 지나간 XY 자리(_xy_key) 목록,
+        segment 는 공구 지름으로 깎인 자리를 따라갈 때(nc_geometry) 쓰는 경로 조각이다:
+        ('line', 시작, 끝) · ('arc', 시작, 끝, (중심 X, Y), 시계 방향?) · ('hole', 구멍 바닥 위치).
         """
         if self.current is None:
             self.current = {'s': self.spindle, 'feeds': {}, 'min_z': None, 'moved_xy': False,
-                            'first_line': self.line_no, 'start': dict(start), 'footprint': set()}
+                            'first_line': self.line_no, 'start': dict(start), 'footprint': set(),
+                            'segments': [], 'cycle': None}
         cur = self.current
+        cur['segments'].append(segment)
         # 이송별 [XY 길이, 전체 길이, 블록 수]. 대표 F 는 이 순서로 비교해 고른다.
         acc = cur['feeds'].setdefault(self.feed, [0.0, 0.0, 0])
         acc[0] += xy_len or 0.0
@@ -238,6 +250,25 @@ class _PassScanner:
             return None
         return _xy_key('C', x + words.get('I', 0.0), y + words.get('J', 0.0))
 
+    def _arc_centre_xy(self, words, target, clockwise):
+        """XY 평면(G17) 원호의 중심 (X, Y). I/J 지령은 그대로, R 지령은 시작·끝점과 방향으로 구한다. 모르면 None."""
+        x0, y0 = self.pos['X'], self.pos['Y']
+        if x0 is None or y0 is None:
+            return None
+        if 'I' in words or 'J' in words:
+            return (x0 + words.get('I', 0.0), y0 + words.get('J', 0.0))
+        if 'R' not in words or target['X'] is None or target['Y'] is None:
+            return None
+        radius = words['R']
+        dx, dy = target['X'] - x0, target['Y'] - y0
+        chord = math.hypot(dx, dy)
+        if chord < _EPS or abs(radius) < _EPS:
+            return None
+        rise = math.sqrt(max(radius * radius - chord * chord / 4, 0.0))
+        # 반시계(G3)의 180° 이하 원호는 중심이 진행 방향 왼쪽, 시계(G2)는 오른쪽. R 이 음수(180° 초과)면 반대쪽.
+        side = 1.0 if (not clockwise) != (radius < 0) else -1.0
+        return (x0 + dx / 2 - side * rise * dy / chord, y0 + dy / 2 + side * rise * dx / chord)
+
     def _read_g_codes(self, block):
         """모달 상태를 갱신하고, 이 블록에만 듣는 코드가 있으면 돌려준다."""
         one_shot = None
@@ -255,6 +286,7 @@ class _PassScanner:
                 self.in_cycle = False
             elif code in _CANNED_CYCLES:
                 self.in_cycle = True
+                self.cycle_code = code
             elif (code in _NON_MOTION_CODES or code in _POSITION_LOST_CODES
                   or code == _SET_POSITION_CODE):
                 one_shot = code
@@ -285,7 +317,9 @@ class _PassScanner:
         bottom, r_point = self.cycle_bottom, self.cycle_r
         stroke = abs(r_point - bottom) if (r_point is not None and bottom is not None) else None
         hole = dict(target, Z=bottom)
-        self._cut(0.0, stroke, bottom, False, hole, hole, [_xy_key('P', target['X'], target['Y'])])
+        self._cut(0.0, stroke, bottom, False, hole, hole, [_xy_key('P', target['X'], target['Y'])],
+                  ('hole', hole))
+        self.current['cycle'] = self.cycle_code
         target['Z'] = None      # 구멍마다 R 점이나 시작 높이로 돌아간다 (어느 쪽인지 따지지 않는다)
         self.pos = target
 
@@ -353,7 +387,12 @@ class _PassScanner:
             places = [_xy_key('P', self.pos['X'], self.pos['Y']), _xy_key('P', target['X'], target['Y'])]
             if self.motion in (2, 3) and any(letter in words for letter in 'IJK'):
                 places.append(self._arc_centre(words))
-            self._cut(xy_len, length, target['Z'], moved_xy, self.pos, target, places)
+            segment = ('line', dict(self.pos), dict(target))
+            if self.motion in (2, 3) and self.plane == 17:
+                centre = self._arc_centre_xy(words, target, clockwise=(self.motion == 2))
+                if centre is not None:
+                    segment = ('arc', dict(self.pos), dict(target), centre, self.motion == 2)
+            self._cut(xy_len, length, target['Z'], moved_xy, self.pos, target, places, segment)
         self.pos = target
 
     def finish(self):
@@ -384,11 +423,6 @@ def _passes_defining_steps(passes):
     return [p for p in passes if p['moved_xy']] or passes
 
 
-def _same_place(a, b):
-    """두 패스가 같은 자리를 깎았는지: 지나간 XY 자리 모음이 같고, 모르는 위치가 없을 때만."""
-    return bool(a) and None not in a and a == b
-
-
 def _pass_length(p):
     return sum(acc[1] for acc in p['feeds'].values())
 
@@ -399,48 +433,86 @@ def _position(pos):
             for axis in _AXES}
 
 
-def _steps_from_sections(sections):
+def _rounded(value, digits):
+    return None if value is None else round(value, digits) + 0.0
+
+
+def _toolpath(p):
+    """워킹스텝 안 절삭 패스 하나 (ISO 14649 toolpath). 조도 측정점처럼 패스 단위로 잇는 데 쓴다."""
+    return {
+        'nc_lines': [p['first_line'], p['last_line']],
+        'start': _position(p['start']),
+        'end': _position(p['end']),
+        'z': _rounded(p['min_z'], _DEPTH_DIGITS),
+        'stage': p.get('stage'),
+        'ap': _rounded(p.get('ap'), 3),
+        'ae': _rounded(p.get('ae'), 1),
+        'length': _rounded(_pass_length(p), 3),
+        'volume': _rounded(p.get('volume'), 1),
+    }
+
+
+def _step_from_group(tool, group, features):
+    passes = group['passes']
+    feature_no, stage = group['key'][0], group['key'][1]
+    feature = features.get(feature_no) or {}
+    aps = [p['ap'] for p in passes if p.get('ap') is not None]
+    if aps:
+        depth = round(max(aps), _DEPTH_DIGITS) + 0.0
+    else:
+        # 소재 격자에 올리지 못한 패스 (좌표를 모름): 예전처럼 Z0 기준 깊이, 패스마다 다르면 모름
+        depths = {_pass_depth(p['min_z']) for p in passes}
+        depth = depths.pop() if len(depths) == 1 else None
+    aes = [p['ae'] for p in passes if p.get('ae') is not None]
+    volumes = [p['volume'] for p in passes if p.get('volume') is not None]
+    distance = sum(_pass_length(p) for p in passes)
+    return {
+        'tool_number': tool,
+        'spindle_speed': group['key'][2],
+        'feed_rate': group['key'][3],
+        'depth_of_cut': depth,
+        'radial_cutting_depth': _rounded(max(aes), 1) if aes else None,
+        'pass_count': len(passes),
+        'nc_line_start': passes[0]['first_line'],
+        'nc_line_end': passes[-1]['last_line'],
+        'start_position': _position(passes[0]['start']),
+        'end_position': _position(passes[-1]['end']),
+        'cutting_distance': round(distance, 3) if distance > 0 else None,
+        'removed_volume': _rounded(sum(volumes), 1) if volumes else None,
+        'feature_no': feature_no,
+        'feature_type': feature.get('type'),
+        'feature_geometry': feature.get('geometry'),
+        'operation_type': nc_geometry.operation(feature.get('type'), stage, passes),
+        'strategy': nc_geometry.strategy(passes),
+        'toolpaths': [_toolpath(p) for p in passes],
+    }
+
+
+_TOOL_ONLY_STEP = dict.fromkeys(
+    ('depth_of_cut', 'radial_cutting_depth', 'nc_line_start', 'nc_line_end', 'start_position', 'end_position',
+     'cutting_distance', 'removed_volume', 'feature_no', 'feature_type', 'feature_geometry', 'operation_type',
+     'strategy', 'toolpaths'))
+
+
+def _steps_from_sections(sections, specs=None, stock=None):
+    """공구 구간의 절삭 패스를 워킹스텝으로 묶는다 (규칙은 위 "워킹스텝 분리 규칙")."""
+    defining = [_passes_defining_steps(section['passes']) for section in sections]
+    features = nc_geometry.analyze(sections, specs or {}, {id(p) for passes in defining for p in passes}, stock)
     steps = []
-    for section in sections:
+    for section, passes in zip(sections, defining):
         groups = []
-        for p in _passes_defining_steps(section['passes']):
-            key = (p['s'], _representative_feed(p['feeds']))
-            if (groups and groups[-1]['key'] == key
-                    and _same_place(groups[-1]['passes'][-1]['footprint'], p['footprint'])):
-                groups[-1]['passes'].append(p)      # 같은 자리를 같은 조건으로 다시 깎았다 (층·다듬질)
+        for p in passes:
+            key = (p['feature'], p['stage'], p['s'], _representative_feed(p['feeds']),
+                   nc_geometry.PATH_CLASS[p['path_type']], p.get('cycle'))
+            if groups and groups[-1]['key'] == key:
+                groups[-1]['passes'].append(p)
             else:
                 groups.append({'key': key, 'passes': [p]})
-
-        for g in groups:
-            passes = g['passes']
-            depths = [_pass_depth(p['min_z']) for p in passes]
-            distance = sum(_pass_length(p) for p in passes)
-            steps.append({
-                'tool_number': section['tool'],
-                'spindle_speed': g['key'][0],
-                'feed_rate': g['key'][1],
-                'depth_of_cut': depths[0] if len(set(depths)) == 1 else None,
-                'pass_count': len(passes),
-                'nc_line_start': passes[0]['first_line'],
-                'nc_line_end': passes[-1]['last_line'],
-                'start_position': _position(passes[0]['start']),
-                'end_position': _position(passes[-1]['end']),
-                'cutting_distance': round(distance, 3) if distance > 0 else None,
-            })
+        steps += [_step_from_group(section['tool'], g, features) for g in groups]
         if not groups and section['tool'] is not None:
             # 절삭 없이 호출만 된 공구도 XML 의 공구 목록과 맞추려고 한 줄 남긴다 (예전 동작).
-            steps.append({
-                'tool_number': section['tool'],
-                'spindle_speed': section['last_s'],
-                'feed_rate': section['first_f'],
-                'depth_of_cut': None,
-                'pass_count': 0,
-                'nc_line_start': None,
-                'nc_line_end': None,
-                'start_position': None,
-                'end_position': None,
-                'cutting_distance': None,
-            })
+            steps.append({**_TOOL_ONLY_STEP, 'tool_number': section['tool'], 'spindle_speed': section['last_s'],
+                          'feed_rate': section['first_f'], 'pass_count': 0})
     return steps
 
 
@@ -480,29 +552,58 @@ def step_path_text(start, end):
     return f"{_xy(start)} → {_xy(end)}"
 
 
-def parse_nc_cutting_conditions(nc_input):
+def _merge_tool_specs(comment_diameters, tools):
+    """{공구 번호: {'diameter', 'kind', 'source'}}. DB(Job 공구 지정 · 공구 마스터)가 NC 주석보다 먼저다."""
+    specs = {n: {'diameter': d, 'kind': None, 'source': 'NC 주석'} for n, d in comment_diameters.items()}
+    for number, spec in (tools or {}).items():
+        if not spec:
+            continue
+        if spec.get('diameter'):
+            specs[number] = {'diameter': float(spec['diameter']), 'kind': spec.get('kind'),
+                             'source': spec.get('source') or '공구 마스터'}
+        elif spec.get('kind') and number in specs:
+            specs[number]['kind'] = spec['kind']
+    return specs
+
+
+def parse_nc_cutting_conditions(nc_input, tools=None, stock=None):
     """
     NC 프로그램 코드(G-code)를 워킹스텝 단위로 나눠 공구 번호(T), 주축 회전수(S, RPM),
-    이송속도(F, mm/min), 절입 깊이(mm)를 뽑는다. 나누는 규칙은 위 "워킹스텝 분리 규칙".
+    이송속도(F, mm/min), 절입, 가공 형상 · 공정 · 전략을 뽑는다. 나누는 규칙은 위 "워킹스텝 분리 규칙".
 
     경로 · 바이트열 · 문자열을 모두 받고, compact 포맷(S3800M3, G1Z-2F710, M6T6)과
     공백 구분 포맷을 모두 지원한다.
 
+    tools  {공구 번호: {'diameter': mm, 'kind': ISO 14649 공구 분류}} — 실제 공구 제원 (tool_specs_for_workplan).
+           형상을 가를 때 쓴다. 없으면 NC 주석의 지름(T1 M6 (ENDMILL D12) 등), 그것도 없으면 경로 중심선만 본다.
+    stock  소재 {'x', 'y', 'z' (mm), 'origin': 'corner'|'center'} (stock_for_workplan). 형상 분류 · 크기 · 제거 체적 ·
+           반경 절입 · 밀링 공정 이름은 이것이 있을 때만 적는다 (없으면 None — 제대로 판단할 수 없어 기록하지 않음).
+
     반환: 가공 순서대로 dict 목록
-        step_order, tool_number, xml_tool_code, spindle_speed, feed_rate, depth_of_cut,
-        pass_count        이 스텝으로 합친 절삭 패스 수 (같은 자리를 같은 조건으로 이어 깎은 층·다듬질).
-                          절삭 없이 호출만 된 공구는 0 이고 아래 칸은 모두 None
-        nc_line_start     첫 절삭 블록의 NC 파일 줄 번호 (1부터, 주석·빈 줄 포함)
-        nc_line_end       마지막 절삭 블록의 줄 번호
-        start_position    첫 절삭 블록 직전 위치 {'X','Y','Z'} (공작물 좌표 mm, 모르는 축 None)
-        end_position      마지막 절삭 블록 뒤 위치
-        cutting_distance  절삭 경로 길이 (mm, 이 스텝 패스들의 절삭 이동 합. 모르면 None)
+        step_order, tool_number, xml_tool_code, spindle_speed, feed_rate,
+        depth_of_cut          축방향 절입 ap (mm, 소재 격자에서 실제로 깎은 두께, 패스 중 가장 큰 값)
+        radial_cutting_depth  반경 절입 ae (mm, 실제로 깎인 폭, 패스 중 가장 큰 값. 공구 지름을 모르면 None)
+        pass_count            이 스텝의 절삭 패스 수. 절삭 없이 호출만 된 공구는 0 이고 아래 칸은 모두 None
+        nc_line_start/_end    첫 · 마지막 절삭 블록의 NC 파일 줄 번호 (1부터, 주석·빈 줄 포함)
+        start_position        첫 절삭 블록 직전 위치 {'X','Y','Z'} (공작물 좌표 mm, 모르는 축 None)
+        end_position          마지막 절삭 블록 뒤 위치
+        cutting_distance      절삭 경로 길이 (mm, 이 스텝 패스들의 절삭 이동 합. 모르면 None)
+        removed_volume        제거 체적 (mm³, 소재 격자 기준)
+        feature_no            가공 형상 번호 (프로그램 안에서 1부터, 같은 번호 = 같은 형상)
+        feature_type          ISO 14649 형상 (slot · step · planar_face · closed_pocket · open_pocket · round_hole).
+                              소재 크기 · 공구 지름을 모르면 None (드릴링 구멍은 G 코드로 분명해 round_hole)
+        feature_geometry      형상 크기 {'width', 'length', 'depth', 'floor_z', 'x', 'y', 'walls', 'ends', ..., 'basis'}
+        operation_type        ISO 14649 공정 (bottom_and_side_rough_milling, plane_finish_milling, drilling ...).
+                              밀링은 형상 분류가 없으면 None (황삭/정삭은 toolpaths 의 stage)
+        strategy              가공 전략 (unidirectional · bidirectional · contour · helical · circular, 드릴링 None)
+        toolpaths             패스별 {'nc_lines', 'start', 'end', 'z', 'stage', 'ap', 'ae', 'length', 'volume'}
     """
     content = _read_nc_text(nc_input)
     if not content:
         return []
 
-    steps = _steps_from_sections(_scan_sections(content))
+    sections, comment_diameters = _scan_sections(content)
+    steps = _steps_from_sections(sections, _merge_tool_specs(comment_diameters, tools), stock)
 
     for idx, s in enumerate(steps, start=1):
         s['step_order'] = idx
@@ -516,17 +617,26 @@ def _scan_sections(content):
     """NC 본문을 블록으로 나눠 _PassScanner 로 읽은 공구 구간 목록 (워킹스텝·절삭 거리 공용).
 
     줄 번호는 파일의 실제 줄(1부터, 주석·빈 줄·% 줄 포함)이라 편집기에서 그대로 찾을 수 있다.
+    반환: (공구 구간 목록, {공구 번호: NC 주석에 적힌 지름}) — 'T1 M6 (T01_ENDMILL_D12.0MM)' 처럼 공구를 부른
+    줄의 주석에 지름이 있으면 읽는다 (CAM 출력).
     """
-    blocks = []
+    blocks, comment_diameters = [], {}
     for line_no, line in enumerate(content.splitlines(), start=1):
         block = _COMMENT_RE.sub('', line).strip().upper()
         if block and not block.startswith('%'):
             blocks.append((line_no, block))
+            tool = _T_RE.search(block)
+            if tool:
+                for m in _COMMENT_TEXT_RE.finditer(line.upper()):
+                    found = _COMMENT_DIAMETER_RE.search(m.group(1) or m.group(2) or '')
+                    if found:
+                        comment_diameters.setdefault(int(tool.group(1)), float(found.group(1)))
+                        break
 
     scanner = _PassScanner(uses_m6=any(_M6_RE.search(b) for _, b in blocks))
     for line_no, block in blocks:
         scanner.read_block(block, line_no)
-    return scanner.finish()
+    return scanner.finish(), comment_diameters
 
 
 def nc_cutting_distance(nc_input) -> Optional[float]:
@@ -540,7 +650,7 @@ def nc_cutting_distance(nc_input) -> Optional[float]:
     content = _read_nc_text(nc_input)
     if not content:
         return None
-    total = sum(acc[1] for section in _scan_sections(content)
+    total = sum(acc[1] for section in _scan_sections(content)[0]
                 for p in section['passes'] for acc in p['feeds'].values())
     return round(total, 3) if total > 0 else None
 
@@ -593,13 +703,88 @@ def _stored_tool_number(step):
 
 
 # NC 에서 읽어 맞추는 워킹스텝 칸 (공구·순서 말고). 행을 두고 값만 고칠 때와 다시 만들 때 같은 목록을 쓴다.
-STEP_VALUE_FIELDS = ('spindle_speed', 'feed_rate', 'depth_of_cut', 'pass_count', 'nc_line_start',
-                     'nc_line_end', 'start_position', 'end_position', 'cutting_distance')
+# operation_type 은 NC 가 정한 ISO 14649 공정이다. NC 가 정하지 못한 행(절삭 없이 호출만 된 공구)에서만
+# 사람이 적은 값을 남긴다.
+STEP_VALUE_FIELDS = ('operation_type', 'spindle_speed', 'feed_rate', 'depth_of_cut', 'radial_cutting_depth',
+                     'pass_count', 'nc_line_start', 'nc_line_end', 'start_position', 'end_position',
+                     'cutting_distance', 'removed_volume', 'feature_no', 'feature_type', 'feature_geometry',
+                     'strategy', 'toolpaths')
+
+
+def tool_specs_for_workplan(db, workplan_id=None):
+    """실제 공구 제원 {공구 번호: {'diameter', 'kind', 'source'}} — 워킹스텝의 가공 형상을 가를 때 쓴다.
+
+    Job 공구 지정(job_tool_assignment, 그 Job 에서 실제로 쓴 공구의 제원 스냅샷)이 먼저고, 없으면
+    공구 마스터의 같은 T번호 공구(workingstep.tool_id 자동 연결과 같은 규칙)다. 예전 DB 처럼 칸이나 표가
+    없으면 그 출처를 건너뛴다.
+    """
+    from sqlalchemy import inspect as sa_inspect
+    from sqlalchemy.engine import Connection
+
+    conn = db if isinstance(db, Connection) else db.connection()      # 세션이든 연결이든 받는다
+    inspector = sa_inspect(conn)
+    specs = {}
+    if inspector.has_table('tool'):
+        columns = {c['name'] for c in inspector.get_columns('tool')}
+        if {'tool_code', 'cutter_diameter'} <= columns:
+            kind = 'iso14649_class' if 'iso14649_class' in columns else 'NULL'
+            for code, diameter, cls in conn.execute(text(
+                    f"SELECT tool_code, cutter_diameter, {kind} FROM tool "
+                    f"WHERE tool_code IS NOT NULL ORDER BY tool_id")):
+                number = tool_code_number(code)
+                if number is not None and diameter and number not in specs:
+                    specs[number] = {'diameter': float(diameter), 'kind': cls, 'source': '공구 마스터'}
+    if workplan_id is not None and inspector.has_table('job_tool_assignment'):
+        assigned = {}
+        for number, snapshot in conn.execute(text(
+                "SELECT a.tool_number, a.tool_snapshot FROM job_tool_assignment a "
+                "JOIN job j ON j.job_id = a.job_id WHERE j.workplan_id = :wp ORDER BY a.job_id"),
+                {'wp': workplan_id}):
+            if isinstance(snapshot, str):
+                snapshot = json.loads(snapshot)
+            diameter = (snapshot or {}).get('cutter_diameter')
+            if number is not None and diameter:
+                assigned.setdefault(int(number), {'diameter': float(diameter),
+                                                  'kind': snapshot.get('iso14649_class'),
+                                                  'source': 'Job 공구 지정'})
+        specs.update(assigned)
+    return specs
 
 
 def same_step_layout(existing, parsed_steps):
     """지금 행과 NC 파싱 결과의 공구 순서가 같은지. 같으면 행을 지우지 않고 값만 고친다."""
     return [ws.tool_number for ws in existing] == [_stored_tool_number(p) for p in parsed_steps]
+
+
+def stock_for_workplan(db, workplan_id):
+    """Workplan 부품의 소재 {'x', 'y', 'z', 'origin'} (part.stock_*). 크기가 하나라도 없거나 예전 DB 면 None."""
+    from sqlalchemy import inspect as sa_inspect
+    from sqlalchemy.engine import Connection
+
+    conn = db if isinstance(db, Connection) else db.connection()
+    inspector = sa_inspect(conn)
+    if not inspector.has_table('part'):
+        return None
+    columns = {c['name'] for c in inspector.get_columns('part')}
+    if not {'stock_x', 'stock_y', 'stock_z', 'stock_origin'} <= columns:
+        return None
+    row = conn.execute(text(
+        "SELECT p.stock_x, p.stock_y, p.stock_z, p.stock_origin FROM workplan w "
+        "JOIN part p ON p.part_code = w.part_code WHERE w.workplan_id = :wp"), {'wp': workplan_id}).first()
+    if row is None or any(v is None or float(v) <= 0 for v in row[:3]):
+        return None
+    return {'x': float(row[0]), 'y': float(row[1]), 'z': float(row[2]), 'origin': row[3] or 'corner'}
+
+
+# NC 가 적는 ISO 14649 공정 이름. 이 값은 NC 가 다시 정하지 못하면(소재 크기를 지움 등) 지운다.
+# 그 밖의 값은 사람이 적은 것이라 NC 가 정하지 못한 행에서 그대로 둔다.
+_AUTO_OPERATIONS = ({f"{head}_{stage}_milling" for head in ('plane', 'bottom_and_side') for stage in ('rough', 'finish')}
+                    | set(nc_geometry.DRILL_OPERATIONS.values()))
+
+
+def _kept_operation(current):
+    """NC 가 공정을 정하지 못했을 때 남길 값: 사람이 적은 값은 두고, 예전에 NC 가 적은 값은 지운다."""
+    return None if current in _AUTO_OPERATIONS else current
 
 
 def _apply_nc_steps(db, workplan_id, parsed_steps):
@@ -615,22 +800,24 @@ def _apply_nc_steps(db, workplan_id, parsed_steps):
                 .all())
 
     if same_step_layout(existing, parsed_steps):
-        # 공구 순서가 같으면 값만 맞춘다. 행을 지우지 않으므로 step_id 와
-        # 사람이 DB 테이블 화면에서 적은 operation_type 이 그대로 남는다.
+        # 공구 순서가 같으면 값만 맞춘다. 행을 지우지 않으므로 step_id 가 그대로 남는다.
         for ws, p in zip(existing, parsed_steps):
             ws.step_order = p['step_order']
             for field in STEP_VALUE_FIELDS:
+                if field == 'operation_type' and p[field] is None:
+                    ws.operation_type = _kept_operation(ws.operation_type)   # NC 가 정하지 못함: 사람이 적은 값만 둔다
+                    continue
                 setattr(ws, field, p[field])
         db.flush()
         return
 
     # 모양이 다르다: 예전 규칙(공구당 한 행, 같은 S·F 패스를 모두 합친 행)이나 XML ToolNumbers 로
     # 만든 스텝이다. 지우고 NC 기준으로 다시 만든다. step_id 를 참조하는 테이블은 없다.
-    # 사람이 적은 operation_type 은 공구 번호로 대응이 분명할 때만 옮겨 준다.
+    # NC 가 공정을 정하지 못한 행에는 사람이 적은 operation_type 을 공구 번호로 대응이 분명할 때만 옮겨 준다.
     op_by_tool = {}
     for ws in existing:
         op_by_tool.setdefault(ws.tool_number, set()).add(ws.operation_type)
-    carried_op = {tool: ops.pop() for tool, ops in op_by_tool.items()
+    carried_op = {tool: _kept_operation(ops.pop()) for tool, ops in op_by_tool.items()
                   if len(ops) == 1 and None not in ops}
 
     # 공구 마스터를 **번호** 기준으로 색인한다. NC 는 T6 으로 적고 마스터는 T06 으로
@@ -639,14 +826,16 @@ def _apply_nc_steps(db, workplan_id, parsed_steps):
         db.execute(text("SELECT tool_code, tool_id FROM tool WHERE tool_code IS NOT NULL"))
     )
     new_rows = [dict(
+        {field: p[field] for field in STEP_VALUE_FIELDS},
         workplan_id=workplan_id,
         tool_id=tool_by_number.get(p['tool_number']),
-        operation_type=carried_op.get(_stored_tool_number(p)),
         step_order=p['step_order'],
         tool_number=_stored_tool_number(p),
         xml_tool_code=p['xml_tool_code'],
-        **{field: p[field] for field in STEP_VALUE_FIELDS},
     ) for p in parsed_steps]
+    for row in new_rows:
+        if row['operation_type'] is None:
+            row['operation_type'] = carried_op.get(row['tool_number'])
 
     for ws in existing:
         db.delete(ws)
@@ -655,7 +844,7 @@ def _apply_nc_steps(db, workplan_id, parsed_steps):
     db.flush()
     if existing:
         print(f"[NC Parser] Workplan {workplan_id} 의 워킹스텝을 NC 기준으로 다시 만들었습니다 "
-              f"({len(existing)}개 -> {len(new_rows)}개, 공구 교환 · 절삭 패스 기준)")
+              f"({len(existing)}개 -> {len(new_rows)}개, 가공 형상 · 공정 · 절삭조건 · 공구 기준)")
 
 
 def sync_workplan_nc_cutting_conditions(db: Session, workplan_id, nc_file_path: Optional[str] = None,
@@ -663,11 +852,12 @@ def sync_workplan_nc_cutting_conditions(db: Session, workplan_id, nc_file_path: 
     """
     Workplan 의 Workingstep 을 NC 코드 기준으로 맞춘다. NC 가 있으면 NC 가 스텝 목록의 기준이다.
 
-    - 기존 스텝의 공구 순서가 NC 파싱 결과와 같으면 값(S · F · 절입 깊이 · 패스 수 · NC 줄 ·
-      시작/끝 위치 · 절삭 길이, STEP_VALUE_FIELDS)만 고친다.
-    - 다르면 지우고 NC 기준으로 다시 만든다. 예전 규칙으로 공구당 한 행씩 만든 스텝, 같은 S·F 로
-      다른 자리를 깎은 패스를 한 행으로 합친 스텝(V3.3.0 까지), XML 의 ToolNumbers 로 만든 스텝이
-      여기서 지금 규칙의 스텝으로 바뀐다.
+    - 가공 형상은 실제 공구 지름으로 가른다 (tool_specs_for_workplan: Job 공구 지정 -> 공구 마스터).
+      형상 분류 · 크기 등은 부품의 소재 크기(stock_for_workplan)가 있을 때만 적는다.
+    - 기존 스텝의 공구 순서가 NC 파싱 결과와 같으면 값(STEP_VALUE_FIELDS: 공정 · S · F · 절입 · 형상 ·
+      패스 정보)만 고친다.
+    - 다르면 지우고 NC 기준으로 다시 만든다. 예전 규칙으로 공구당 한 행씩 만든 스텝, 같은 S·F 패스를
+      모두 합친 스텝(V3.3.0 까지), XML 의 ToolNumbers 로 만든 스텝이 여기서 지금 규칙의 스텝으로 바뀐다.
     - NC 를 찾지 못했거나 절삭 블록이 하나도 없으면 아무것도 바꾸지 않고 False 를 돌려준다.
 
     commit=False 는 호출한 쪽(xml_parser)이 트랜잭션을 쥐고 있을 때 쓴다. flush 까지만 하고,
@@ -677,7 +867,9 @@ def sync_workplan_nc_cutting_conditions(db: Session, workplan_id, nc_file_path: 
     """
     try:
         source = _resolve_nc_source(db, workplan_id, nc_file_path, nc_content)
-        parsed_steps = parse_nc_cutting_conditions(source) if source else []
+        parsed_steps = (parse_nc_cutting_conditions(source, tools=tool_specs_for_workplan(db, workplan_id),
+                                                    stock=stock_for_workplan(db, workplan_id))
+                        if source else [])
     except Exception as e:
         print(f"[NC Parser] NC 를 읽지 못해 워킹스텝을 그대로 둡니다 ({workplan_id}): {e}")
         return False

@@ -2,6 +2,7 @@ import datetime
 import json
 import os
 
+import pandas as pd
 import streamlit as st
 from sqlalchemy import text
 
@@ -12,8 +13,8 @@ from .auth_view import current_worker_name
 from .tool_picker import render_tool_picker
 from cad_viewer_component import render_cad_viewer
 import tool_assignment as ta
-from job_manager import material_is_known
-from parsers.nc_parser import nc_program_name
+from job_manager import material_is_known, normalize_stock
+from parsers.nc_parser import nc_program_name, tool_specs_for_workplan
 from tdms_alignment import program_key, read_tdms_programs, same_program
 from tool_codes import format_tool_code
 from weather_service import place_name as weather_place_name
@@ -123,6 +124,44 @@ def _part_material(part_name):
         return False, None
     value = df.iloc[0]['material_code']
     return True, (str(value).strip() if material_is_known(value) else None)
+
+
+def _part_stock(part_name):
+    """부품에 저장된 소재 (x, y, z, origin). 없으면 None."""
+    if not part_name:
+        return None
+    try:
+        df = load_data("SELECT stock_x, stock_y, stock_z, stock_origin FROM part WHERE part_name = :part",
+                       params={"part": part_name})
+    except Exception:
+        return None
+    if df.empty:
+        return None
+    row = df.iloc[0]
+    values = [None if pd.isnull(row[c]) else row[c] for c in ("stock_x", "stock_y", "stock_z", "stock_origin")]
+    return normalize_stock(*values)
+
+
+def _save_part_stock(project_name, part_name, stock):
+    """부품 소재 크기를 저장하고, 이미 들어간 워킹스텝의 가공 형상을 다시 판단한다. (바뀌었는지, 다시 맞춘 Workplan 수)."""
+    from job_manager import resync_part_workingsteps, set_part_stock
+    from DB.database import SessionLocal
+
+    db_s = SessionLocal()
+    try:
+        part, changed = set_part_stock(db_s, project_name, part_name, *stock)
+        resynced = resync_part_workingsteps(db_s, part) if (part is not None and changed) else 0
+        db_s.commit()
+        return changed, resynced
+    except Exception:
+        db_s.rollback()
+        raise
+    finally:
+        db_s.close()
+
+
+def _stock_text(stock):
+    return f"{stock[0]:g} × {stock[1]:g} × {stock[2]:g} mm ({stock[3]})" if stock else None
 
 
 def _save_part_material(project_name, part_name, material):
@@ -283,9 +322,11 @@ def _save_job_attributes(job_id, worker_name, values, is_new_job):
 
 
 @st.cache_data(show_spinner=False)
-def _tools_in_uploaded_nc(nc_bytes):
-    # 15MB NC 를 화면이 다시 그려질 때마다 파싱하지 않도록 내용 기준으로 캐시한다.
-    return ta.tools_called_in_nc(nc_bytes)
+def _tools_in_uploaded_nc(nc_bytes, tool_specs, stock=None):
+    # 15MB NC 를 화면이 다시 그려질 때마다 파싱하지 않도록 내용(과 공구 마스터 지름 · 소재) 기준으로 캐시한다.
+    # 공구 지름은 수집 때와 같이 공구 마스터의 같은 T번호 공구다 — 워킹스텝(가공 형상) 수가 수집 뒤와 같다.
+    stock_dict = dict(zip(("x", "y", "z", "origin"), stock)) if stock else None
+    return ta.tools_called_in_nc(nc_bytes, tools=tool_specs, stock=stock_dict)
 
 
 # ---------------------------------------------------------------------------
@@ -411,7 +452,7 @@ def _render_program_check(file_tdms, file_nc, job_pk):
         icon=":material/warning:")
 
 
-def _render_tool_section(file_nc, job_pk, disabled):
+def _render_tool_section(file_nc, job_pk, disabled, stock=None):
     """사용한 공구 번호마다 공구 마스터의 어느 공구였는지 고른다. 저장할 지정을 돌려준다.
 
     공구 번호는 올리는 NC 에서 읽는다(워킹스텝 분리 규칙과 같아서 스텝 수도 수집 뒤와 같다).
@@ -424,7 +465,10 @@ def _render_tool_section(file_nc, job_pk, disabled):
     called, origin = {}, None
     try:
         if file_nc is not None:
-            called, origin = dict(_tools_in_uploaded_nc(file_nc.getvalue())), f"NC `{file_nc.name}`"
+            with engine.connect() as conn:
+                tool_specs = tool_specs_for_workplan(conn)
+            called, origin = (dict(_tools_in_uploaded_nc(file_nc.getvalue(), tool_specs, stock)),
+                              f"NC `{file_nc.name}`")
     except Exception as e:
         st.warning(f"업로드한 파일에서 공구 번호를 읽지 못했습니다: {e}", icon=":material/warning:")
 
@@ -535,6 +579,31 @@ def render_data_upload():
     material_change = (material_is_known(material_pick)
                        and material_pick.lower() != (material_now or "").lower())
 
+    # 소재(블록) 크기. 워킹스텝의 가공 형상 분류(slot · step · planar_face …)는 형상 둘레가 벽인지 소재 끝까지
+    # 뚫렸는지로 정하므로 이 값이 있어야 한다. 비워 두면 형상 분류 · 크기 · 제거 체적 · 반경 절입은 기록하지 않는다.
+    stock_now = _part_stock(part_name) if part_ready else None
+    stock_key = f"{project_name}::{part_name}"
+    s_x, s_y, s_z, s_o = st.columns([1, 1, 1, 1.3])
+    stock_inputs = []
+    for col, axis, label, idx in ((s_x, "x", "소재 크기 X (mm)", 0), (s_y, "y", "소재 크기 Y (mm)", 1),
+                                  (s_z, "z", "소재 두께 Z (mm)", 2)):
+        with col:
+            stock_inputs.append(st.number_input(
+                label, min_value=0.0, value=stock_now[idx] if stock_now else None, step=1.0, format="%g",
+                placeholder="비워 두면 형상 분류 안 함", disabled=not part_ready,
+                key=f"dl_stock_{axis}::{stock_key}",
+                help="소재(블록)의 공작물 X·Y 방향 크기와 두께. 워킹스텝의 가공 형상(slot · step · planar_face …)을 "
+                     "가르는 데 씁니다. 비워 두면 형상 분류 · 크기 · 제거 체적은 기록하지 않습니다."))
+    with s_o:
+        origin_options = ["corner", "center"]
+        stock_origin = st.selectbox(
+            "공작물 원점 (Z0 = 소재 윗면)", origin_options,
+            index=origin_options.index(stock_now[3]) if stock_now else 0,
+            format_func=lambda v: {"corner": "corner — 윗면 모서리 (X·Y 최소)", "center": "center — 윗면 가운데"}[v],
+            disabled=not part_ready, key=f"dl_stock_origin::{stock_key}")
+    stock_pick = normalize_stock(*stock_inputs, stock_origin)
+    stock_change = stock_pick is not None and stock_pick != stock_now
+
     with col_j:
         job_labels, folder_by_label = _list_jobs(project_name, part_name) if part_ready else ([], {})
         job_choice = st.selectbox(
@@ -559,34 +628,50 @@ def render_data_upload():
                  else "Part 레벨 (CAD 전용)")
         material_text = (f"소재 `{material_now}`" if material_now
                          else "소재 미등록" if part_known else "새 부품")
+        material_text += f", {_stock_text(stock_now)}" if stock_now else ", 소재 크기 미입력"
         st.success(f"**대상** · 프로젝트 `{project_name}` / 부품 `{part_name}` ({material_text}) / {where}",
                    icon=":material/target:")
 
-        if material_change:
-            note = (f"소재를 `{material_now}` → `{material_pick}` 로 바꿉니다." if material_now
-                    else f"소재를 `{material_pick}` 로 등록합니다.")
+        if material_change or stock_change:
+            notes = []
+            if material_change:
+                notes.append(f"소재를 `{material_now}` → `{material_pick}` 로 바꿉니다." if material_now
+                             else f"소재를 `{material_pick}` 로 등록합니다.")
+            if stock_change:
+                notes.append(f"소재 크기를 {_stock_text(stock_pick)} 로 저장하고 이 부품의 워킹스텝 가공 형상을 "
+                             "다시 판단합니다.")
+            note = " ".join(notes)
             if not part_known:
                 st.caption(f"{note} 업로드할 때 새 부품과 함께 저장됩니다.")
             else:
                 c_note, c_btn = st.columns([4, 1], vertical_alignment="center")
                 with c_note:
-                    st.caption(f"{note} 업로드할 때 함께 저장되며, 파일 없이 소재만 바꾸려면 "
-                               "**소재만 저장**을 누르세요.")
+                    st.caption(f"{note} 업로드할 때 함께 저장되며, 파일 없이 바꾸려면 **소재 정보만 저장**을 누르세요.")
                 with c_btn:
-                    if st.button("소재만 저장", key="dl_btn_material", width="stretch",
+                    if st.button("소재 정보만 저장", key="dl_btn_material", width="stretch",
                                  icon=":material/save:"):
+                        flash = []
                         try:
-                            saved = _save_part_material(project_name, part_name, material_pick)
+                            if material_change:
+                                saved = _save_part_material(project_name, part_name, material_pick)
+                                flash.append(f"소재를 `{saved}` 로 저장했습니다." if saved else "바뀐 소재가 없습니다.")
+                            if stock_change:
+                                changed, resynced = _save_part_stock(project_name, part_name, stock_pick)
+                                flash.append(f"소재 크기를 {_stock_text(stock_pick)} 로 저장하고 워킹스텝 가공 형상을 "
+                                             f"다시 판단했습니다 (Workplan {resynced}개)." if changed
+                                             else "바뀐 소재 크기가 없습니다.")
                         except Exception as e:
-                            st.error(f"소재를 저장하지 못했습니다: {e}")
+                            st.error(f"소재 정보를 저장하지 못했습니다: {e}")
                         else:
                             load_data.clear()       # 목록·기본값이 60초 캐시라 비워야 바로 보인다
-                            st.session_state["dl_material_flash"] = (
-                                f"부품 `{part_name}` 의 소재를 `{saved}` 로 저장했습니다." if saved
-                                else "바뀐 소재가 없습니다.")
+                            st.session_state["dl_material_flash"] = f"부품 `{part_name}`: " + " ".join(flash)
                             st.rerun()
-        elif part_known and not material_now:
-            st.caption("이 부품은 소재가 아직 등록되지 않았습니다. 위 **소재** 칸에서 고르거나 새로 입력하세요.")
+        else:
+            if part_known and not material_now:
+                st.caption("이 부품은 소재가 아직 등록되지 않았습니다. 위 **소재** 칸에서 고르거나 새로 입력하세요.")
+            if not stock_now and stock_pick is None:
+                st.caption("소재 크기(X · Y · Z)를 넣으면 워킹스텝의 가공 형상(slot · step · planar_face …)을 판단합니다. "
+                           "비워 두면 형상 분류 · 크기 · 제거 체적 · 반경 절입은 기록하지 않습니다.")
 
     st.markdown("---")
 
@@ -654,7 +739,8 @@ def render_data_upload():
         _render_program_check(file_tdms, file_nc, existing_job_pk)
 
     # ------------------------------------------------------------ 사용 공구
-    tool_picks = _render_tool_section(file_nc, existing_job_pk, disabled=off) if job_ready else {}
+    tool_picks = (_render_tool_section(file_nc, existing_job_pk, disabled=off, stock=stock_pick or stock_now)
+                  if job_ready else {})
 
     # ------------------------------------------------------------ 가공 기록 입력
     st.markdown("---")
@@ -773,6 +859,13 @@ def render_data_upload():
             material_written = _save_part_material(project_name, part_name, material_pick)
         except Exception as e:
             st.warning(f"소재를 저장하지 못했습니다 (파일 업로드는 계속합니다): {e}")
+    # 소재 크기도 파일을 놓기 전에 적는다 — 수집기가 NC 를 읽을 때 이 값으로 가공 형상을 판단한다.
+    # 이미 들어간 이 부품의 워킹스텝도 새 소재 크기로 다시 판단한다.
+    if stock_change:
+        try:
+            _save_part_stock(project_name, part_name, stock_pick)
+        except Exception as e:
+            st.warning(f"소재 크기를 저장하지 못했습니다 (파일 업로드는 계속합니다): {e}")
 
     # 공구 지정은 파일을 놓기 전에 기록한다. 수집기는 이 테이블을 건드리지 않지만, 먼저 적어 두면
     # 파일 저장 중에 화면이 끊겨도 사람이 고른 내용은 남는다.

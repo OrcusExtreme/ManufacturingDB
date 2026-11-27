@@ -37,8 +37,10 @@ O0911_PATH = os.path.join(FIXTURES, "O0911_20260911.nc")
 with open(O0911_PATH, "rb") as _f:
     O0911_BYTES = _f.read()
 
-# 공구 마스터: T01·T02·T03 이 tool_id 11·12·13 (번호로 연결되는지 보려고 일부러 어긋나게 둔다)
-TOOL_IDS = {1: 11, 2: 12, 3: 13}
+# 공구 마스터: T01·T02·T03·T06 이 tool_id 11·12·13·16 (번호로 연결되는지 보려고 일부러 어긋나게 둔다).
+# 지름은 연구실 공구 마스터와 같다 — 워킹스텝의 가공 형상을 실제 공구 지름으로 가른다.
+TOOL_IDS = {1: 11, 2: 12, 3: 13, 6: 16}
+TOOL_DIAMETERS = {1: 2.0, 2: 4.0, 3: 6.0, 6: 12.0}
 
 XML_O1110 = """<?xml version="1.0" encoding="utf-8"?>
 <WorkModel>
@@ -65,10 +67,12 @@ def Session(monkeypatch):
         if table.name != "tool":
             table.create(eng)
     with eng.begin() as conn:
-        conn.execute(text("CREATE TABLE tool (tool_id INTEGER PRIMARY KEY, tool_code VARCHAR(20))"))
+        conn.execute(text("CREATE TABLE tool (tool_id INTEGER PRIMARY KEY, tool_code VARCHAR(20), "
+                          "cutter_diameter NUMERIC(8, 3), iso14649_class VARCHAR(40))"))
         for number, tool_id in TOOL_IDS.items():
-            conn.execute(text("INSERT INTO tool (tool_id, tool_code) VALUES (:i, :c)"),
-                         {"i": tool_id, "c": f"T{number:02d}"})
+            conn.execute(text("INSERT INTO tool (tool_id, tool_code, cutter_diameter, iso14649_class) "
+                              "VALUES (:i, :c, :d, 'ENDMILL')"),
+                         {"i": tool_id, "c": f"T{number:02d}", "d": TOOL_DIAMETERS[number]})
     factory = sessionmaker(bind=eng, autocommit=False, autoflush=False)   # 운영과 같은 설정
 
     def _get_db():
@@ -86,8 +90,14 @@ def Session(monkeypatch):
     return factory
 
 
-def _workplan(db, nc_hash=O1110_HASH, program="O1110.NC"):
+# 연구실 시험 소재(블록) 121 x 101 x 28 mm, 원점은 윗면 모서리. 가공 형상 분류 · 크기는 소재 크기가 있어야 적는다.
+LAB_STOCK = (121.0, 101.0, 28.0, "corner")
+
+
+def _workplan(db, nc_hash=O1110_HASH, program="O1110.NC", stock=None):
     part = Part(part_name="Part", project_code="Proj", material_code="Inconel")
+    if stock:
+        part.stock_x, part.stock_y, part.stock_z, part.stock_origin = stock
     db.add(part)
     db.flush()
     wp = Workplan(part_code=part.part_code, program_code=program, nc_hash=nc_hash)
@@ -147,13 +157,13 @@ def test_sync_creates_condition_steps_when_none_exist(Session):
     rows = _steps(Session(), wp_id)
     assert len(rows) == 32
     assert _as_parsed(rows) == EXPECTED
-    assert {ws.tool_number: ws.tool_id for ws in rows} == TOOL_IDS   # 번호로 공구 마스터와 연결
+    assert {ws.tool_number: ws.tool_id for ws in rows} == {1: 11, 2: 12, 3: 13}   # 번호로 공구 마스터와 연결
     assert {ws.xml_tool_code for ws in rows} == {"T01", "T02", "T03"}
 
 
 def test_sync_rebuilds_steps_made_by_the_old_rule(Session):
     db = Session()
-    wp_id = _workplan(db).workplan_id
+    wp_id = _workplan(db, stock=LAB_STOCK).workplan_id
     _old_rule_steps(db, wp_id, operation_types={1: "FACE"})
     db.commit()
 
@@ -162,9 +172,65 @@ def test_sync_rebuilds_steps_made_by_the_old_rule(Session):
     assert _as_parsed(rows) == EXPECTED
     # 실제로 깎은 적 없는 조합(T1 S9500 / F150)은 남지 않는다
     assert (1, 9500.0, 150.0) not in [(ws.tool_number, ws.spindle_speed, ws.feed_rate) for ws in rows]
-    # 사람이 T1 에 적어 둔 가공방식은 T1 의 새 스텝 10개로 옮겨 간다
-    assert [ws.operation_type for ws in rows if ws.tool_number == 1] == ["FACE"] * 10
-    assert all(ws.operation_type is None for ws in rows if ws.tool_number != 1)
+    # 공정은 NC 가 정한 ISO 14649 이름이다 (사람이 T1 에 적어 둔 'FACE' 대신)
+    assert {ws.operation_type for ws in rows} == {"bottom_and_side_rough_milling"}
+    assert [ws.feature_type for ws in rows] == ["slot"] * 21 + ["step"] * 11
+    # 공구마다 홈들이 겹쳐 형상 하나 (Ø2 를 1.5mm 간격 등) -> 형상 세 개, 조건마다 워킹스텝
+    assert [ws.feature_no for ws in rows] == [1] * 10 + [2] * 11 + [3] * 11
+
+
+def test_without_a_stock_size_the_nc_does_not_name_milling_operations(Session):
+    """소재 크기가 없으면 밀링 공정 이름(형상에 따라 갈림)을 기록하지 않는다. 그래서 사람이 T1 에 적은 'FACE' 가
+    남고, 형상 분류 · 크기 · 제거 체적 · 반경 절입도 비어 있다. 형상 번호(워킹스텝 분리)와 ap 는 적는다."""
+    db = Session()
+    wp_id = _workplan(db).workplan_id
+    _old_rule_steps(db, wp_id, operation_types={1: "FACE"})
+    db.commit()
+
+    assert sync_workplan_nc_cutting_conditions(db, wp_id, nc_content=O1110_BYTES)
+    rows = _steps(Session(), wp_id)
+    assert [ws.operation_type for ws in rows] == ["FACE"] * 10 + [None] * 22
+    assert {ws.feature_type for ws in rows} == {None}
+    assert {ws.removed_volume for ws in rows} == {None} and {ws.radial_cutting_depth for ws in rows} == {None}
+    assert [ws.feature_no for ws in rows] == [1] * 10 + [2] * 11 + [3] * 11
+    assert {tp["stage"] for ws in rows for tp in ws.toolpaths} == {"rough"}
+
+
+def test_operation_written_by_the_nc_is_cleared_when_it_can_no_longer_be_judged(Session):
+    """예전에 NC 가 적은 ISO 공정 이름은 소재 크기를 지우는 등으로 다시 정하지 못하면 지운다 (사람이 적은 값은 둔다)."""
+    nc = "\n".join(["M6T6", "G90G00G54X30Y-15", "S3800M3", "G43H6Z5", "G1Z-2F710", "Y115", "G0Z5", "M30"])
+    db = Session()
+    wp_id = _workplan(db, nc_hash="0000cccc", program="O0003.nc").workplan_id
+    db.add(Workingstep(workplan_id=wp_id, step_order=1, tool_number=6, xml_tool_code="T06",
+                       operation_type="bottom_and_side_rough_milling", feature_type="slot"))
+    db.commit()
+
+    assert sync_workplan_nc_cutting_conditions(db, wp_id, nc_content=nc)
+    row = _steps(Session(), wp_id)[0]
+    assert (row.operation_type, row.feature_type, row.feature_geometry) == (None, None, None)
+
+
+def test_saving_a_stock_size_re_judges_the_parts_workingsteps(Session):
+    """업로드 화면에서 부품의 소재 크기를 넣으면(job_manager.set_part_stock) 이미 들어간 워킹스텝을 다시 판단한다."""
+    from job_manager import part_stock, resync_part_workingsteps, set_part_stock
+
+    db = Session()
+    wp = _workplan(db, nc_hash="00183ad8", program="O0911.nc")
+    db.add(WorkplanFileArchive(workplan_id=wp.workplan_id, nc_file_content=O0911_BYTES))
+    db.commit()
+    assert sync_workplan_nc_cutting_conditions(db, wp.workplan_id)
+    assert [ws.feature_type for ws in _steps(Session(), wp.workplan_id)] == [None, None]
+
+    db = Session()
+    part, changed = set_part_stock(db, "Proj", "Part", 121, 101, 28)
+    assert changed and part_stock(part) == (121.0, 101.0, 28.0, "corner")
+    assert resync_part_workingsteps(db, part) == 1
+    db.commit()
+    rows = _steps(Session(), wp.workplan_id)
+    assert [(ws.feature_type, ws.feature_geometry["width"], ws.removed_volume) for ws in rows] == [
+        ("slot", 20.0, 4040.0), ("slot", 20.0, 4040.0)]
+    assert set_part_stock(Session(), "Proj", "Part", 121, 101, 28)[1] is False      # 같은 값이면 바뀐 것 없음
+    assert set_part_stock(Session(), "Proj", "Part", 121, 0, 28) == (None, False)   # 크기가 0 이면 모름
 
 
 def test_sync_twice_updates_in_place_and_keeps_step_ids(Session):
@@ -181,13 +247,12 @@ def test_sync_twice_updates_in_place_and_keeps_step_ids(Session):
     assert _as_parsed(rows) == EXPECTED
 
 
-def test_sync_same_layout_fills_new_fields_and_keeps_manual_fields(Session):
-    """예전 판에서 만든 한 행(T6)이 NC 의 한 스텝과 모양이 같으면 지우지 않고 값만 채운다
-    (깊이 · 패스 수 · NC 줄 · 시작/끝 위치 · 절삭 길이). step_id 와 사람이 적은 가공방식이 남는다."""
-    nc = "\n".join(["M6T6", "G90G00G54X0Y-15", "S3800M3", "G43H6Z5", "G1Z-2F710", "Y115",
+def test_sync_same_layout_fills_new_fields_and_keeps_the_row(Session):
+    """예전 판에서 만든 한 행(T6)이 NC 의 한 스텝과 모양이 같으면 지우지 않고 값만 채운다 (step_id 유지)."""
+    nc = "\n".join(["M6T6", "G90G00G54X30Y-15", "S3800M3", "G43H6Z5", "G1Z-2F710", "Y115",
                     "G0Z5", "M30"])
     db = Session()
-    wp_id = _workplan(db, nc_hash="0000aaaa", program="O0001.nc").workplan_id
+    wp_id = _workplan(db, nc_hash="0000aaaa", program="O0001.nc", stock=LAB_STOCK).workplan_id
     db.add(Workingstep(workplan_id=wp_id, step_order=1, tool_number=6, xml_tool_code="T06",
                        spindle_speed=3800.0, feed_rate=710.0, operation_type="SLOT"))
     db.commit()
@@ -197,37 +262,76 @@ def test_sync_same_layout_fills_new_fields_and_keeps_manual_fields(Session):
     rows = _steps(Session(), wp_id)
     assert len(rows) == 1
     assert rows[0].step_id == before
-    assert rows[0].operation_type == "SLOT"
+    assert rows[0].operation_type == "bottom_and_side_rough_milling"
     assert (rows[0].spindle_speed, rows[0].feed_rate, rows[0].depth_of_cut) == (3800.0, 710.0, 2.0)
     assert (rows[0].pass_count, rows[0].nc_line_start, rows[0].nc_line_end) == (1, 5, 6)
-    assert rows[0].start_position == {"X": 0.0, "Y": -15.0, "Z": 5.0}
-    assert rows[0].end_position == {"X": 0.0, "Y": 115.0, "Z": -2.0}
+    assert rows[0].start_position == {"X": 30.0, "Y": -15.0, "Z": 5.0}
+    assert rows[0].end_position == {"X": 30.0, "Y": 115.0, "Z": -2.0}
     assert rows[0].cutting_distance == 137.0
+    assert (rows[0].feature_no, rows[0].feature_type, rows[0].radial_cutting_depth) == (1, "slot", 12.0)
+    assert (rows[0].feature_geometry["width"], rows[0].feature_geometry["ends"]) == (12.0, ["open", "open"])
+    assert rows[0].strategy == "unidirectional"
+    assert [tp["nc_lines"] for tp in rows[0].toolpaths] == [[5, 6]]
 
 
-def test_sync_splits_the_v330_row_of_o0911_into_one_row_per_line(Session):
-    """V3.3.0 까지 같은 S·F 라고 한 행(패스 4개)으로 합쳤던 Job 1(O0911)이 줄마다 한 행이 된다.
-    공구 번호로 대응이 분명한 가공방식은 새 행 모두로 옮기고, 공구 마스터와는 번호로 다시 잇는다."""
+def test_sync_keeps_a_manual_operation_where_the_nc_cannot_tell(Session):
+    """절삭 없이 호출만 된 공구(접촉식 프로브 등)는 NC 가 공정을 정하지 못해 사람이 적은 값을 둔다."""
+    nc = "\n".join(["M6 T5", "S1000 M3", "G0 X0 Y0 Z50", "M5",
+                    "M6 T6", "S3800 M3", "G0 X0 Y0 Z5", "G1 Z-2 F710", "Y100", "G0 Z5", "M30"])
     db = Session()
-    wp_id = _workplan(db, nc_hash="00183ad8", program="O0911.nc").workplan_id
+    wp_id = _workplan(db, nc_hash="0000bbbb", program="O0002.nc", stock=LAB_STOCK).workplan_id
+    db.add(Workingstep(workplan_id=wp_id, step_order=1, tool_number=5, xml_tool_code="T05", operation_type="PROBE"))
+    db.add(Workingstep(workplan_id=wp_id, step_order=2, tool_number=6, xml_tool_code="T06", operation_type="SLOT"))
+    db.commit()
+
+    assert sync_workplan_nc_cutting_conditions(db, wp_id, nc_content=nc)
+    assert [ws.operation_type for ws in _steps(Session(), wp_id)] == ["PROBE", "bottom_and_side_rough_milling"]
+
+
+def test_sync_regroups_the_v330_row_of_o0911_into_two_slot_steps(Session):
+    """V3.3.0 까지 같은 S·F 라고 한 행(패스 4개)으로 합쳤던 Job 1(O0911)이 슬롯마다 한 행이 된다.
+    공구 마스터의 T06(Ø12)으로 깎인 자리를 따라가 X26·X34 / X87·X95 가 각각 폭 20 슬롯 하나다."""
+    db = Session()
+    wp_id = _workplan(db, nc_hash="00183ad8", program="O0911.nc", stock=LAB_STOCK).workplan_id
     db.add(Workingstep(workplan_id=wp_id, step_order=1, tool_number=6, xml_tool_code="T06",
                        spindle_speed=3800.0, feed_rate=710.0, depth_of_cut=2.0, operation_type="SLOT"))
     db.commit()
 
     assert sync_workplan_nc_cutting_conditions(db, wp_id, nc_content=O0911_BYTES)
     rows = _steps(Session(), wp_id)
-    assert _as_parsed(rows) == [(i, 6, 3800.0, 710.0, 2.0) for i in (1, 2, 3, 4)]
-    assert [ws.operation_type for ws in rows] == ["SLOT"] * 4
-    assert [ws.pass_count for ws in rows] == [1] * 4
-    assert [(ws.nc_line_start, ws.nc_line_end) for ws in rows] == [(11, 12), (14, 14), (16, 16), (18, 18)]
-    assert [ws.start_position["X"] for ws in rows] == [26.0, 34.0, 87.0, 95.0]
-    assert [ws.cutting_distance for ws in rows] == [137.0, 130.0, 130.0, 130.0]
+    assert _as_parsed(rows) == [(1, 6, 3800.0, 710.0, 2.0), (2, 6, 3800.0, 710.0, 2.0)]
+    assert [ws.tool_id for ws in rows] == [16, 16]                    # 공구 마스터와 번호로 다시 잇는다
+    assert [(ws.feature_no, ws.feature_type) for ws in rows] == [(1, "slot"), (2, "slot")]
+    assert [(ws.feature_geometry["width"], ws.feature_geometry["length"]) for ws in rows] == [(20.0, 101.0)] * 2
+    assert [ws.operation_type for ws in rows] == ["bottom_and_side_rough_milling"] * 2
+    assert [ws.pass_count for ws in rows] == [2, 2]
+    assert [(ws.nc_line_start, ws.nc_line_end) for ws in rows] == [(11, 14), (16, 18)]
+    assert [[tp["ae"] for tp in ws.toolpaths] for ws in rows] == [[12.0, 8.0], [12.0, 8.0]]
+    assert [ws.cutting_distance for ws in rows] == [267.0, 260.0]
+
+
+def test_job_tool_assignment_diameter_wins_over_the_tool_master(Session):
+    """그 Job 에서 실제로 쓴 공구(Job 공구 지정 스냅샷)가 Ø6 이었다면 네 줄은 서로 떨어진 홈 네 개다."""
+    from DB.models import JobToolAssignment
+
+    db = Session()
+    wp = _workplan(db, nc_hash="00183ad8", program="O0911.nc")
+    job = Job(workplan_id=wp.workplan_id, work_id="260911164215", source_folder="Proj/Part/2")
+    db.add(job)
+    db.flush()
+    db.add(JobToolAssignment(job_id=job.job_id, tool_number=6, tool_id=None, source="manual",
+                             tool_snapshot={"tool_code": "T06", "cutter_diameter": 6.0, "iso14649_class": "ENDMILL"}))
+    db.commit()
+
+    assert nc_parser.tool_specs_for_workplan(Session(), wp.workplan_id)[6]["source"] == "Job 공구 지정"
+    assert sync_workplan_nc_cutting_conditions(db, wp.workplan_id, nc_content=O0911_BYTES)
+    assert [ws.pass_count for ws in _steps(Session(), wp.workplan_id)] == [1, 1, 1, 1]
 
 
 def test_sync_fills_new_fields_of_v330_condition_rows_in_place(Session):
     """V3.3.0 에서 조건마다 나눈 O1110 의 32행은 모양이 같아 행을 두고 새 칸만 채운다."""
     db = Session()
-    wp_id = _workplan(db).workplan_id
+    wp_id = _workplan(db, stock=LAB_STOCK).workplan_id
     for p in parse_nc_cutting_conditions(O1110_PATH):
         db.add(Workingstep(workplan_id=wp_id, step_order=p["step_order"], tool_number=p["tool_number"],
                            xml_tool_code=p["xml_tool_code"], spindle_speed=p["spindle_speed"],
@@ -240,6 +344,7 @@ def test_sync_fills_new_fields_of_v330_condition_rows_in_place(Session):
     assert [ws.step_id for ws in rows] == ids
     assert all(ws.pass_count == 1 and ws.nc_line_start and ws.cutting_distance for ws in rows)
     assert (rows[0].nc_line_start, rows[0].nc_line_end) == (8, 9)
+    assert [ws.radial_cutting_depth for ws in rows[:3]] == [2.0, 1.5, 1.5]     # Ø2 를 1.5mm 씩 옆으로
 
 
 def test_sync_without_nc_changes_nothing(Session):

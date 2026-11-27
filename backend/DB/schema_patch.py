@@ -33,7 +33,7 @@ PENDING_COLUMNS = [
      "COMMENT '스핀들 주축 회전수 (RPM, NC코드 파싱)'"),
     ("workingstep", "depth_of_cut",
      "ADD COLUMN depth_of_cut FLOAT NULL "
-     "COMMENT '절입 깊이 (mm, NC코드 파싱: 공작물 Z0 기준, 깊이가 섞인 스텝은 NULL)'"),
+     "COMMENT '축방향 절입 ap (mm, NC: 소재 격자에서 실제로 깎은 두께, 패스 중 가장 큰 값)'"),
     ("workplan_file_archive", "nc_file_sha256",
      "ADD COLUMN nc_file_sha256 VARCHAR(64) NULL "
      "COMMENT 'NC 파일 SHA-256 체크섬'"),
@@ -61,11 +61,12 @@ PENDING_COLUMNS = [
     ("machine_log", "machine_indicators",
      "ADD COLUMN machine_indicators JSON NULL "
      "COMMENT '장비 로그의 장비 계산값 요약 (열별 절삭 중 평균·최대·최소)'"),
-    # V3.3.1: 워킹스텝을 절삭 패스마다 나누면서 같은 조건의 스텝끼리 구분하는 칸 (models.Workingstep).
+    # V3.3.1: 패스 정보 칸 (pass_count ~ cutting_distance). V3.3.2: ISO 14649 기준 워킹스텝(가공 형상 · 공정 ·
+    # 절삭조건 · 공구)의 근거 칸 (radial_cutting_depth ~ toolpaths). models.Workingstep 참고.
     # 붙인 직후에는 비어 있다 — backend/resync_workingsteps.py(tools/recompute_jobs.bat)가 NC 로 채운다.
     ("workingstep", "pass_count",
      "ADD COLUMN pass_count INT NULL "
-     "COMMENT '합친 절삭 패스 수 (같은 자리를 같은 조건으로 이어 깎은 층·다듬질 패스, 절삭 없이 호출만 된 공구는 0)'"),
+     "COMMENT '이 스텝의 절삭 패스 수 (절삭 없이 호출만 된 공구는 0)'"),
     ("workingstep", "nc_line_start",
      "ADD COLUMN nc_line_start INT NULL "
      "COMMENT 'NC 시작 줄 번호 (이 스텝 첫 절삭 블록, NC 파일 첫 줄이 1)'"),
@@ -81,6 +82,40 @@ PENDING_COLUMNS = [
     ("workingstep", "cutting_distance",
      "ADD COLUMN cutting_distance DOUBLE NULL "
      "COMMENT '절삭 경로 길이 (mm, NC: 이 스텝 패스들의 G01~G03·고정 사이클 이동 합)'"),
+    ("workingstep", "radial_cutting_depth",
+     "ADD COLUMN radial_cutting_depth FLOAT NULL "
+     "COMMENT '반경 절입 ae (mm, 실제로 깎인 폭, 패스 중 가장 큰 값. 공구 지름을 모르면 NULL)'"),
+    ("workingstep", "removed_volume",
+     "ADD COLUMN removed_volume DOUBLE NULL "
+     "COMMENT '제거 체적 (mm³, 소재 격자 기준: 공작물 Z0 을 소재 윗면으로 봄)'"),
+    ("workingstep", "feature_no",
+     "ADD COLUMN feature_no INT NULL "
+     "COMMENT '가공 형상 번호 (Workplan 안에서 1부터, 같은 번호 = 같은 형상: 공구 지름으로 깎인 자리가 이어진 덩어리)'"),
+    ("workingstep", "feature_type",
+     "ADD COLUMN feature_type VARCHAR(30) NULL "
+     "COMMENT 'ISO 14649 가공 형상 추정 (slot / planar_face / pocket / round_hole / general)'"),
+    ("workingstep", "feature_geometry",
+     "ADD COLUMN feature_geometry JSON NULL "
+     "COMMENT '가공 형상 크기 (mm: width·length·depth·floor_z·x·y, 근거 공구 지름 basis)'"),
+    ("workingstep", "strategy",
+     "ADD COLUMN strategy VARCHAR(30) NULL "
+     "COMMENT '가공 전략 (unidirectional / bidirectional / contour / helical / circular, 드릴링은 NULL)'"),
+    ("workingstep", "toolpaths",
+     "ADD COLUMN toolpaths JSON NULL "
+     "COMMENT '패스별 경로 (ISO 14649 toolpath: NC 줄·시작/끝·Z·ap·ae·길이·체적 목록)'"),
+    # V3.3.2: 소재(블록) 크기. 워킹스텝의 가공 형상 분류에 필요하다 — 없으면 형상 분류 · 크기를 기록하지 않는다.
+    ("part", "stock_x",
+     "ADD COLUMN stock_x FLOAT NULL "
+     "COMMENT '소재(블록) 크기 X (mm, 공작물 X 방향, ISO 14649 rawpiece). 없으면 가공 형상 분류를 기록하지 않음'"),
+    ("part", "stock_y",
+     "ADD COLUMN stock_y FLOAT NULL "
+     "COMMENT '소재(블록) 크기 Y (mm, 공작물 Y 방향)'"),
+    ("part", "stock_z",
+     "ADD COLUMN stock_z FLOAT NULL "
+     "COMMENT '소재(블록) 두께 Z (mm, 윗면이 공작물 Z0)'"),
+    ("part", "stock_origin",
+     "ADD COLUMN stock_origin VARCHAR(20) NULL "
+     "COMMENT '공작물 원점 위치: corner(소재 윗면의 X·Y 가장 작은 모서리, 기본) / center(윗면 가운데)'"),
 ]
 
 # 새 기능으로 생긴 '테이블'. 컬럼과 달리 ALTER 로 붙일 수 없어 models.py 정의 그대로 만든다.

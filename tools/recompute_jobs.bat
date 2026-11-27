@@ -1,7 +1,8 @@
 @echo off
 setlocal
 rem Bring existing data up to the current rules. Run it once after upgrading from an older version.
-rem   1. Workingsteps: split again from the NC, one step per cutting pass (backend\resync_workingsteps.py)
+rem   1. Workingsteps: split again from the NC by feature, operation, cutting conditions and tool
+rem      (ISO 14649, backend\resync_workingsteps.py)
 rem   2. Job summaries: recompute with TDMS + NC (backend\recompute_job_summary.py)
 rem Each part shows a preview first and changes the database only after you confirm.
 rem The values before the change are saved to backups\*.json.

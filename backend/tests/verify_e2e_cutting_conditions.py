@@ -83,7 +83,9 @@ def run_e2e_verification():
             db.delete(existing_part)
             db.commit()
 
-        part = Part(part_name=TEST_PART, project_code="TEST_PROJ")
+        # 가공 형상 분류는 소재(블록) 크기가 있어야 적는다 — 2026-11-11 가공과 같은 121 x 101 x 28 소재
+        part = Part(part_name=TEST_PART, project_code="TEST_PROJ",
+                    stock_x=121.0, stock_y=101.0, stock_z=28.0, stock_origin="corner")
         db.add(part)
         db.flush()
         test_part_code = part.part_code
@@ -123,9 +125,9 @@ def run_e2e_verification():
         assert len(table) == 32
         first = table.iloc[0]
         print(f"  - 첫 행: {first.to_dict()}")
-        assert (first['사용 공구'], first['주축회전수 (RPM)'], first['이송속도 (mm/min)'], first['절입 깊이 (mm)'],
-                first['패스 수'], first['NC 줄'], first['경로 (시작 → 끝)']) == \
-            ("T01", "5,000", "150", "0.5", "1", "8~9", "X1.5 Y115 → X1.5 Y-15")
+        assert (first['공구'].split(" · ")[0], first['주축회전수 (RPM)'], first['이송속도 (mm/min)'],
+                first['축방향 절입 ap (mm)'], first['패스 수'], first['NC 줄'], first['공정'], first['가공 형상']) == \
+            ("T01", "5,000", "150", "0.5", "1", "8~9", "Finishing", "slot")
         print("  >>> [3/3 성공] Frontend Master Tree 쿼리 및 데이터 정합성 검증 완료!")
 
     finally:

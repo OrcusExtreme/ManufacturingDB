@@ -37,8 +37,10 @@ def Session(monkeypatch, tmp_path):
         if table.name != "tool":
             table.create(eng)
     with eng.begin() as conn:   # 파서가 읽는 두 칸만 (tool 은 MySQL 전용 기본값 때문에 모델로 못 만든다)
-        conn.execute(text("CREATE TABLE tool (tool_id INTEGER PRIMARY KEY, tool_code VARCHAR(20))"))
-        conn.execute(text("INSERT INTO tool (tool_id, tool_code) VALUES (6, 'T06'), (11, 'T01')"))
+        conn.execute(text("CREATE TABLE tool (tool_id INTEGER PRIMARY KEY, tool_code VARCHAR(20), "
+                          "cutter_diameter NUMERIC(8, 3), iso14649_class VARCHAR(40))"))
+        conn.execute(text("INSERT INTO tool (tool_id, tool_code, cutter_diameter, iso14649_class) VALUES "
+                          "(6, 'T06', 12.0, 'ENDMILL'), (11, 'T01', 2.0, 'ENDMILL')"))
     factory = sessionmaker(bind=eng, autocommit=False, autoflush=False)
     monkeypatch.setattr(rs, "SessionLocal", factory)
     monkeypatch.setattr(schema_patch, "ensure_schema", lambda verbose=True: [])   # MySQL 전용
@@ -46,8 +48,10 @@ def Session(monkeypatch, tmp_path):
     return factory
 
 
-def _workplan(db, program, nc_bytes, job_id):
+def _workplan(db, program, nc_bytes, job_id, stock=(121.0, 101.0, 28.0, "corner")):
     part = Part(part_name=f"Part{job_id}", project_code="Proj", material_code="AL6061")
+    if stock:       # 연구실 시험 소재 121 x 101 x 28 (가공 형상 분류에 필요)
+        part.stock_x, part.stock_y, part.stock_z, part.stock_origin = stock
     db.add(part)
     db.flush()
     wp = Workplan(part_code=part.part_code, program_code=program, nc_hash=f"h{job_id}")
@@ -94,8 +98,10 @@ def test_preview_reports_each_workplan_and_changes_nothing(Session, capsys):
     (wp1, wp2, wp3), ids = _old_db(Session)
     assert rs.main([]) == 0
     out = capsys.readouterr().out
-    assert "* 다시 나눔: 지금 1행 -> 새 4행" in out
-    assert "11~12줄  X26 Y-15 → X26 Y115  137mm" in out
+    assert "* 다시 나눔: 지금 1행 -> 새 2행" in out
+    assert "소재 121 × 101 × 28 mm (원점 corner)" in out
+    assert ("F1 slot W20 × L101 × D2  bottom_and_side_rough_milling · bidirectional  S3800  F710  ap 2  ae 12  "
+            "패스 2  11~14줄  267mm") in out
     assert "* 값만 고침: 32행" in out and "패스 수 32행 · NC 시작 줄 32행" in out
     assert "그대로 둠: NC 원본을 찾지 못했습니다 (지금 1행)" in out
     assert "[요약] 다시 나눔 1 · 값만 고침 1 · NC 없음 1" in out
@@ -112,10 +118,11 @@ def test_apply_resplits_fills_and_backs_up(Session, capsys):
     out = capsys.readouterr().out
 
     job1 = _rows(Session, wp1)
-    assert [(ws.step_order, ws.tool_number, ws.pass_count, ws.nc_line_start) for ws in job1] == [
-        (1, 6, 1, 11), (2, 6, 1, 14), (3, 6, 1, 16), (4, 6, 1, 18)]
-    assert [ws.operation_type for ws in job1] == ["SLOT"] * 4           # 공구 번호로 옮긴 가공방식
-    assert [ws.tool_id for ws in job1] == [6] * 4
+    # 공구 마스터의 T06(Ø12)으로 깎인 자리를 따라가 슬롯 두 개 -> 두 행
+    assert [(ws.step_order, ws.tool_number, ws.feature_no, ws.pass_count, ws.nc_line_start) for ws in job1] == [
+        (1, 6, 1, 2, 11), (2, 6, 2, 2, 16)]
+    assert [ws.operation_type for ws in job1] == ["bottom_and_side_rough_milling"] * 2   # NC 가 정한 ISO 공정
+    assert [ws.tool_id for ws in job1] == [6] * 2
 
     job2 = _rows(Session, wp2)
     assert [ws.step_id for ws in job2] == ids[wp2]                       # 값만 고쳤다
@@ -128,7 +135,7 @@ def test_apply_resplits_fills_and_backs_up(Session, capsys):
     with open(os.path.join(rs.BACKUP_DIR, files[0]), encoding="utf-8") as f:
         backup = json.load(f)
     assert [(b["workplan_id"], b["verdict"], len(b["before"]), len(b["after"])) for b in backup] == [
-        (wp1, "rebuild", 1, 4), (wp2, "update", 32, 32)]
+        (wp1, "rebuild", 1, 2), (wp2, "update", 32, 32)]
     assert backup[0]["before"][0]["step_id"] == ids[wp1][0] and backup[0]["jobs"] == [1]
     assert "[반영 완료] Workplan 2개" in out
 
@@ -142,9 +149,21 @@ def test_second_run_finds_nothing_to_change(Session, capsys):
     assert "[요약] 그대로 2 · NC 없음 1" in out
 
 
+def test_a_part_without_a_stock_size_is_split_but_not_classified(Session, capsys):
+    db = Session()
+    wp = _workplan(db, "O0911.nc", O0911, 7, stock=None)
+    db.commit()
+    rs.main([str(wp), "--apply"])
+    out = capsys.readouterr().out
+    assert "소재 크기 없음 — 형상 분류 · 크기 · 제거 체적 · 반경 절입 · 밀링 공정 이름은 기록하지 않습니다" in out
+    assert "F1  rough · bidirectional  S3800  F710  ap 2" in out          # 형상 번호 · 황삭만
+    rows = _rows(Session, wp)
+    assert [(ws.feature_no, ws.feature_type, ws.operation_type) for ws in rows] == [(1, None, None), (2, None, None)]
+
+
 def test_installer_counts_workplans_left_on_the_old_rule(Session):
     """설치 확인(setup_target verify)이 알리는 수: NC 가 있는데 패스 수가 빈 행이 남은 Workplan."""
-    sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(backend_dir)), "installer"))
+    sys.path.insert(0, os.path.join(os.path.dirname(backend_dir), "installer"))
     import setup_target
 
     _old_db(Session)

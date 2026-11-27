@@ -10,7 +10,7 @@
   <a href="https://www.sqlalchemy.org/"><img src="https://img.shields.io/badge/SQLAlchemy-2.0%2B-red.svg" alt="ORM" /></a>
   <a href="https://streamlit.io/"><img src="https://img.shields.io/badge/Streamlit-1.61%2B-FF4B4B.svg" alt="Frontend" /></a>
   <a href="https://www.iso.org/"><img src="https://img.shields.io/badge/Standard-ISO%2014649%20(STEP--NC)-green.svg" alt="Standard" /></a>
-  <a href="https://github.com/OrcusExtreme/ManufacturingDB"><img src="https://img.shields.io/badge/Release-V3.3.1-brightgreen.svg" alt="Release" /></a>
+  <a href="https://github.com/OrcusExtreme/ManufacturingDB"><img src="https://img.shields.io/badge/Release-V3.3.2-brightgreen.svg" alt="Release" /></a>
 </p>
 
 공작기계지능화실험실(Machine Tool Intelligence Lab)의 **통합 제조 데이터베이스 및 가공 데이터 분석 시스템**입니다.  
@@ -23,8 +23,8 @@
 
 ### 1. ISO 14649(STEP-NC) 표준 기반 데이터 모델링
 - **정적 공정 계획(Static Planning)과 동적 가공 실행(Dynamic Execution)의 분리 설계**
-- `Part(부품)` ➔ `Workplan(NC 가공계획)` ➔ `Workingstep(단위공정: 공구 교환 · 절삭 패스 단위)` ↔ `Tool(공구 마스터)` 구조의 계층형 공정 모델링
-- **단위 공정(Workingstep) 세분화**: 공구 호출 단위가 아닌 절삭 패스마다 행을 분리(같은 자리를 같은 조건으로 다시 깎은 층·다듬질 패스만 합침)하여, 단일 공구 조건 변경 실험과 같은 조건으로 여러 자리를 깎는 실험을 패스 단위로 추적. 스텝마다 절입 깊이(`depth_of_cut`, 공작물 Z0 기준), 패스 수, NC 줄 범위, 시작·끝 위치, 절삭 길이 자동 추출 ([분리 규칙](#4-워킹스텝-분리-규칙-nc))
+- `Part(부품)` ➔ `Workplan(NC 가공계획)` ➔ `Workingstep(단위공정: 가공 형상 · 공정 · 절삭조건 · 공구 단위)` ↔ `Tool(공구 마스터)` 구조의 계층형 공정 모델링
+- **ISO 14649 기준 단위 공정(Workingstep) 분리**: 가공 형상 · 공정(황삭/정삭)과 전략 · 절삭조건(S·F) · 공구가 같은 이어진 절삭 패스를 한 행으로. 가공 형상은 실제 공구 지름으로 깎인 자리를 소재 격자(Z-map)로 따라가 판별(한 덩어리로 판 패스들 = 한 형상)하고, 형상 분류(slot · step · planar_face · closed/open_pocket · round_hole — 부품의 소재 크기로 둘레의 벽 · 열림을 보고 판단, 소재 크기가 없으면 기록하지 않음)·크기, 축방향/반경 절입(ap·ae), 제거 체적, 패스별 경로(NC 줄 · 위치)를 자동 추출 ([분리 규칙](#4-워킹스텝-분리-규칙-nc))
 - 동일 Workplan 조건에서 반복 수행되는 실험 가공 차수(`Job`)의 1:N 이력 관리
 
 ### 2. 가공 차수별 공구 지정 및 환경 데이터 자동 수집
@@ -151,7 +151,7 @@ erDiagram
 
 | 도메인 | 테이블명 | 설명 |
 | :--- | :--- | :--- |
-| **마스터 & 공정 계획** | `part`, `workplan`, `tool`, `workingstep`, `cad_file_archive` | 부품 마스터, NC 공정 계획(부품·프로그램·NC해시 복합 유니크 제약), 공구 제원(ISO 14649 분류 및 치수, 매거진 장착/재고 관리), 단위 공정 순서 및 절삭 가공 조건(Feed/Spindle/절입 깊이 `depth_of_cut`)과 패스 구분 정보(패스 수·NC 줄·시작/끝 위치·절삭 길이), 3D 형상 파일 관리 |
+| **마스터 & 공정 계획** | `part`, `workplan`, `tool`, `workingstep`, `cad_file_archive` | 부품 마스터, NC 공정 계획(부품·프로그램·NC해시 복합 유니크 제약), 공구 제원(ISO 14649 분류 및 치수, 매거진 장착/재고 관리), 단위 공정 순서 및 ISO 14649 근거(가공 형상·공정·전략·Feed/Spindle·축방향/반경 절입·패스별 경로), 3D 형상 파일 관리 |
 | **가공 실행 & 품질** | `job`, `job_tool_assignment`, `machine_log`, `surface_roughness`, `inspection`, `env_memo` | 가공 차수 이력(가공 시간, 거리, 에러), Job별 실제 사용 공구(T번호 → 공구 마스터, 지정 당시 제원 스냅샷 보존), CNC 1Hz 부하 통계, 다지점 표면조도 프로파일, 치수공차 판정(PASS/FAIL), 온습도(수기 입력 및 외기 자동 수집)·날씨(`weather`, `weather_source`, `weather_time`)·가공 환경 데이터 |
 | **아카이브 & 백업** | `workplan_file_archive`, `job_file_archive`, `surface_roughness_archive`, `log_file_archive` | 원본 디렉터리 경로(`*_raw_path`) 및 LONGBLOB 백업 데이터 |
 
@@ -193,7 +193,7 @@ ManufacturingDB/
 │   ├── weather_service.py            #   가공 시각 외기 온습도·날씨 자동 기록 데몬 (Open-Meteo)
 │   ├── recovery_engine.py            #   보관소 및 DB 기반 복원 엔진
 │   ├── recompute_job_summary.py      #   기존 Job 가공 요약을 TDMS+NC 기준으로 재계산 (미리보기 / --apply)
-│   ├── resync_workingsteps.py        #   기존 워킹스텝을 지금 분리 규칙으로 NC 에서 다시 나눔 (미리보기 / --apply)
+│   ├── resync_workingsteps.py        #   기존 워킹스텝을 ISO 14649 분리 규칙으로 NC 에서 다시 나눔 (미리보기 / --apply)
 │   ├── compare_xml_tdms.py           #   장비 XML 값 대 TDMS+NC 계산값 비교표 (읽기 전용, CSV 저장)
 │   ├── tdms_visualizer.py            #   TDMS Parquet/FFT 변환 백그라운드 데몬
 │   ├── tdms_alignment.py             #   NC 블록 대조 가공 구간 판별, 실행 사이클(가공 시작·종료), UTC→KST 시간축 정렬
@@ -217,6 +217,7 @@ ManufacturingDB/
 │   │   └── sync_column_comments.py   #   models.py 주석을 운영 DB 컬럼·표 주석에 반영 (미리보기 / --apply)
 │   ├── parsers/                      #   자료 유형별 파서
 │   │   ├── xml_parser.py  nc_parser.py  tdms_parser.py
+│   │   ├── nc_geometry.py            #   소재 격자(Z-map)로 가공 형상 · 절입(ap·ae) · 황삭/정삭 판별
 │   │   └── log_parser.py  roughness_parser.py  cad_parser.py
 │   ├── api/                          #   FastAPI REST API 서비스
 │   │   ├── main.py                   #   API 앱 진입점 및 lifespan 스키마 보정
@@ -248,7 +249,7 @@ ManufacturingDB/
 │       ├── home_view.py              #   홈 대시보드 화면
 │       ├── filters.py                #   다단계 검색 필터
 │       ├── job_workspace.py          #   Job 상세 분석 및 관리 화면 (사용 공구 제원 조회)
-│       ├── master_tree.py            #   ISO 14649 공정 계층 트리뷰 (RPM, mm/min, 절입 깊이, 패스 수, NC 줄, 경로)
+│       ├── master_tree.py            #   ISO 14649 공정 계층 트리뷰 (형상, Roughing/Finishing, 전략, 공구, RPM, mm/min, ap·ae, NC 줄)
 │       ├── tool_master.py            #   공구 마스터 조회 및 파일 교체
 │       ├── tool_picker.py            #   T번호별 공구 선택 및 Job 사용 공구 현황 공용 컴포넌트
 │       ├── data_upload.py            #   수동 데이터 업로드 화면 (NC 즉시 분석 및 공구 지정)
@@ -423,7 +424,7 @@ python installer\build_installer.py --test    # 로컬 테스트용 경량 빌�
 1. 컨트롤러에서 **[전체 중지]** 를 누른 뒤 새 `Setup_ManufacturingDB_v*.exe` 를 관리자 권한으로 실행합니다. 지난 설치의 폴더·MySQL·DB 설정을 그대로 쓰고, 데이터·`.env`·파서 On/Off 설정은 그대로 둔 채 프로그램만 바꿉니다.
 2. 설치 마무리 단계가 DB 를 새 판에 맞춥니다: 빠진 테이블·컬럼 추가(`schema_patch`), 컬럼·표 설명 맞춤(주석만 변경, 칸 정의는 그대로 — 바꾼 설명은 예전 값과 함께 기록), 설치 확인. 기록은 `{설치 폴더}\logs\install.log` 입니다.
 3. 이미 쌓인 데이터(워킹스텝, Job 가공 요약)는 설치가 바꾸지 않습니다. 지금 규칙으로 맞추려면 서비스가 멈춘 상태에서 `{설치 폴더}\tools\recompute_jobs.bat` 를 실행합니다. 두 단계를 차례로 보여 줍니다:
-   1. **워킹스텝 다시 나누기** (V3.3.1 규칙, `backend/resync_workingsteps.py`): 절삭 패스마다 한 스텝으로 나누고 패스 수·NC 줄·위치·절삭 길이를 채웁니다. 공구 순서가 같은 Workplan 은 값만 채우고(행·가공방식 유지), NC 원본이 없는 Workplan 은 그대로 둡니다.
+   1. **워킹스텝 다시 나누기** (V3.3.2 규칙, `backend/resync_workingsteps.py`): 가공 형상 · 공정 · 절삭조건 · 공구로 다시 나누고 형상 · 절입 · 패스 정보를 채웁니다. 공구 순서가 같은 Workplan 은 값만 채우고(행 유지), NC 원본이 없는 Workplan 은 그대로 둡니다. `operation_type` 은 NC 가 정한 ISO 14649 공정으로 바뀝니다 (예전에 사람이 적은 값은 백업에 남음).
    2. **Job 가공 요약 재계산** (V3.3.0 기준, `backend/recompute_job_summary.py`): TDMS+NC, 위치 점프를 뺀 총 이동거리.
 
    단계마다 미리보기를 보여 준 뒤 **Y** 를 누를 때만 반영하고, 바꾸기 전 값은 `backups\` 에 남깁니다. 설치 확인 단계가 이렇게 바꿀 Workplan·Job 수를 `install.log` 에 알립니다.
@@ -441,7 +442,9 @@ python installer\build_installer.py --test    # 로컬 테스트용 경량 빌�
    - 불필요 가공 데이터 삭제 시 하위 연관 레코드의 원자적 연쇄 삭제(`CASCADE`) 지원
 3. **계층형 마스터 데이터**:
    - ISO 14649 기반 공정 계층(`Part ➔ Workplan ➔ Workingstep ➔ Tool`) 탐색
-   - 단위 공정별 절삭 가공 조건(주축 회전수 RPM, 이송속도 mm/min, 절입 깊이 mm)과 조건이 같은 스텝을 구분하는 패스 수 · NC 줄 · 경로(시작 → 끝) · 절삭 길이, Part별 3D CAD(STEP/STL) 뷰어 지원
+   - Part 마다 소재 크기(`121 × 101 × 28 mm (origin: corner)`, 없으면 형상 분류를 기록하지 않는다는 안내)
+   - 단위 공정별 형상 번호 · 가공 형상(DB 원문 `slot` 등)과 크기(`W20 × L101 × D2`) · 공정(`Roughing` / `Finishing` / `Drilling` 등) · 전략(DB 원문) · 공구(`T06 · ENDMILL · Ø12 · 3 flutes` 한 칸) · 절삭 조건(RPM, mm/min) · 축방향/반경 절입 · 패스 수 · NC 줄 · 절삭 길이 · 제거 체적, Part별 3D CAD(STEP/STL) 뷰어 지원
+   - 공정 칸은 ISO 14649 처럼 정삭 스텝이 따로 없는 형상의 밀링 스텝을 `Finishing` 으로 보임 (정삭 스텝이 있는 형상만 앞 스텝이 `Roughing`). DB 의 `operation_type` 값은 그대로
 4. **공구 마스터 관리**:
    - ISO 14649 규격 기반 공구 제원(치수, 날 수, 재질, 장착 상태) 관리
    - 표준 CSV 템플릿 다운로드 및 수정본 업로드를 통한 공구 마스터 일괄 갱신
@@ -449,6 +452,7 @@ python installer\build_installer.py --test    # 로컬 테스트용 경량 빌�
 5. **데이터 삽입 (수동 업로드)**:
    - 3D 형상 모델, TDMS·NC(필수), 장비 로그·표면조도 CSV(선택) 웹 수동 업로드 인터페이스 — 새 Job 은 TDMS 와 NC 가 모두 있어야 생성
    - TDMS 를 고르면 CNC-ProgramName 채널에서 실제로 가공한 프로그램을 읽어 올리는 NC 와 비교·경고 (기록 시작 때 프로그램이 남는 파일명은 쓰지 않음)
+   - Part 행에서 소재와 함께 **소재 크기(X · Y · Z mm)와 공작물 원점**(윗면 모서리 / 윗면 가운데) 입력 — 워킹스텝 가공 형상 분류에 쓰며, 저장하면 그 부품의 기존 워킹스텝을 다시 판단 (`소재 정보만 저장`). 비워 두면 형상 분류 · 크기 · 제거 체적 · 반경 절입은 기록하지 않음
    - NC 파일 선택 즉시 T번호, 공구별 스텝 수, S/F 조건 범위 프리뷰 제공 및 공구 마스터(장착/미장착 재고) 매핑 지원
    - 업로드 시점에 가공 분류, 환경 데이터(온습도, 작업자, 이상 소음 등), 품질 점검(치수공차, 합불 판정) 동시 입력
    - 온습도 미입력 시 가공 시작 시각 기준 기상 모델 격자 데이터 자동 수집 연동
@@ -499,23 +503,57 @@ Job 의 가공 요약은 TDMS CNC 채널(약 27Hz)과 NC 코드로 계산합니�
 - 시작(±0.6초), 절삭시간(±0.2초), 절삭 이동거리(±0.2%), 완료 여부·작업 ID·장비·프로그램은 두 건 모두 일치합니다.
 
 ### 4. 워킹스텝 분리 규칙 (NC)
-워킹스텝은 NC 코드로 나눕니다 (`backend/parsers/nc_parser.py` 의 '워킹스텝 분리 규칙'). NC 가 없을 때만 장비 XML 의 `ToolNumbers` 로 공구당 한 행을 만듭니다.
+워킹스텝은 ISO 14649 의 `machining_workingstep` 처럼 **가공 형상 · 가공 공정과 전략 · 절삭 조건 · 공구**가 모두 같은, 가공 순서대로 이어진 절삭 패스입니다 (`backend/parsers/nc_parser.py` 의 '워킹스텝 분리 규칙', 형상·절입은 `nc_geometry.py`). NC 가 없을 때만 장비 XML 의 `ToolNumbers` 로 공구당 한 행을 만듭니다.
 
 | 항목 | 규칙 |
 |---|---|
-| 경계 | 공구 교환(M6 에서, M6 이 없는 프로그램은 T 가 바뀔 때), 그리고 절삭 패스마다 |
-| 절삭 패스 | 급속 이동(G0)·원점 복귀 사이에 이어지는 절삭 이동(G01~G03, 고정 사이클) |
-| 합치는 경우 | 바로 앞 패스와 S·대표 F 가 같고 **같은 자리**(지나간 XY 점·원호 중심의 모음, µm 단위)를 다시 깎을 때 — 층을 나눠 내려가는 가공, 다듬질(스프링) 패스, 헬리컬 추가 바퀴. 위치를 모르는 패스(G91 증분으로 시작한 프로그램 등)는 합치지 않음 |
-| 대표 F | 패스에서 XY 로 가장 길게 깎은 이송 (Z 진입 이송이 대표가 되지 않게) |
-| 보조 패스 | Z 로만 움직인 수직 진입, Z0 위의 공중 이송은 스텝을 만들지 않음 |
-| 절입 깊이 | 공작물 Z0 기준 가장 낮은 Z. 한 스텝 안에서 깊이가 섞이면(층 가공) NULL |
-| 패스 구분 칸 | `pass_count`(합친 패스 수), `nc_line_start`~`nc_line_end`(NC 파일 줄 번호), `start_position` → `end_position`(공작물 좌표 X·Y·Z), `cutting_distance`(절삭 경로 길이 — 합은 Job 의 NC 절삭 이동거리) |
+| 경계 | 공구 교환(M6, 없으면 T 변경) · 가공 형상 · 공정(황삭/정삭, 드릴링 종류) · 전략(직선 / 윤곽 / 헬리컬 / 드릴) · S 또는 대표 F 가 바뀔 때. 이어진 패스만 묶음 (A → B → A 는 세 스텝) |
+| 소재 격자 | 공작물 Z0 을 소재 윗면으로 보고 XY 격자(가장 작은 공구 지름의 1/24)에 패스를 가공 순서대로 실제 공구 반지름으로 깎아 내려감. 부품의 소재 크기(`part.stock_x/y/z`, 원점 `corner` = 윗면의 X·Y 최소 모서리 / `center` = 윗면 가운데)를 알면 그 안에만 재료가 있다고 보고, 소재 밖을 지나는 진입·후퇴 경로는 허공으로 셈 |
+| 가공 형상 | 바닥 높이가 같은 깎인 칸이 이어진 덩어리 하나. 겹치거나 맞닿게 판 패스들은 한 형상, 사이에 소재가 남으면 다른 형상. 공구가 달라도 같은 자리면 같은 형상 |
+| 형상 분류 | 소재 크기를 알 때만. 덩어리 둘레의 네 옆이 **벽**(바닥보다 높은 재료가 남음)인지 **열림**(소재 끝까지 깎음)인지로: 벽 없음 `planar_face`, 한 옆 `step`, 마주 보는 두 옆 `slot`(양 끝 열림 = through, `ends`), 이웃한 두 옆 `open_pocket`, 셋 길쭉하면 한 끝 막힌 `slot` 아니면 `open_pocket`, 넷 원이면 `round_hole` · 길쭉하면 `slot` · 아니면 `closed_pocket`. 공구 지름은 분류에 쓰지 않음 |
+| 기록하지 않음 | 제대로 판단할 수 없으면 비움: 소재 크기가 없으면 형상 분류 · 크기 · 제거 체적 · 반경 절입 · 밀링 공정 이름(황삭/정삭은 `toolpaths` 의 `stage`), 공구 지름을 모르면 그에 더해 형상 크기. 드릴 사이클 구멍은 G 코드로 분명해 `round_hole` · 공정을 적고 관통 여부(`bottom`)만 소재 두께를 알 때 |
+| 공구 지름 | Job 공구 지정 → 공구 마스터(같은 T번호) → NC 주석(`D12` 등) 순. 모르면 경로 중심선만 깎는다고 봄 |
+| 절입 | 축방향 ap · 반경 ae = 패스가 실제로 깎은 두께 · 폭(중앙값). 앞 층이나 다른 공구가 이미 깎은 높이에서 잼 |
+| 정삭 | 같은 형상에서 앞서 깎은 자리를 얇게 다시 깎은 마지막 패스: ap ≤ 0.5 mm 이고 앞 패스 ap 의 절반 미만 (스프링 패스 포함). 고른 층(1·1 mm)이나 남은 두께(2·2·1 mm)는 황삭 |
+| 공정 이름 | ISO 14649-11: `plane_rough/finish_milling`(`planar_face`), `bottom_and_side_rough/finish_milling`(그 밖), 고정 사이클은 `drilling` · `tapping` · `boring` · `back_boring` |
+| 기록 칸 | `feature_no`·`feature_type`·`feature_geometry`, `operation_type`·`strategy`, `depth_of_cut`(ap)·`radial_cutting_depth`(ae), `pass_count`, `nc_line_start`~`nc_line_end`, `start/end_position`, `cutting_distance`, `removed_volume`, 패스별 `toolpaths` |
 
-실측: O0911(Job 1) T6 네 줄 → 4 스텝 (11~12 · 14 · 16 · 18줄, 조도 측정 260911_1~4 와 같은 순서), O1110(Job 2) 조건 32개 → 32 스텝, O0912(EDGECAM) T29 한 번 + T6 네 줄 × 두 층 → 5 스텝.
+실측 (연구실 공구 마스터 지름, 소재 121 × 101 × 28 mm · 원점 윗면 모서리):
+- O0911(Job 1): Ø12 T6 네 줄 → 양 끝이 열린 `slot` W20 × L101 × D2 두 개 = **2 스텝** (11~14 · 16~18줄, 패스별 ae 12 → 8 mm, 양방향, 제거 체적 4,040 mm³씩). 조도 측정 260911_1~4 는 `toolpaths` 의 네 패스와 같은 순서
+- O1110(Job 2): 조건 32개 → 32 스텝. 공구마다 홈이 겹쳐 형상 3개: T01 `slot` W15.5, T02 `slot` W39, T03 `step` W60 (마지막 홈이 소재 끝 X121 까지)
+- O0912(EDGECAM): T29(Ø125) `planar_face` 121 × 101 × 2 + T6 `slot` 두 개(줄마다 Z-3·Z-4 두 층, 깎인 면에서 ap 1 mm) → 3 스텝
 
 ---
 
 ## 릴리즈 노트 (Release Notes)
+
+### [V3.3.2] - 2026-11-26
+워킹스텝을 **ISO 14649 기준(가공 형상 · 공정과 전략 · 절삭조건 · 공구)**으로 나누도록 고쳤습니다. V3.3.0 까지는 같은 S·F 로 이어 깎은 패스를 형상과 상관없이 합쳤고(Job 1 → 1행), V3.3.1 은 절삭 패스(자리)마다 나눠 슬롯 하나를 두 줄로 깎은 가공이 두 스텝이 됐습니다(Job 1 → 4행). 이제 Job 1 은 오픈 슬롯 두 개 = 2행입니다. 예전 판에서 올리면 [업그레이드](#3-업그레이드-예전-판에서-올리기) 3번으로 기존 워킹스텝을 다시 나눕니다.
+
+- **워킹스텝 분리 규칙 (`nc_parser.py`, 새 모듈 `nc_geometry.py`)**:
+  - 실제 공구 지름(Job 공구 지정 → 공구 마스터 → NC 주석)으로 깎인 자리를 소재 격자(Z-map)로 따라가 가공 형상 판별 — 한 덩어리로 판 패스들은 한 형상 ([분리 규칙](#4-워킹스텝-분리-규칙-nc))
+  - 형상 분류는 부품의 소재(블록) 크기로 둘레가 벽인지 소재 끝까지 뚫렸는지를 보고 ISO 14649-10 이름으로(`slot` 양 끝 열림/막힘 · `step` · `planar_face` · `closed_pocket` · `open_pocket` · `round_hole`). 소재 밖 허공은 깎은 것으로 세지 않아 크기 · 제거 체적이 실제 소재 기준
+  - **소재 크기가 없어 제대로 판단할 수 없으면 기록하지 않음**: 형상 분류 · 크기 · 제거 체적 · 반경 절입 · 밀링 공정 이름은 비우고, 형상 번호(워킹스텝 분리) · ap · 황삭/정삭(`toolpaths.stage`)만 적음
+  - 같은 자리라도 축방향 절입이 확연히 얇은 마지막 패스(0.5 mm 이하, 앞 절입의 절반 미만, 스프링 패스 포함)는 정삭으로 따로. 고른 층·남은 두께의 층은 황삭 한 공정
+  - 가공 전략(직선 / 윤곽 / 헬리컬 / 드릴)과 드릴링 사이클 종류(drilling · tapping · boring)도 경계
+  - 실측 NC (소재 121 × 101 × 28): O0911 → **2 스텝**(오픈 슬롯 두 개, V3.3.1 은 4), O1110 32 스텝 그대로(형상 slot · slot · step), O0912(EDGECAM) → 3 스텝(planar_face + 슬롯 두 개, V3.3.1 은 5)
+- **워킹스텝에 ISO 14649 근거 칸 (`workingstep`)**:
+  - 가공 형상 `feature_no`·`feature_type`·`feature_geometry`(폭·길이·깊이·바닥 높이·근거 공구 지름), 공정 `operation_type`(NC 가 정한 ISO 14649-11 이름)·`strategy`
+  - 절입 `depth_of_cut`(축방향 ap, 실제로 깎은 두께 — 예전에는 Z0 기준 깊이)·`radial_cutting_depth`(반경 ae), `removed_volume`(제거 체적)
+  - 패스별 `toolpaths`(줄 · 위치 · ap · ae — 조도 측정점처럼 패스 단위로 잇는 자료용). V3.3.1 의 `pass_count` · NC 줄 · 시작/끝 위치 · 절삭 길이는 워킹스텝 단위로 그대로
+  - 계층형 마스터 데이터 화면의 워킹스텝 표: 형상 번호 · 가공 형상과 크기 · 공정(`Roughing` / `Finishing` — 정삭 스텝이 따로 없는 형상은 `Finishing`) · 전략 · 공구(T번호 · ISO 14649 분류 · 직경 · 날수 한 칸, 제조사 제외) · ap · ae · 패스 수 · NC 줄 · 절삭 길이 · 제거 체적. 형상 · 전략은 DB 원문 그대로
+  - 업로드 화면의 NC 공구 미리보기도 공구 마스터 지름 · 입력한 소재로 같은 규칙을 써서 스텝 수가 수집 뒤와 같음
+- **부품 소재(블록) 크기 (`part.stock_x` · `stock_y` · `stock_z` · `stock_origin`)**:
+  - ISO 14649 의 rawpiece. 업로드 화면 Part 행에서 소재와 함께 입력 (원점: 윗면 모서리 `corner` 기본 / 윗면 가운데 `center`). 업로드와 함께 또는 `소재 정보만 저장`으로 저장하면 그 부품의 기존 워킹스텝을 다시 판단
+  - 계층형 마스터 데이터 화면의 Part 에 소재 크기 표시 (없으면 형상 분류를 기록하지 않는다는 안내)
+- **기존 워킹스텝 다시 나누기**:
+  - `backend/resync_workingsteps.py`(`tools/recompute_jobs.bat` 1단계)가 실제 공구 지름으로 새 규칙을 적용하고 미리보기에 형상 · 공정 · 전략 · ap · ae 를 보임
+  - `operation_type` 은 NC 가 정한 ISO 14649 공정으로 바뀜 (NC 가 정하지 못한 행 — 절삭 없이 호출만 된 공구 — 만 사람이 적은 값 유지, 바꾸기 전 값은 백업)
+  - 설치 확인 단계가 형상 칸이 빈 예전 워킹스텝도 다시 나눌 대상으로 알림
+  - 연구실 운영 DB 반영: 워킹스텝 컬럼 7개 · 부품 컬럼 4개 추가, DB_Test · DB_Test2 소재 121 × 101 × 28 (corner), Job 1 워킹스텝 4 → 2행(오픈 슬롯 F1 · F2), Job 2 32행에 새 칸 채움 (step_id 유지)
+- **테스트**:
+  - `test_nc_parser.py`: Job 1 오픈 슬롯 두 개, 소재 크기 없음(기록하지 않음) · 지름 모름(중심선) · NC 주석 지름 · DB 지름 우선, 고른 층 / 얇은 마지막 층(정삭) / 남은 두께 / 스프링 패스, 다른 형상으로 돌아감, 면 + 슬롯(planar_face · slot), 닫힌 포켓, O1110 T03 step, 다른 공구 황삭·정삭이 같은 형상, 드릴 · 태핑 사이클 · 관통/막힘, 헬리컬 구멍(원점 center), 실측 O0911 · O0912
+  - `test_nc_workingstep_sync.py`(공구 마스터 지름 · Job 공구 지정 우선 · 소재 크기 저장 뒤 다시 판단 · 소재가 없을 때 공정 이름 비움 · 사람이 적은 공정 유지 범위), `test_resync_workingsteps.py`(소재 없는 부품 포함) 기대값 갱신
 
 ### [V3.3.1] - 2026-11-26
 워킹스텝을 **절삭 패스마다** 나누도록 고쳤습니다. 같은 조건으로 다른 자리를 깎은 패스가 한 스텝으로 합쳐지던 문제입니다 (Job 1: 네 줄 → 1행). 예전 판에서 올리면 [업그레이드](#3-업그레이드-예전-판에서-올리기) 3번으로 기존 워킹스텝을 다시 나눕니다.

@@ -367,6 +367,65 @@ def set_part_material(db, project_code, part_name, material):
     return part, True
 
 
+STOCK_ORIGINS = ("corner", "center")
+
+
+def normalize_stock(x, y, z, origin="corner"):
+    """소재(블록) 크기 입력 -> (x, y, z, origin). 세 값이 모두 0 보다 커야 하고, 아니면 None (모름)."""
+    try:
+        values = [float(v) for v in (x, y, z)]
+    except (TypeError, ValueError):
+        return None
+    if not all(v > 0 and v == v for v in values):
+        return None
+    origin = str(origin or "corner").strip().lower()
+    return (*[round(v, 3) for v in values], origin if origin in STOCK_ORIGINS else "corner")
+
+
+def part_stock(part):
+    """Part 의 소재 (x, y, z, origin). 크기를 모르면 None."""
+    if part is None:
+        return None
+    return normalize_stock(part.stock_x, part.stock_y, part.stock_z, part.stock_origin)
+
+
+def set_part_stock(db, project_code, part_name, x, y, z, origin="corner"):
+    """부품의 소재(블록) 크기를 정한다. (Part, 바뀌었는지). 크기가 올바르지 않으면 (None, False).
+
+    워킹스텝의 가공 형상 분류(slot · step · planar_face …)는 이 값으로 형상 둘레가 벽인지 소재 끝까지 뚫렸는지를
+    보고 정한다 (parsers/nc_geometry.py). 이미 들어간 워킹스텝에 반영하려면 resync_part_workingsteps 를 부른다.
+    부품이 아직 없으면 만든다 (set_part_material 과 같이). 커밋은 부른 쪽이 한다.
+    """
+    stock = normalize_stock(x, y, z, origin)
+    if stock is None or not part_name:
+        return None, False
+    project_code, part_name = canonical_names(db, project_code, part_name)
+    part = db.query(Part).filter(Part.part_name == part_name).first()
+    if part is None:
+        part = Part(part_name=part_name, project_code=project_code, material_code=UNKNOWN_MATERIAL)
+        db.add(part)
+    elif part_stock(part) == stock:
+        return part, False
+    part.stock_x, part.stock_y, part.stock_z, part.stock_origin = stock
+    db.flush()
+    return part, True
+
+
+def resync_part_workingsteps(db, part):
+    """부품의 모든 Workplan 워킹스텝을 NC 로 다시 판단한다 (소재 크기를 바꾼 뒤). 다시 맞춘 Workplan 수.
+
+    NC 원본이 없는 Workplan 은 그대로 둔다. flush 까지만 하고 커밋은 부른 쪽이 한다.
+    """
+    from DB.models import Workplan
+    from parsers.nc_parser import sync_workplan_nc_cutting_conditions
+
+    done = 0
+    for (workplan_id,) in db.query(Workplan.workplan_id).filter(Workplan.part_code == part.part_code):
+        if sync_workplan_nc_cutting_conditions(db, workplan_id, commit=False):
+            done += 1
+    return done
+
+
 def canonical_folder_id(db, folder_id):
     """'{프로젝트}/{부품}/{차수}' 식별자를 DB 에 등록된 표기로 맞춘다."""
     if not folder_id:

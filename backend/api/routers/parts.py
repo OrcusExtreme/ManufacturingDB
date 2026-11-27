@@ -80,7 +80,7 @@ def list_workingsteps(
     limit: int = Query(100, ge=1, le=500),
     db: Session = Depends(get_db)
 ):
-    """단위 공정(Workingstep: 공구 교환 · 절삭 패스마다 한 행, 회전수 · 이송 · 절입 깊이 · 패스 수 · NC 줄 · 시작/끝 위치 · 절삭 길이) 목록을 조회합니다."""
+    """단위 공정(ISO 14649 Workingstep: 가공 형상 · 공정(황삭/정삭)·전략 · 절삭조건 · 공구가 같은 이어진 패스 — 형상 · 회전수 · 이송 · 축방향/반경 절입 · 패스별 경로) 목록을 조회합니다."""
     query = db.query(Workingstep)
     if workplan_id is not None:
         query = query.filter(Workingstep.workplan_id == workplan_id)

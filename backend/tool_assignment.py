@@ -110,17 +110,19 @@ def _span(values):
     return (min(values), max(values)) if values else None
 
 
-def tools_called_in_nc(nc_input):
+def tools_called_in_nc(nc_input, tools=None, stock=None):
     """NC 가 부른 공구를 가공 순서대로. {번호: {"steps": 스텝 수, "spindle": (최소, 최대), "feed": (최소, 최대)}}
 
     워킹스텝 분리 규칙(parsers/nc_parser.py)을 그대로 쓰므로 스텝 수가 수집 뒤 워킹스텝과 같다.
+    tools 는 공구 제원 {번호: {'diameter', 'kind'}} (nc_parser.tool_specs_for_workplan) — 가공 형상을 가르는 데 쓴다.
+    stock 은 부품 소재 {'x', 'y', 'z', 'origin'} — 소재 밖 허공을 지나는 경로를 깎은 것으로 세지 않는다.
     경로 · 바이트열 · 문자열을 모두 받아, 파일을 디스크에 쓰기 전(업로드 화면)에도 쓸 수 있다.
     공구를 부르기 전에 깎은 구간은 0번이다 (워킹스텝과 같은 규칙).
     """
     from parsers.nc_parser import parse_nc_cutting_conditions
 
     collected = {}
-    for step in parse_nc_cutting_conditions(nc_input):
+    for step in parse_nc_cutting_conditions(nc_input, tools=tools, stock=stock):
         number = step["tool_number"] if step["tool_number"] is not None else 0
         info = collected.setdefault(number, {"steps": 0, "spindle": [], "feed": []})
         info["steps"] += 1
